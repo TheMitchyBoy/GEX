@@ -37,7 +37,7 @@ from matplotlib import dates
 # ============================================================================
 
 # Set matplotlib plot style to a dark theme for better visualization
-plt.style.use("seaborn-dark")
+plt.style.use("dark_background")
 for param in ["figure.facecolor", "axes.facecolor", "savefig.facecolor"]:
     plt.rcParams[param] = "#212946"
 for param in ["text.color", "axes.labelcolor", "xtick.color", "ytick.color"]:
@@ -358,15 +358,15 @@ def fix_option_data(data):
     """
     # Extract option type (C or P) using regex on the option symbol
     # Pattern: any digits, then [A-Z] (the type), then digits
-    data["type"] = data.option.str.extract(r"\d([A-Z])\d")
+    data["type"] = data["option"].str.extract(r"\d([A-Z])\d")
     
     # Extract strike price (numeric value after type letter)
     # Pattern: digit, [A-Z], then capture digits (strike), then 3 more digits (cents)
-    data["strike"] = data.option.str.extract(r"\d[A-Z](\d+)\d\d\d").astype(int)
+    data["strike"] = data["option"].str.extract(r"\d[A-Z](\d+)\d\d\d").astype(int)
     
     # Extract expiration date (first 6 digits in YYMMDD format)
     # Pattern: [A-Z], then capture 6 digits
-    data["expiration"] = data.option.str.extract(r"[A-Z](\d+)").astype(str)
+    data["expiration"] = data["option"].str.extract(r"[A-Z](\d+)").astype(str)
     
     # Convert YYMMDD string to datetime for sorting and analysis
     data["expiration"] = pd.to_datetime(data["expiration"], format="%y%m%d")

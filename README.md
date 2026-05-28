@@ -388,9 +388,9 @@ https://cdn.cboe.com/api/global/delayed_quotes/options/{TICKER}.json
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `pandas` | 1.4.1+ | DataFrame operations, data aggregation |
+| `pandas` | 2.2.2+ | DataFrame operations, data aggregation |
 | `requests` | 2.27.1+ | HTTP requests to CBOE API |
-| `matplotlib` | 3.5.1+ | Plotting and visualization |
+| `matplotlib` | 3.8.0+ | Plotting and visualization |
 
 Install all at once:
 ```bash
