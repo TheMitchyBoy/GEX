@@ -149,7 +149,7 @@ python main.py --ticker SYMBOL [options]
 | `--outdir` | str | `img/` | Output directory for plots |
 | `--top-n` | int | 5 | Number of top strikes to highlight |
 | `--strike-window-pct` | float | 0.15 | Strike window (±15% by default) |
-| `--max-dte` | int | 365 | Maximum days-to-expiration to include |
+| `--max-dte` | int | 365 | Maximum days-to-expiration to include. Use 0 for same-day (0DTE) only. |
 | `--no-export-csv` | flag | False | Disable CSV exports |
 | `--export-dir` | str | `data/exports/` | CSV export directory |
 
@@ -179,6 +179,14 @@ Saved plot: img/SPX_gex_by_expiration_2025-05-28_143026.png
 Saved plot: img/SPX_gex_surface_2025-05-28_143027.png
 Saved CSV exports to: data/exports
 ```
+
+### 0DTE surface example
+
+```bash
+python main.py --ticker SPX --max-dte 0 --no-show
+```
+
+This generates the same-day (0DTE) surface plot and exports the data without opening plot windows.
 
 ---
 
