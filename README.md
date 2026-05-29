@@ -87,6 +87,12 @@ Estimated put wall: strike 4750 (-38.105)
    - `pandas` - Data manipulation and analysis
    - `requests` - HTTP client for fetching CBOE data
    - `matplotlib` - Plotting and visualization
+   - `streamlit` and `plotly` - interactive dashboard visualization
+   - `Flask` - website dashboard server
+   - `yfinance` - historical price data for model training
+   - `xgboost` - gradient boosting model support
+   - `tensorflow` - LSTM model training
+   - `joblib` - model serialization
 
 ---
 
@@ -124,9 +130,24 @@ python main.py --ticker SPX --max-dte 60
 python main.py --ticker SPX --no-show
 ```
 
-**Wider strike window (±20% around current price):**
+**Limit charts to ±1% around the current price:**
 ```bash
-python main.py --ticker SPX --strike-window-pct 0.20
+python main.py --ticker SPX --strike-window-pct 0.01
+```
+
+**Run the Streamlit dashboard:**
+```bash
+streamlit run streamlit_app.py
+```
+
+**Run the Flask website dashboard:**
+```bash
+python web_app.py
+```
+
+**Run the live option-flow ingest sample:**
+```bash
+python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 ```
 
 ---
@@ -148,7 +169,7 @@ python main.py --ticker SYMBOL [options]
 | `--no-save` | flag | False | Don't save plots to disk |
 | `--outdir` | str | `img/` | Output directory for plots |
 | `--top-n` | int | 5 | Number of top strikes to highlight |
-| `--strike-window-pct` | float | 0.15 | Strike window (±15% by default) |
+| `--strike-window-pct` | float | 0.01 | Strike window (±1% by default, maximum 0.01). |
 | `--max-dte` | int | 365 | Maximum days-to-expiration to include. Use 0 for same-day (0DTE) only. |
 | `--no-export-csv` | flag | False | Disable CSV exports |
 | `--export-dir` | str | `data/exports/` | CSV export directory |
@@ -187,6 +208,66 @@ python main.py --ticker SPX --max-dte 0 --no-show
 ```
 
 This generates the same-day (0DTE) surface plot and exports the data without opening plot windows.
+
+---
+
+## Dashboard & Website
+
+The repository now includes two interactive interfaces for viewing GEX output:
+
+- **Streamlit dashboard:** `streamlit_app.py`
+  - Visualizes the latest CSV exports from `data/exports`
+  - Shows interactive heatmaps and 3D scatter plots
+  - Displays PNG snapshots from `img/`
+- **Flask website:** `web_app.py`
+  - Serves a small dashboard with Plotly charts and image previews
+  - Browse available tickers and view the latest surface/strike/expiration exports
+
+Run the Streamlit dashboard:
+```bash
+streamlit run streamlit_app.py
+```
+
+Run the Flask dashboard:
+```bash
+python web_app.py
+```
+
+## Live Option Flow Signal
+
+A live ingest pipeline is included under `live/` that consumes JSON-lines option flow events and computes real-time GEX strike signals.
+
+Example feed usage:
+```bash
+python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
+```
+
+The live flow aggregator computes:
+- per-strike GEX deltas from traded option flow
+- decayed historical signal weightings
+- buy/sell flow imbalance
+- aggressiveness-adjusted score and direction
+
+## Model Training
+
+The project includes model training scripts for GEX prediction:
+
+- `scripts/train_gex_model.py` — trains an XGBoost classifier from historical exports
+- `scripts/train_gex_lstm.py` — trains an LSTM on sequential export feature history
+
+Example training command:
+```bash
+python scripts/train_gex_lstm.py --ticker SPX --seq-len 8 --epochs 50 --batch-size 16
+```
+
+## Scheduled Daily Exports
+
+A GitHub Actions workflow is configured to run `main.py` daily for `SPX` and commit updated CSV exports to `data/exports`.
+
+Workflow path:
+- `.github/workflows/daily_exports.yml`
+
+This keeps the repository populated with fresh daily gamma exposure exports for models and dashboards.
 
 ---
 
@@ -413,8 +494,48 @@ This tool is for educational and informational purposes. Gamma exposure analysis
 
 ---
 
-## License
-
+## Coming Soon
+Ideas for the GEX project
+1) Improve the analytics pipeline
+Add a backtest engine for model signals using historical exports and next-day returns.
+Create feature engineering for LSTM/XGBoost:
+gamma-flip strike
+term-structure ratios (near-term vs long-term GEX)
+momentum of strike-level GEX
+rolling open interest / flow imbalance
+2) Make the dashboards more actionable
+Add model inference into streamlit_app.py and web_app.py:
+show next-day up/down probability
+surface-based strike signal heatmap
+live option-flow signal overlay
+Add real-time alerts when a strike score crosses a threshold.
+3) Improve live flow handling
+Build a live websocket/custom API adapter for option flow providers.
+Add gamma estimation when flow events miss gamma:
+match symbols to cached data/{ticker}.json
+compute using option pricing with IV / expiry / strike
+Add persistence for the live aggregator (Redis or local state file).
+4) Automation & production
+Extend daily_exports.yml to:
+also commit img snapshots
+version exports/models with timestamps
+retrain models automatically when enough new data exists
+Add a Dockerfile + docker-compose for the dashboard + scheduler.
+5) UX and developer polish
+Add a small README “Developer quick start” section with:
+run dashboards
+run live ingest
+train models
+Add unit tests for:
+fix_option_data
+live event parsing
+model feature generation
+Add linting / formatting configs for consistency.
+6) New data sources / signals
+Import order flow or trade prints to predict gamma strike movement.
+Add greeks beyond gamma in signal scoring, e.g. vega/charm.
+Add volatility surface tracking as a companion to GEX.
+If you want, I can pick the top 3 and implement them next.
 
 
 ---

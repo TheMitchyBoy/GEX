@@ -123,7 +123,7 @@ def run(
     save_plots=True,
     outdir=DEFAULT_OUTDIR,
     top_n=5,
-    strike_window_pct=0.15,
+    strike_window_pct=0.01,
     max_dte=365,
     export_csv=True,
     export_dir=DEFAULT_EXPORT_DIR,
@@ -1322,8 +1322,8 @@ def parse_args():
     parser.add_argument(
         "--strike-window-pct",
         type=float,
-        default=0.15,
-        help="Strike window around spot for charts (default: 0.15 means +-15%%).",
+        default=0.01,
+        help="Strike window around spot for charts (default: 0.01 means +-1%%). Maximum allowed is 0.01.",
     )
     parser.add_argument(
         "--max-dte",
@@ -1368,7 +1368,8 @@ if __name__ == "__main__":
         save_plots=not args.no_save,
         outdir=args.outdir,
         top_n=max(1, args.top_n),
-        strike_window_pct=max(0.01, min(1.0, args.strike_window_pct)),
+        # Limit strike window to at most 1% above/below current price
+        strike_window_pct=min(max(0.0, args.strike_window_pct), 0.01),
         max_dte=max(0, args.max_dte),
         export_csv=not args.no_export_csv,
         export_dir=args.export_dir,

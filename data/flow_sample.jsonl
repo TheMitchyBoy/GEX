@@ -1,0 +1,4 @@
+{"option":"SPX260620C04800000","gamma":0.00012,"quantity":50,"side":"buy","spot":4800}
+{"option":"SPX260620P04800000","gamma":0.00010,"quantity":30,"side":"sell","spot":4800}
+{"option":"SPX260627C04900000","gamma":0.00015,"quantity":20,"side":"buy","spot":4800}
+{"option":"SPX260627P04900000","gamma":0.00008,"quantity":40,"side":"buy","spot":4800}
