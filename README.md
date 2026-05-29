@@ -415,7 +415,7 @@ This tool is for educational and informational purposes. Gamma exposure analysis
 
 ## License
 
-[Include your license information here if applicable]
+
 
 ---
 
