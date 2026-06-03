@@ -1,36 +1,43 @@
-# Options Data Quality
+# Data quality filters
 
-## Built-in filters (env-configurable)
+All filters run in `gex_core.data_quality.clean_option_data()` before GEX is calculated. Each step logs how many contracts were removed.
+
+## Master switch
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `GEX_MIN_OPEN_INTEREST` | `1` | Drop contracts with zero/trivial OI |
-| `GEX_MIN_GAMMA` | `0` | Drop non-positive gamma |
-| `GEX_MAX_IV` | `6.0` | Drop implied vol outliers (CBOE decimal IV) |
-| `GEX_MAX_BID_ASK_SPREAD_PCT` | `1.0` | Drop quoted contracts with crossed/wide spreads |
-| `GEX_MAX_STRIKE_DISTANCE_PCT` | `0.35` | Drop ultra-far OTM wings (noise vs signal) |
+| `GEX_DATA_FILTERS` | `1` | Set to `0` to disable every filter (parse symbols only) |
 
-Filters run in `gex_core.clean_option_data()` before GEX is computed.
+## Filters
 
-## Ideas to improve quality further
+| Variable | Default | Step name | Effect |
+|----------|---------|-----------|--------|
+| — | — | `invalid_symbol` | Drop rows that fail OCC symbol parse |
+| `GEX_MIN_OPEN_INTEREST` | `1` | `low_oi` | Drop zero/trivial open interest |
+| `GEX_MIN_GAMMA` | `0` | `non_positive_gamma` | Drop non-positive gamma |
+| — | — | `expired` | Drop expirations before today |
+| `GEX_MAX_STRIKE_DISTANCE_PCT` | `0.35` | `far_otm` | Drop strikes outside ±35% of spot |
+| `GEX_MAX_IV` | `6.0` | `iv_outlier` | Drop IV ≤ 0 or IV > cap (CBOE decimal) |
+| `GEX_MAX_BID_ASK_SPREAD_PCT` | `1.0` | `wide_or_crossed_spread` | Drop quoted rows with crossed/wide spreads |
+| `GEX_DEDUPE_SYMBOLS` | `1` | `duplicate_symbol` | Keep highest-OI row per symbol |
 
-### Data sources
-- **Primary + fallback**: CBOE delayed feed (current) + OCC open-interest file for OI reconciliation.
-- **Vendor upgrade**: Polygon, ORATS, or ThetaData for consolidated chains, corrected Greeks, and timestamps.
-- **Index specifics**: Merge SPX + SPXW (weekly) chains; exclude ES options when analyzing cash SPX.
+## Example log line
 
-### Microstructure hygiene
-- Weight GEX by **volume × OI** or use OI only above a rolling percentile (e.g. 90th).
-- Exclude **penny options** and strikes with `last_trade_time` older than N hours.
-- Cap single-contract GEX contribution to reduce bad ticks.
-- Use **mid price** (bid/ask) to recompute gamma via BS when exchange gamma is stale.
+```
+Data quality: 8421/12004 contracts kept (3183 removed: invalid_symbol -12, low_oi -890, far_otm -2100, iv_outlier -181).
+```
 
-### Greek modeling
-- Recompute gamma from IV surface (SVI/SABR) instead of vendor per-contract gamma.
-- Separate **customer vs firm** OI if available; dealer GEX assumptions differ by book.
-- Add **vanna/charm** consistency checks when charm and gamma disagree in sign/magnitude.
+## Stricter SPX example
 
-### Operational
-- Store `data_quality_report` fields per snapshot (rows in/out, filter counts).
-- Alert when filtered % exceeds threshold (possible feed break).
-- Compare total GEX vs prior snapshot; flag >3σ moves for manual review.
+```bash
+GEX_MIN_OPEN_INTEREST=10
+GEX_MAX_STRIKE_DISTANCE_PCT=0.25
+GEX_MAX_BID_ASK_SPREAD_PCT=0.5
+```
+
+## Future improvements
+
+- Secondary data vendor + OCC OI reconciliation
+- Stale quote exclusion via `last_trade_time`
+- IV-surface gamma instead of per-row exchange gamma
+- Persist per-snapshot `DataQualityReport` in the database for monitoring

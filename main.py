@@ -30,14 +30,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from gex_core import (
-    aggregate_gex,
-    attach_signed_gex,
-    clean_option_data,
-    data_quality_report,
-    fetch_options_payload,
-    parse_payload,
-)
+from gex_core import aggregate_gex, attach_signed_gex, clean_option_data, fetch_options_payload, parse_payload
 from gex_db.store import save_snapshot
 from web_app import APP as app
 
@@ -185,7 +178,7 @@ def run(
         print(color_text("Refreshing data from CBOE...", ANSI_DIM))
     
     # Step 1: Fetch and parse option data
-    spot_price, option_data = scrape_data(
+    spot_price, option_data, quality = scrape_data(
         ticker=ticker, refresh=refresh, cache_ttl_minutes=cache_ttl_minutes
     )
     print(
@@ -256,6 +249,11 @@ def run(
             gamma_flip=gamma_flip,
             top_n=top_n,
         )
+        summary["data_quality"] = {
+            "rows_in": quality.rows_in,
+            "rows_out": quality.rows_out,
+            "removed": quality.removed,
+        }
         export_analytics_csv(
             ticker=ticker,
             gex_by_strike=gex_by_strike,
@@ -338,17 +336,8 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
             json.dump(payload, f)
 
     spot_price, option_data = parse_payload(payload)
-    rows_before = len(option_data)
-    option_data = clean_option_data(option_data, spot=spot_price)
-    report = data_quality_report(rows_before, len(option_data))
-    if report["rows_removed"]:
-        print(
-            color_text(
-                f"Data quality: kept {report['rows_after']}/{report['rows_before']} contracts "
-                f"({report['rows_removed']} filtered).",
-                ANSI_DIM,
-            )
-        )
+    option_data, quality = clean_option_data(option_data, spot=spot_price)
+    print(color_text(quality.summary_line(), ANSI_DIM))
     if option_data is None or not isinstance(option_data, pd.DataFrame):
         raise RuntimeError("Failed to parse option data from CBOE payload.")
     if option_data.empty:
@@ -362,7 +351,8 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
 
 def fix_option_data(data, spot=None):
     """Backward-compatible wrapper around gex_core.clean_option_data."""
-    return clean_option_data(data, spot=spot)
+    cleaned, _report = clean_option_data(data, spot=spot)
+    return cleaned
 
 
 def compute_total_gex(spot, data, total_gex_bn=None):
