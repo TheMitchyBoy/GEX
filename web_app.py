@@ -439,19 +439,45 @@ def index():
 
 
 @APP.route("/ticker/<ticker>")
+@APP.route("/ticker/<ticker>/")
 def ticker_page(ticker):
     ticker = ticker.upper()
     history = build_history(ticker)
-    if not history:
-        abort(404)
-
-    requested_ts = request.args.get("ts")
-    ts_index = {row["ts"]: row for row in history}
-    selected = ts_index.get(requested_ts, history[-1])
 
     imgs = []
     if IMG_DIR.exists():
         imgs = sorted(IMG_DIR.glob(f"{ticker}_*.*"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if not history:
+        selected = {
+            "ts_label": "No snapshot history available yet",
+            "regime": "N/A",
+            "total_gex": 0.0,
+            "call_wall": None,
+            "put_wall": None,
+            "gamma_flip": None,
+            "near_term_ratio": 0.0,
+        }
+        return render_template(
+            "ticker.html",
+            ticker=ticker,
+            imgs=imgs,
+            heatmap_json=None,
+            scatter3d_json=None,
+            timeline_json=None,
+            timeline_options=[],
+            selected=selected,
+            prediction=None,
+            similar_setups=[],
+            strike_csv=None,
+            exp_csv=None,
+            cum_csv=None,
+            has_history=False,
+        )
+
+    requested_ts = request.args.get("ts")
+    ts_index = {row["ts"]: row for row in history}
+    selected = ts_index.get(requested_ts, history[-1])
 
     heatmap_json = make_heatmap(selected.get("surface_path"), ticker)
     scatter3d_json = make_surface_scatter(selected.get("surface_path"), ticker)
@@ -483,6 +509,7 @@ def ticker_page(ticker):
         strike_csv=selected["strike_path"].name,
         exp_csv=selected["exp_path"].name,
         cum_csv=selected["cum_path"].name,
+        has_history=True,
     )
 
 
