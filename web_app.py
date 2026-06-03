@@ -710,9 +710,15 @@ def start_background_refresh():
     _scheduler.start()
     atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
 
-    # Ensure data exists immediately on cold deployments.
+    # Seed empty databases without blocking the gunicorn worker boot sequence.
     if any(not list_timestamps(ticker) for ticker in REFRESH_TICKERS):
-        _scheduled_refresh()
+        _scheduler.add_job(
+            _scheduled_refresh,
+            trigger="date",
+            id="gex_refresh_bootstrap",
+            replace_existing=True,
+            max_instances=1,
+        )
 
 
 start_background_refresh()

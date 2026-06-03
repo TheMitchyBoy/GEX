@@ -1466,6 +1466,10 @@ def parse_args():
 # ENTRY POINT
 # ============================================================================
 
+# WSGI entrypoint for production (`gunicorn main:app`). Import after all symbols
+# are defined so gex_db.refresh can safely `from main import run`.
+from web_app import APP as app  # noqa: E402
+
 if __name__ == "__main__":
     # Parse command-line arguments
     args = parse_args()
