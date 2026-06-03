@@ -3,38 +3,89 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ ticker }} — GEX AI</title>
+    <title>{{ ticker }} · Gamma Nexus</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
-      body { background: #0b1020; color: #e2e8f0; }
-      .card { background: #141b30; border: 1px solid #24304f; }
-      .muted { color: #94a3b8; }
-      .pill {
-        border-radius: 999px;
-        font-size: 0.72rem;
-        padding: 0.15rem 0.5rem;
+      :root {
+        --bg: #05070f;
+        --card: rgba(18, 24, 44, 0.66);
+        --line: rgba(148, 163, 184, 0.26);
+        --txt: #e2e8f0;
+        --muted: #94a3b8;
       }
-      .pill-long { background: rgba(34,197,94,0.22); color: #bbf7d0; }
-      .pill-short { background: rgba(244,63,94,0.22); color: #fecdd3; }
-      .table { color: #e2e8f0; }
+      body {
+        min-height: 100vh;
+        color: var(--txt);
+        background:
+          radial-gradient(1000px 500px at -10% -5%, rgba(59,130,246,0.18), transparent 65%),
+          radial-gradient(900px 420px at 110% 0%, rgba(236,72,153,0.16), transparent 65%),
+          linear-gradient(180deg, #05070f 0%, #060a16 100%);
+      }
+      .orb { position: fixed; border-radius: 999px; filter: blur(100px); pointer-events: none; z-index: 0; }
+      .orb-a { width: 300px; height: 300px; top: 8%; right: 10%; background: rgba(99,102,241,0.18); }
+      .orb-b { width: 250px; height: 250px; bottom: 7%; left: 12%; background: rgba(16,185,129,0.14); }
+      .shell { position: relative; z-index: 1; }
+      .glass {
+        background: var(--card);
+        backdrop-filter: blur(16px);
+        border: 1px solid var(--line);
+        box-shadow: 0 18px 38px rgba(2, 6, 23, 0.35);
+      }
+      .title-grad {
+        background: linear-gradient(95deg, #bfdbfe, #c4b5fd 40%, #f9a8d4 85%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .muted { color: var(--muted); }
+      .metric-label { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
+      .metric-value { font-size: 1.15rem; font-weight: 600; }
+      .pill { border-radius: 999px; font-size: .72rem; letter-spacing: .04em; padding: .2rem .55rem; }
+      .pill-long { color: #bbf7d0; background: rgba(22,163,74,.24); border: 1px solid rgba(34,197,94,.35); }
+      .pill-short { color: #fecdd3; background: rgba(190,24,93,.24); border: 1px solid rgba(244,63,94,.35); }
+      .chart-box { min-height: 430px; }
+      .thumb { border-radius: .55rem; border: 1px solid rgba(148,163,184,.35); }
+      .sim-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+      .insight-item { border-left: 2px solid rgba(96,165,250,.55); padding-left: .75rem; }
+      .download-list a { color: #c7d2fe; text-decoration: none; }
+      .download-list a:hover { text-decoration: underline; }
+      input[type=range] { accent-color: #60a5fa; }
+      .concept-chip {
+        border: 1px solid rgba(96,165,250,.4);
+        color: #bfdbfe;
+        border-radius: 999px;
+        font-size: .72rem;
+        padding: .18rem .5rem;
+      }
+      .table { color: var(--txt); }
       .table td, .table th { border-color: #334155; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     </style>
   </head>
   <body>
-    <div class="container py-4">
-      <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-          <h1 class="mb-1">{{ ticker }} — GEX AI Outlook</h1>
-          <div class="muted">Selected snapshot: {{ selected.ts_label }}</div>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+
+    <main class="container-fluid px-3 px-xl-4 py-4 shell">
+      <section class="glass rounded-4 p-4 mb-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+          <div>
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <span class="concept-chip">TICKER: {{ ticker }}</span>
+              <span class="concept-chip">Gamma Intelligence Layer</span>
+            </div>
+            <h1 class="h2 mb-2 title-grad">{{ ticker }} · Ultra-modern Gamma Experience</h1>
+            <p class="muted mb-0">Timeline replay, AI analog forecasting, similar setup memory, and interactive regime simulation.</p>
+          </div>
+          <div class="d-flex gap-2">
+            <a class="btn btn-outline-light" href="/">All tickers</a>
+            <a class="btn btn-outline-light" href="{{ url_for('ticker_page', ticker=ticker) }}">Refresh</a>
+          </div>
         </div>
-        <a class="btn btn-outline-light" href="/">Back</a>
-      </div>
+      </section>
 
       {% if bootstrap_status == "ok" %}
       <div class="alert alert-success" role="alert">
-        Snapshot bootstrap completed. The latest exports were generated for {{ ticker }}.
+        Snapshot bootstrap completed. Latest exports were generated for {{ ticker }}.
       </div>
       {% elif bootstrap_status == "failed" %}
       <div class="alert alert-danger" role="alert">
@@ -51,200 +102,214 @@
         <div class="mb-2">No historical exports were found for {{ ticker }} on this deployment yet.</div>
         <form method="post" action="{{ url_for('bootstrap_ticker_history', ticker=ticker) }}" class="d-flex gap-2 flex-wrap align-items-center">
           <button class="btn btn-sm btn-warning" type="submit">Generate snapshots now</button>
-          <span class="small">Runs <code>python main.py --ticker {{ ticker }} --no-show</code> on the server, then refreshes this page.</span>
+          <span class="small">Runs <code>python main.py --ticker {{ ticker }} --no-show</code> on the server, then reloads this page.</span>
         </form>
       </div>
       {% endif %}
 
-      <div class="row g-3 mb-3">
-        <div class="col-lg-8">
-          <div class="card h-100">
-            <div class="card-body">
-              <h5 class="card-title">Historical Timeline (go back in time)</h5>
-              <form method="get" class="row g-2 align-items-end mb-3">
-                <div class="col-md-8">
-                  <label for="ts" class="form-label">Snapshot</label>
-                  <select id="ts" name="ts" class="form-select bg-dark text-light border-secondary" {% if not timeline_options %}disabled{% endif %}>
-                    {% if timeline_options %}
-                      {% for opt in timeline_options %}
-                        <option value="{{ opt.ts }}" {% if opt.is_selected %}selected{% endif %}>{{ opt.label }}</option>
-                      {% endfor %}
-                    {% else %}
-                      <option selected>No snapshots available</option>
-                    {% endif %}
-                  </select>
-                </div>
-                <div class="col-md-4 d-grid">
-                  <button class="btn btn-primary" type="submit" {% if not timeline_options %}disabled{% endif %}>Load Snapshot</button>
-                </div>
-              </form>
-              {% if timeline_json %}
-                <div id="timeline" style="height:320px;"></div>
-              {% else %}
-                <p class="muted">Timeline unavailable.</p>
-              {% endif %}
-            </div>
+      <section class="row g-3 mb-3">
+        <div class="col-12 col-xxl-8">
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h5">Historical Timeline Navigator</h2>
+            <form method="get" class="row g-2 align-items-end mb-3">
+              <div class="col-md-8">
+                <label for="ts" class="form-label">Snapshot</label>
+                <select id="ts" name="ts" class="form-select bg-dark text-light border-secondary" {% if not timeline_options %}disabled{% endif %}>
+                  {% if timeline_options %}
+                    {% for opt in timeline_options %}
+                      <option value="{{ opt.ts }}" {% if opt.is_selected %}selected{% endif %}>{{ opt.label }}</option>
+                    {% endfor %}
+                  {% else %}
+                    <option selected>No snapshots available</option>
+                  {% endif %}
+                </select>
+              </div>
+              <div class="col-md-4 d-grid">
+                <button class="btn btn-primary" type="submit" {% if not timeline_options %}disabled{% endif %}>Load Snapshot</button>
+              </div>
+            </form>
+            {% if timeline_json %}
+              <div id="timeline" class="chart-box" style="min-height:320px;"></div>
+            {% else %}
+              <div class="muted">Timeline unavailable.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h5">Gamma Surface Matrix</h2>
+            {% if heatmap_json %}
+              <div id="heatmap" class="chart-box"></div>
+            {% else %}
+              <div class="muted">No surface data available.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 p-lg-4">
+            <h2 class="h5">Surface Orbit (3D)</h2>
+            {% if scatter3d_json %}
+              <div id="scatter3d" class="chart-box"></div>
+            {% else %}
+              <div class="muted">No 3D surface data available.</div>
+            {% endif %}
           </div>
         </div>
 
-        <div class="col-lg-4">
-          <div class="card h-100">
-            <div class="card-body">
-              <h5 class="card-title">Current Outlook Metrics</h5>
-              <div class="small muted">Regime</div>
-              <div class="mb-2"><span class="pill {{ 'pill-long' if 'LONG' in selected.regime else 'pill-short' }}">{{ selected.regime }}</span></div>
-              <div><span class="small muted">Total GEX:</span> <strong>{{ '%.3f'|format(selected.total_gex) }} Bn$ / %</strong></div>
-              <div><span class="small muted">Call wall:</span> <strong>{{ '%.0f'|format(selected.call_wall) if selected.call_wall is not none else 'N/A' }}</strong></div>
-              <div><span class="small muted">Put wall:</span> <strong>{{ '%.0f'|format(selected.put_wall) if selected.put_wall is not none else 'N/A' }}</strong></div>
-              <div><span class="small muted">Gamma flip:</span> <strong>{{ '%.2f'|format(selected.gamma_flip) if selected.gamma_flip is not none else 'N/A' }}</strong></div>
-              <div><span class="small muted">Near-term ratio:</span> <strong>{{ '%.3f'|format(selected.near_term_ratio) }}</strong></div>
-            </div>
+        <div class="col-12 col-xxl-4">
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h6">Current Outlook Metrics</h2>
+            <div class="small muted">Selected snapshot</div>
+            <div class="mb-2">{{ selected.ts_label }}</div>
+            <div class="mb-2"><span class="pill {{ 'pill-long' if 'LONG' in selected.regime else 'pill-short' }}">{{ selected.regime }}</span></div>
+            <div><span class="metric-label">Total GEX</span><div class="metric-value">{{ '%.3f'|format(selected.total_gex) }} Bn$ / %</div></div>
+            <div><span class="metric-label">Call Wall</span><div class="metric-value">{{ '%.0f'|format(selected.call_wall) if selected.call_wall is not none else 'N/A' }}</div></div>
+            <div><span class="metric-label">Put Wall</span><div class="metric-value">{{ '%.0f'|format(selected.put_wall) if selected.put_wall is not none else 'N/A' }}</div></div>
+            <div><span class="metric-label">Gamma Flip</span><div class="metric-value">{{ '%.2f'|format(selected.gamma_flip) if selected.gamma_flip is not none else 'N/A' }}</div></div>
+            <div><span class="metric-label">Near-term Ratio</span><div class="metric-value">{{ '%.3f'|format(selected.near_term_ratio) }}</div></div>
           </div>
-        </div>
-      </div>
 
-      <div class="row g-3 mb-3">
-        <div class="col-lg-6">
-          <div class="card h-100">
-            <div class="card-body">
-              <h5 class="card-title">AI Prediction — Next GEX Update</h5>
-              {% if prediction %}
-                <p class="small muted">Model uses nearest historical states based on current GEX structure.</p>
-                <div><span class="small muted">Predicted regime:</span> <strong>{{ prediction.predicted_regime }}</strong></div>
-                <div><span class="small muted">Predicted total GEX:</span> <strong>{{ '%.3f'|format(prediction.predicted_total_gex) }} Bn$ / %</strong></div>
-                <div><span class="small muted">Predicted gamma flip:</span> <strong>{{ '%.2f'|format(prediction.predicted_flip) }}</strong></div>
-                <div><span class="small muted">Predicted near-term ratio:</span> <strong>{{ '%.3f'|format(prediction.predicted_near_term_ratio) }}</strong></div>
-                <div><span class="small muted">Confidence:</span> <strong>{{ '%.1f'|format(prediction.confidence * 100) }}%</strong></div>
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h6">AI Prediction · Next GEX Update</h2>
+            {% if prediction %}
+              <div><span class="metric-label">Predicted Regime</span><div class="metric-value">{{ prediction.predicted_regime }}</div></div>
+              <div><span class="metric-label">Predicted Total GEX</span><div class="metric-value">{{ '%.3f'|format(prediction.predicted_total_gex) }} Bn$ / %</div></div>
+              <div><span class="metric-label">Predicted Gamma Flip</span><div class="metric-value">{{ '%.2f'|format(prediction.predicted_flip) }}</div></div>
+              <div><span class="metric-label">Confidence</span><div class="metric-value">{{ '%.1f'|format(prediction.confidence * 100) }}%</div></div>
 
-                <h6 class="mt-3">Nearest training analogs</h6>
-                <ul class="small mb-0">
-                  {% for n in prediction.neighbors %}
-                    <li class="mono">#{{ n.rank }} {{ n.snapshot }} → next {{ n.next_snapshot }} (next total {{ '%.3f'|format(n.next_total_gex) }}, d={{ '%.3f'|format(n.distance) }})</li>
-                  {% endfor %}
-                </ul>
-              {% else %}
-                <p class="muted mb-0">Not enough historical snapshots yet for prediction (need at least 4).</p>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-
-        <div class="col-lg-6">
-          <div class="card h-100">
-            <div class="card-body">
-              <h5 class="card-title">Similar Setups to Current Outlook</h5>
-              {% if similar_setups %}
-                <div class="table-responsive">
-                  <table class="table table-sm align-middle">
-                    <thead>
-                      <tr>
-                        <th>Snapshot</th>
-                        <th>Similarity</th>
-                        <th>Regime</th>
-                        <th>What happened next</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {% for row in similar_setups %}
-                        <tr>
-                          <td class="mono">{{ row.snapshot }}</td>
-                          <td>{{ '%.1f'|format(row.similarity * 100) }}%</td>
-                          <td>{{ row.regime }}</td>
-                          <td class="small">
-                            {% if row.next_snapshot %}
-                              {{ row.next_snapshot }} · {{ row.next_regime }} · {{ '%.3f'|format(row.next_total_gex) }}
-                            {% else %}
-                              N/A
-                            {% endif %}
-                          </td>
-                        </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                </div>
-              {% else %}
-                <p class="muted mb-0">Not enough history to find similar setups.</p>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="row g-3">
-        <div class="col-lg-4">
-          <div class="card mb-3">
-            <div class="card-body">
-              <h5 class="card-title">Snapshots</h5>
-              {% if imgs %}
-                {% for img in imgs[:6] %}
-                  <div class="mb-2">
-                    <img src="/img/{{ img.name }}" class="img-fluid rounded" alt="{{ img.name }}">
-                    <div class="small muted">{{ img.name }}</div>
-                  </div>
+              <h6 class="mt-3">Nearest analogs</h6>
+              <ul class="small mb-0">
+                {% for n in prediction.neighbors %}
+                  <li class="mono">#{{ n.rank }} {{ n.snapshot }} → {{ n.next_snapshot }} ({{ '%.3f'|format(n.next_total_gex) }}, d={{ '%.3f'|format(n.distance) }})</li>
                 {% endfor %}
-              {% else %}
-                <p class="muted">No images available.</p>
-              {% endif %}
+              </ul>
+            {% else %}
+              <div class="muted">Not enough historical snapshots for prediction yet.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h6">Innovative Concept · Regime Simulator</h2>
+            <p class="small muted mb-3">Apply hypothetical shocks to estimate regime drift and structural pressure.</p>
+            <label class="form-label small">GEX shock (%) <span class="sim-value" id="shockValue">0%</span></label>
+            <input id="gexShock" type="range" class="form-range" min="-60" max="60" value="0">
+            <label class="form-label small mt-2">Spot drift (%) <span class="sim-value" id="spotShiftValue">0.0%</span></label>
+            <input id="spotShift" type="range" class="form-range" min="-5" max="5" step="0.1" value="0">
+
+            <div class="row g-2 mt-2">
+              <div class="col-6"><div class="metric-label">Projected GEX</div><div id="projTotal" class="sim-value">--</div></div>
+              <div class="col-6"><div class="metric-label">Projected Flip</div><div id="projFlip" class="sim-value">--</div></div>
+              <div class="col-6"><div class="metric-label">Pressure Score</div><div id="projPressure" class="sim-value">--</div></div>
+              <div class="col-6"><div class="metric-label">Projected Regime</div><div id="projRegime" class="sim-value">--</div></div>
             </div>
           </div>
 
-          <div class="card">
-            <div class="card-body">
-              <h5 class="card-title">Selected Raw Exports</h5>
-              {% if strike_csv and exp_csv and cum_csv %}
-                <ul class="mb-0">
-                  <li><a class="text-light" href="/exports/{{ strike_csv }}">GEX by strike CSV</a></li>
-                  <li><a class="text-light" href="/exports/{{ exp_csv }}">GEX by expiration CSV</a></li>
-                  <li><a class="text-light" href="/exports/{{ cum_csv }}">Cumulative GEX CSV</a></li>
-                </ul>
-              {% else %}
-                <p class="muted mb-0">No export files are available for the selected ticker yet.</p>
-              {% endif %}
-            </div>
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h6">Similar Setups Memory</h2>
+            {% if similar_setups %}
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>Snapshot</th>
+                      <th>Similarity</th>
+                      <th>Outcome</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in similar_setups %}
+                    <tr>
+                      <td class="mono small">{{ row.snapshot }}</td>
+                      <td>{{ '%.1f'|format(row.similarity * 100) }}%</td>
+                      <td class="small">
+                        {% if row.next_snapshot %}
+                          {{ row.next_snapshot }} · {{ row.next_regime }} · {{ '%.3f'|format(row.next_total_gex) }}
+                        {% else %}
+                          N/A
+                        {% endif %}
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <div class="muted">Not enough history to match setups.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h6">Downloads</h2>
+            {% if strike_csv and exp_csv and cum_csv %}
+              <ul class="download-list ps-3 mb-0 small">
+                <li><a href="/exports/{{ strike_csv }}">GEX by strike CSV</a></li>
+                <li><a href="/exports/{{ exp_csv }}">GEX by expiration CSV</a></li>
+                <li><a href="/exports/{{ cum_csv }}">Cumulative GEX CSV</a></li>
+              </ul>
+            {% else %}
+              <div class="muted">No export files are available for this ticker yet.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 p-lg-4">
+            <h2 class="h6">Latest Snapshots</h2>
+            {% if imgs %}
+              {% for img in imgs[:4] %}
+                <div class="mb-2">
+                  <img src="/img/{{ img.name }}" class="img-fluid thumb" alt="{{ img.name }}">
+                  <div class="small muted mt-1">{{ img.name }}</div>
+                </div>
+              {% endfor %}
+            {% else %}
+              <div class="muted">No images available.</div>
+            {% endif %}
           </div>
         </div>
-
-        <div class="col-lg-8">
-          <div class="card mb-3">
-            <div class="card-body">
-              <h5 class="card-title">Surface Heatmap</h5>
-              {% if heatmap_json %}
-                <div id="heatmap" style="height:500px;"></div>
-              {% else %}
-                <p class="muted">No surface data available.</p>
-              {% endif %}
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-body">
-              <h5 class="card-title">3D Surface</h5>
-              {% if scatter3d_json %}
-                <div id="scatter3d" style="height:500px;"></div>
-              {% else %}
-                <p class="muted">No 3D surface data available.</p>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+      </section>
+    </main>
 
     <script>
-      {% if timeline_json %}
-        var timeline = {{ timeline_json | safe }};
-        Plotly.react('timeline', timeline.data, timeline.layout || {});
-      {% endif %}
+      function renderPlot(id, payload) {
+        if (!payload) return;
+        const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
+        Plotly.react(id, parsed.data, parsed.layout || {}, { responsive: true });
+      }
 
-      {% if heatmap_json %}
-        var heat = {{ heatmap_json | safe }};
-        Plotly.react('heatmap', heat.data, heat.layout || {});
-      {% endif %}
+      renderPlot('timeline', {{ timeline_json|tojson }});
+      renderPlot('heatmap', {{ heatmap_json|tojson }});
+      renderPlot('scatter3d', {{ scatter3d_json|tojson }});
 
-      {% if scatter3d_json %}
-        var s3 = {{ scatter3d_json | safe }};
-        Plotly.react('scatter3d', s3.data, s3.layout || {});
-      {% endif %}
+      // Regime simulator (client-side concept layer)
+      const shockEl = document.getElementById('gexShock');
+      const shiftEl = document.getElementById('spotShift');
+      const shockValue = document.getElementById('shockValue');
+      const shiftValue = document.getElementById('spotShiftValue');
+      const projTotal = document.getElementById('projTotal');
+      const projFlip = document.getElementById('projFlip');
+      const projPressure = document.getElementById('projPressure');
+      const projRegime = document.getElementById('projRegime');
+
+      const baseTotal = {{ selected.total_gex|tojson }};
+      const baseFlip = {{ selected.gamma_flip|tojson }};
+      const baseSpread = Math.abs(({{ selected.call_wall|tojson }} || 0) - ({{ selected.put_wall|tojson }} || 0));
+
+      function updateSimulator() {
+        if (!shockEl || !shiftEl) return;
+        const shock = Number(shockEl.value || 0);
+        const shift = Number(shiftEl.value || 0);
+        const total = Number(baseTotal || 0) * (1 + shock / 100);
+        const flip = (baseFlip === null || baseFlip === undefined) ? null : Number(baseFlip) * (1 + shift / 100);
+        const pressure = Math.max(0, Math.min(100, Math.abs(total) * 3 + baseSpread * 0.01));
+
+        shockValue.textContent = `${shock.toFixed(0)}%`;
+        shiftValue.textContent = `${shift.toFixed(1)}%`;
+        projTotal.textContent = `${total.toFixed(3)} Bn$ / %`;
+        projFlip.textContent = flip === null ? 'N/A' : flip.toFixed(2);
+        projPressure.textContent = `${pressure.toFixed(1)} / 100`;
+        projRegime.textContent = total >= 0 ? 'LONG gamma' : 'SHORT gamma';
+      }
+
+      shockEl?.addEventListener('input', updateSimulator);
+      shiftEl?.addEventListener('input', updateSimulator);
+      updateSimulator();
     </script>
   </body>
 </html>
