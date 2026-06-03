@@ -38,7 +38,7 @@
                 <div class="small muted">Snapshots: {{ row.history_count }}</div>
                 <div class="small muted mb-2">Latest: {{ row.latest_ts }}</div>
                 <div class="mb-3"><strong>Total GEX:</strong> {{ row.total_gex }}</div>
-                <a class="btn btn-primary mt-auto" href="/ticker/{{ row.ticker }}">Open {{ row.ticker }}</a>
+                <a class="btn btn-primary mt-auto" href="{{ url_for('ticker_page', ticker=row.ticker) }}">Open {{ row.ticker }}</a>
               </div>
             </div>
           </div>
