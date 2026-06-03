@@ -32,10 +32,27 @@
         <a class="btn btn-outline-light" href="/">Back</a>
       </div>
 
+      {% if bootstrap_status == "ok" %}
+      <div class="alert alert-success" role="alert">
+        Snapshot bootstrap completed. The latest exports were generated for {{ ticker }}.
+      </div>
+      {% elif bootstrap_status == "failed" %}
+      <div class="alert alert-danger" role="alert">
+        Snapshot bootstrap failed for {{ ticker }}. Check deployment logs and verify dependencies/data source access.
+      </div>
+      {% elif bootstrap_status == "error" %}
+      <div class="alert alert-danger" role="alert">
+        Snapshot bootstrap encountered an internal error before execution.
+      </div>
+      {% endif %}
+
       {% if not has_history %}
       <div class="alert alert-warning" role="alert">
-        No historical exports were found for {{ ticker }} on this deployment yet. Generate snapshots with
-        <code>python main.py --ticker {{ ticker }} --no-show</code> and refresh.
+        <div class="mb-2">No historical exports were found for {{ ticker }} on this deployment yet.</div>
+        <form method="post" action="{{ url_for('bootstrap_ticker_history', ticker=ticker) }}" class="d-flex gap-2 flex-wrap align-items-center">
+          <button class="btn btn-sm btn-warning" type="submit">Generate snapshots now</button>
+          <span class="small">Runs <code>python main.py --ticker {{ ticker }} --no-show</code> on the server, then refreshes this page.</span>
+        </form>
       </div>
       {% endif %}
 

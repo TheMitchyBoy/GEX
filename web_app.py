@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from flask import Flask, abort, render_template, request, send_from_directory
+from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
 from plotly.utils import PlotlyJSONEncoder
 
 APP = Flask(__name__)
@@ -443,6 +445,7 @@ def index():
 def ticker_page(ticker):
     ticker = ticker.upper()
     history = build_history(ticker)
+    bootstrap_status = request.args.get("bootstrap")
 
     imgs = []
     if IMG_DIR.exists():
@@ -473,6 +476,7 @@ def ticker_page(ticker):
             exp_csv=None,
             cum_csv=None,
             has_history=False,
+            bootstrap_status=bootstrap_status,
         )
 
     requested_ts = request.args.get("ts")
@@ -510,7 +514,29 @@ def ticker_page(ticker):
         exp_csv=selected["exp_path"].name,
         cum_csv=selected["cum_path"].name,
         has_history=True,
+        bootstrap_status=bootstrap_status,
     )
+
+
+@APP.post("/ticker/<ticker>/bootstrap")
+def bootstrap_ticker_history(ticker):
+    ticker = ticker.upper()
+    project_root = Path(__file__).resolve().parent
+    cmd = [sys.executable, "main.py", "--ticker", ticker, "--no-show"]
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except Exception:
+        return redirect(url_for("ticker_page", ticker=ticker, bootstrap="error"))
+
+    status = "ok" if completed.returncode == 0 else "failed"
+    return redirect(url_for("ticker_page", ticker=ticker, bootstrap=status))
 
 
 @APP.route("/exports/<path:filename>")
