@@ -226,9 +226,9 @@ The repository now includes two interactive interfaces for viewing GEX output:
   - Shows interactive heatmaps and 3D scatter plots
   - Displays PNG snapshots from `img/`
 - **Flask website:** `web_app.py`
-  - Serves an ultra-modern dashboard with glassmorphism styling, narrative pulse, and concept widgets
-  - Adds a what-if regime simulator (GEX/spot shock) and wall-tension scoring
-  - Includes interactive heatmap/3D/strike/expiration/cumulative charts and export downloads
+  - Includes a historical timeline selector to revisit older GEX snapshots
+  - Adds AI-like nearest-neighbor prediction for the next GEX update from current outlook
+  - Surfaces similar historical setup matches and shows what happened on the next snapshot
 
 Run the Streamlit dashboard:
 ```bash

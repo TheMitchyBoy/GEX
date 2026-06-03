@@ -5,9 +5,10 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from flask import Flask, abort, jsonify, render_template, send_from_directory
+from flask import Flask, abort, render_template, request, send_from_directory
 from plotly.utils import PlotlyJSONEncoder
 
 APP = Flask(__name__)
@@ -16,422 +17,481 @@ app = APP
 EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
 
-EXPORT_FILE_RE = re.compile(
-    r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex|summary)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.(?P<ext>csv|json)$"
+CSV_RE = re.compile(
+    r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"
 )
 
 
-def _fmt(value: float | None, digits: int = 2) -> str:
-    if value is None:
-        return "N/A"
-    return f"{value:,.{digits}f}"
+def parse_ts(ts: str) -> datetime:
+    return datetime.strptime(ts, "%Y-%m-%d_%H%M%S")
 
 
-def _latest_file_for(pattern: str, directory: Path) -> Path | None:
-    files = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime)
-    return files[-1] if files else None
+def ts_label(ts: str) -> str:
+    return parse_ts(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def find_available_tickers(export_dir: Path) -> list[str]:
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def find_available_tickers(export_dir: Path):
     export_dir.mkdir(parents=True, exist_ok=True)
     tickers = set()
-    for file in export_dir.iterdir():
-        match = EXPORT_FILE_RE.match(file.name)
+    for file in export_dir.glob("*.csv"):
+        match = CSV_RE.match(file.name)
         if match:
             tickers.add(match.group("ticker"))
     return sorted(tickers)
 
 
-def latest_exports_for_ticker(ticker: str) -> dict[str, Path]:
-    files: dict[str, Path] = {}
-    for file in EXPORT_DIR.glob(f"{ticker}_*"):
-        match = EXPORT_FILE_RE.match(file.name)
+def collect_snapshot_files(ticker: str):
+    snapshots = {}
+    for file in EXPORT_DIR.glob(f"{ticker}_*.csv"):
+        match = CSV_RE.match(file.name)
         if not match:
             continue
+        ts = match.group("ts")
         kind = match.group("kind")
-        current = files.get(kind)
-        if current is None or file.stat().st_mtime > current.stat().st_mtime:
-            files[kind] = file
-    return files
+        snapshots.setdefault(ts, {})[kind] = file
+
+    # only keep snapshots with minimum data needed
+    filtered = {
+        ts: files
+        for ts, files in snapshots.items()
+        if "gex_by_strike" in files and "gex_by_expiration" in files and "cumulative_gex" in files
+    }
+    return dict(sorted(filtered.items(), key=lambda item: item[0]))
 
 
-def _load_series(path: Path, value_col: str) -> pd.Series:
-    frame = pd.read_csv(path)
-    if frame.empty:
-        return pd.Series(dtype=float)
-    index_col = frame.columns[0]
-    values = pd.to_numeric(frame[value_col], errors="coerce")
-    series = pd.Series(values.values, index=frame[index_col])
-    return series.dropna()
-
-
-def _load_surface(path: Path) -> pd.DataFrame:
-    frame = pd.read_csv(path)
-    if frame.empty:
-        return pd.DataFrame(columns=["expiration", "strike", "GEX"])
-    frame["expiration"] = pd.to_datetime(frame["expiration"], errors="coerce")
-    frame["strike"] = pd.to_numeric(frame["strike"], errors="coerce")
-    frame["GEX"] = pd.to_numeric(frame["GEX"], errors="coerce")
-    return frame.dropna(subset=["expiration", "strike", "GEX"])
-
-
-def _estimate_gamma_flip(cumulative: pd.Series) -> dict:
+def estimate_gamma_flip(cumulative: pd.Series):
     if cumulative.empty:
-        return {"flip_strike": None, "confidence": "none", "message": "no cumulative data"}
-
-    ordered = cumulative.sort_index().astype(float)
-    signs = ordered.apply(lambda value: -1 if value < 0 else (1 if value > 0 else 0)).to_numpy()
-    crossing_idx = [i for i in range(len(signs) - 1) if signs[i] != signs[i + 1]]
-
-    if not crossing_idx:
-        return {"flip_strike": None, "confidence": "none", "message": "no zero crossing"}
-
-    idx = crossing_idx[0]
-    x0 = float(ordered.index[idx])
-    x1 = float(ordered.index[idx + 1])
-    y0 = float(ordered.iloc[idx])
-    y1 = float(ordered.iloc[idx + 1])
-
-    if y1 == y0:
-        flip = x0
-    else:
-        flip = x0 - y0 * (x1 - x0) / (y1 - y0)
-
-    slope = abs(y1 - y0) / max(abs(x1 - x0), 1e-9)
-    if slope >= 0.10:
-        confidence = "high"
-    elif slope >= 0.03:
-        confidence = "medium"
-    else:
-        confidence = "low"
-
-    return {
-        "flip_strike": float(flip),
-        "confidence": confidence,
-        "message": "derived from cumulative curve",
-    }
-
-
-def _derive_summary(ticker: str, strike: pd.Series, expiration: pd.Series, cumulative: pd.Series, surface: pd.DataFrame) -> dict:
-    strike = strike.sort_index().astype(float) if not strike.empty else strike
-    total_gex = float(strike.sum()) if not strike.empty else 0.0
-
-    if not strike.empty:
-        call_wall_strike = float(strike.idxmax())
-        call_wall_gex = float(strike.max())
-        put_wall_strike = float(strike.idxmin())
-        put_wall_gex = float(strike.min())
-    else:
-        call_wall_strike = None
-        call_wall_gex = None
-        put_wall_strike = None
-        put_wall_gex = None
-
-    positive = strike[strike > 0].sort_values(ascending=False).head(5) if not strike.empty else pd.Series(dtype=float)
-    negative = strike[strike < 0].sort_values().head(5) if not strike.empty else pd.Series(dtype=float)
-
-    nearest_exp = None
-    largest_exp = None
-    if not expiration.empty:
-        exp = expiration.copy()
-        exp.index = pd.to_datetime(exp.index, errors="coerce")
-        exp = exp.dropna().sort_index().astype(float)
-        if not exp.empty:
-            nearest_key = exp.index[0]
-            largest_key = exp.abs().idxmax()
-            nearest_exp = {
-                "expiration": nearest_key.date().isoformat(),
-                "gex_bn_per_pct": float(exp.loc[nearest_key]),
-            }
-            largest_exp = {
-                "expiration": largest_key.date().isoformat(),
-                "gex_bn_per_pct": float(exp.loc[largest_key]),
-            }
-
-    spot_guess = None
-    if not surface.empty:
-        latest_exp = surface.sort_values("expiration").iloc[0]
-        spot_guess = float(latest_exp["strike"])
-
-    summary = {
-        "ticker": ticker,
-        "generated_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-        "spot_price": spot_guess,
-        "option_count": None,
-        "total_gex_bn_per_pct": total_gex,
-        "net_gamma_regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
-        "call_wall": {"strike": call_wall_strike, "gex_bn_per_pct": call_wall_gex},
-        "put_wall": {"strike": put_wall_strike, "gex_bn_per_pct": put_wall_gex},
-        "gamma_flip": _estimate_gamma_flip(cumulative),
-        "top_positive_gex_strikes": [
-            {"strike": float(k), "gex_bn_per_pct": float(v)} for k, v in positive.items()
-        ],
-        "top_negative_gex_strikes": [
-            {"strike": float(k), "gex_bn_per_pct": float(v)} for k, v in negative.items()
-        ],
-        "nearest_expiration": nearest_exp,
-        "largest_expiration_gex": largest_exp,
-    }
-    return summary
-
-
-def _build_narrative(summary: dict) -> list[str]:
-    lines = []
-    total = float(summary.get("total_gex_bn_per_pct") or 0.0)
-    regime = summary.get("net_gamma_regime") or "N/A"
-    flip = (summary.get("gamma_flip") or {}).get("flip_strike")
-
-    if abs(total) < 2:
-        lines.append("Gamma profile is close to neutral; hedge flows may be less sticky intraday.")
-    elif total > 0:
-        lines.append("Long-gamma regime suggests mean-reversion pressure around key walls.")
-    else:
-        lines.append("Short-gamma regime can amplify trend moves and volatility pockets.")
-
-    call_wall = (summary.get("call_wall") or {}).get("strike")
-    put_wall = (summary.get("put_wall") or {}).get("strike")
-    if call_wall is not None and put_wall is not None:
-        width = abs(call_wall - put_wall)
-        lines.append(f"Wall corridor width is {width:,.0f} points between put/call walls.")
-
-    if flip is not None:
-        lines.append(f"Estimated gamma flip sits near {flip:,.2f}; monitor regime transition around this zone.")
-
-    lines.append(f"Current regime label: {regime}.")
-    return lines
-
-
-def _build_concepts(summary: dict) -> dict:
-    total_gex = float(summary.get("total_gex_bn_per_pct") or 0.0)
-    flip = (summary.get("gamma_flip") or {}).get("flip_strike")
-    spot = summary.get("spot_price")
-    call_wall = (summary.get("call_wall") or {}).get("strike")
-    put_wall = (summary.get("put_wall") or {}).get("strike")
-
-    regime_score = max(-100.0, min(100.0, total_gex * 3.5))
-
-    nearest_wall_distance = None
-    if spot is not None and call_wall is not None and put_wall is not None:
-        nearest_wall_distance = min(abs(spot - call_wall), abs(spot - put_wall))
-
-    wall_tension = None
-    if nearest_wall_distance is not None:
-        wall_tension = max(0.0, 100.0 - nearest_wall_distance / max(spot, 1.0) * 10000.0)
-
-    return {
-        "base_total_gex": total_gex,
-        "base_flip": flip,
-        "base_spot": spot,
-        "call_wall": call_wall,
-        "put_wall": put_wall,
-        "regime_score": regime_score,
-        "wall_tension": wall_tension,
-    }
-
-
-def _plotly_theme(fig: go.Figure, title: str, height: int = 430) -> go.Figure:
-    fig.update_layout(
-        title=title,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(8,10,22,0.55)",
-        font=dict(color="#e2e8f0"),
-        margin=dict(l=20, r=20, t=55, b=20),
-        height=height,
-    )
-    return fig
-
-
-def _make_heatmap(surface: pd.DataFrame, ticker: str) -> str | None:
-    if surface.empty:
         return None
 
-    pivot = (
-        surface.pivot_table(index="expiration", columns="strike", values="GEX", aggfunc="sum")
-        .sort_index()
-        .fillna(0)
+    values = cumulative.astype(float).values
+    idx = pd.to_numeric(cumulative.index, errors="coerce")
+    valid = ~np.isnan(idx)
+    if valid.sum() < 2:
+        return None
+
+    x = idx[valid]
+    y = values[valid]
+    signs = np.sign(y)
+
+    for i in range(len(signs) - 1):
+        if signs[i] == signs[i + 1]:
+            continue
+        x0, x1 = float(x[i]), float(x[i + 1])
+        y0, y1 = float(y[i]), float(y[i + 1])
+        if y1 == y0:
+            return x0
+        return x0 - y0 * (x1 - x0) / (y1 - y0)
+    return None
+
+
+def load_snapshot_metrics(ts: str, files: dict):
+    strike_df = pd.read_csv(files["gex_by_strike"])
+    exp_df = pd.read_csv(files["gex_by_expiration"])
+    cum_df = pd.read_csv(files["cumulative_gex"])
+
+    strike = pd.Series(
+        pd.to_numeric(strike_df.iloc[:, 1], errors="coerce").fillna(0.0).values,
+        index=pd.to_numeric(strike_df.iloc[:, 0], errors="coerce").fillna(0.0).values,
+    )
+    exp_vals = pd.to_numeric(exp_df.iloc[:, 1], errors="coerce").fillna(0.0)
+    cumulative = pd.Series(
+        pd.to_numeric(cum_df.iloc[:, 1], errors="coerce").fillna(0.0).values,
+        index=pd.to_numeric(cum_df.iloc[:, 0], errors="coerce").fillna(0.0).values,
     )
 
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=pivot.values,
-            x=[float(val) for val in pivot.columns],
-            y=[idx.strftime("%Y-%m-%d") for idx in pd.to_datetime(pivot.index)],
-            colorscale="RdYlBu_r",
-            colorbar=dict(title="GEX (M$ / %)"),
+    total_gex = float(strike.sum())
+    pos_gex = float(strike[strike > 0].sum())
+    neg_gex = float(strike[strike < 0].sum())
+    gex_std = float(strike.std()) if len(strike) > 1 else 0.0
+    abs_mean = float(strike.abs().mean()) if len(strike) else 0.0
+
+    call_wall = float(strike.idxmax()) if len(strike) else None
+    put_wall = float(strike.idxmin()) if len(strike) else None
+    gamma_flip = estimate_gamma_flip(cumulative)
+
+    near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
+    term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
+    near_term_ratio = near_term / term_total if term_total else 0.0
+
+    surface_peak = 0.0
+    if "gex_surface" in files:
+        surface_df = pd.read_csv(files["gex_surface"])
+        if "GEX" in surface_df.columns and not surface_df.empty:
+            surface_peak = float(pd.to_numeric(surface_df["GEX"], errors="coerce").abs().max())
+
+    return {
+        "ts": ts,
+        "ts_label": ts_label(ts),
+        "strike": strike,
+        "exp_df": exp_df,
+        "cumulative": cumulative,
+        "surface_path": files.get("gex_surface"),
+        "strike_path": files["gex_by_strike"],
+        "exp_path": files["gex_by_expiration"],
+        "cum_path": files["cumulative_gex"],
+        "total_gex": total_gex,
+        "pos_gex": pos_gex,
+        "neg_gex": neg_gex,
+        "gex_std": gex_std,
+        "abs_mean": abs_mean,
+        "call_wall": call_wall,
+        "put_wall": put_wall,
+        "gamma_flip": gamma_flip,
+        "near_term_ratio": near_term_ratio,
+        "surface_peak": surface_peak,
+        "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
+    }
+
+
+def build_history(ticker: str):
+    snapshot_files = collect_snapshot_files(ticker)
+    snapshots = []
+    for ts, files in snapshot_files.items():
+        try:
+            snapshots.append(load_snapshot_metrics(ts, files))
+        except Exception:
+            # skip malformed snapshot
+            continue
+
+    snapshots.sort(key=lambda row: row["ts"])
+    return snapshots
+
+
+def make_timeline_chart(history, ticker):
+    if not history:
+        return None
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[row["ts_label"] for row in history],
+            y=[row["total_gex"] for row in history],
+            mode="lines+markers",
+            line=dict(color="#4dabf7", width=2),
+            marker=dict(size=7),
+            name="Total GEX",
         )
     )
-    fig = _plotly_theme(fig, f"{ticker} Gamma Surface Heatmap", height=500)
+    fig.add_hline(y=0, line_dash="dash", line_color="#adb5bd")
+    fig.update_layout(
+        title=f"{ticker} Total GEX Timeline",
+        template="plotly_dark",
+        height=320,
+        margin=dict(l=20, r=20, t=45, b=20),
+        xaxis_title="Snapshot",
+        yaxis_title="GEX (Bn$ / %)",
+    )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def _make_3d(surface: pd.DataFrame, ticker: str) -> str | None:
-    if surface.empty:
+def make_heatmap(surface_path: Path | None, ticker: str):
+    if surface_path is None:
+        return None
+    df = pd.read_csv(surface_path)
+    if df.empty or not {"expiration", "strike", "GEX"}.issubset(df.columns):
+        return None
+    df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
+    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+    df["GEX"] = pd.to_numeric(df["GEX"], errors="coerce")
+    df = df.dropna(subset=["expiration", "strike", "GEX"])
+    if df.empty:
+        return None
+
+    pivot = df.pivot_table(index="expiration", columns="strike", values="GEX", aggfunc="sum").fillna(0).sort_index()
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=pivot.values,
+            x=[float(c) for c in pivot.columns],
+            y=[d.strftime("%Y-%m-%d") for d in pd.to_datetime(pivot.index)],
+            colorscale="RdYlBu_r",
+        )
+    )
+    fig.update_layout(
+        title=f"{ticker} GEX Surface (selected snapshot)",
+        template="plotly_dark",
+        height=500,
+        margin=dict(l=20, r=20, t=45, b=20),
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_surface_scatter(surface_path: Path | None, ticker: str):
+    if surface_path is None:
+        return None
+    df = pd.read_csv(surface_path)
+    if df.empty or not {"expiration", "strike", "GEX"}.issubset(df.columns):
+        return None
+    df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
+    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+    df["GEX"] = pd.to_numeric(df["GEX"], errors="coerce")
+    df = df.dropna(subset=["expiration", "strike", "GEX"])
+    if df.empty:
         return None
 
     fig = go.Figure(
         data=go.Scatter3d(
-            x=surface["strike"],
-            y=surface["expiration"].dt.strftime("%Y-%m-%d"),
-            z=surface["GEX"],
+            x=df["strike"],
+            y=df["expiration"].dt.strftime("%Y-%m-%d"),
+            z=df["GEX"],
             mode="markers",
-            marker=dict(size=4, color=surface["GEX"], colorscale="Turbo", showscale=True),
+            marker=dict(size=4, color=df["GEX"], colorscale="Viridis", showscale=True),
         )
     )
     fig.update_layout(
-        scene=dict(
-            xaxis_title="Strike",
-            yaxis_title="Expiration",
-            zaxis_title="GEX (M$ / %)",
-            bgcolor="rgba(0,0,0,0)",
-        )
+        title=f"{ticker} 3D Surface (selected snapshot)",
+        template="plotly_dark",
+        height=500,
+        margin=dict(l=20, r=20, t=45, b=20),
     )
-    fig = _plotly_theme(fig, f"{ticker} Surface Orbit (3D)", height=500)
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def _make_strike_bar(strike: pd.Series, ticker: str) -> str | None:
-    if strike.empty:
+def prepare_training_rows(history):
+    rows = []
+    for i in range(len(history) - 1):
+        cur = history[i]
+        nxt = history[i + 1]
+        rows.append(
+            {
+                "ts": cur["ts"],
+                "features": np.array(
+                    [
+                        cur["total_gex"],
+                        cur["pos_gex"],
+                        cur["neg_gex"],
+                        cur["gex_std"],
+                        cur["near_term_ratio"],
+                        cur["surface_peak"],
+                        safe_float(cur["call_wall"], 0.0),
+                        safe_float(cur["put_wall"], 0.0),
+                        safe_float(cur["gamma_flip"], 0.0),
+                    ],
+                    dtype=float,
+                ),
+                "target_total_gex": nxt["total_gex"],
+                "target_flip": nxt["gamma_flip"],
+                "target_near_term_ratio": nxt["near_term_ratio"],
+                "next_ts": nxt["ts"],
+            }
+        )
+    return rows
+
+
+def predict_next_snapshot(history):
+    if len(history) < 4:
         return None
-    ordered = strike.sort_index().astype(float)
-    colors = ["#34d399" if val >= 0 else "#fb7185" for val in ordered.values]
-    fig = go.Figure(data=go.Bar(x=[float(v) for v in ordered.index], y=ordered.values, marker_color=colors))
-    fig = _plotly_theme(fig, f"{ticker} GEX by Strike")
-    fig.update_xaxes(title="Strike")
-    fig.update_yaxes(title="GEX (Bn$ / %)")
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
 
-
-def _make_exp_bar(expiration: pd.Series, ticker: str) -> str | None:
-    if expiration.empty:
+    current = history[-1]
+    train = prepare_training_rows(history)
+    if len(train) < 3:
         return None
-    exp = expiration.copy()
-    exp.index = pd.to_datetime(exp.index, errors="coerce")
-    exp = exp.dropna().sort_index().astype(float)
-    fig = go.Figure(data=go.Bar(x=[v.strftime("%Y-%m-%d") for v in exp.index], y=exp.values, marker_color="#60a5fa"))
-    fig = _plotly_theme(fig, f"{ticker} GEX by Expiration")
-    fig.update_xaxes(title="Expiration")
-    fig.update_yaxes(title="GEX (Bn$ / %)")
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
 
+    x_train = np.vstack([row["features"] for row in train])
+    x_now = np.array(
+        [
+            current["total_gex"],
+            current["pos_gex"],
+            current["neg_gex"],
+            current["gex_std"],
+            current["near_term_ratio"],
+            current["surface_peak"],
+            safe_float(current["call_wall"], 0.0),
+            safe_float(current["put_wall"], 0.0),
+            safe_float(current["gamma_flip"], 0.0),
+        ],
+        dtype=float,
+    )
 
-def _make_cumulative(cumulative: pd.Series, ticker: str) -> str | None:
-    if cumulative.empty:
-        return None
-    curve = cumulative.copy()
-    curve.index = pd.to_numeric(curve.index, errors="coerce")
-    curve = curve.dropna().sort_index().astype(float)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=curve.index, y=curve.values, mode="lines", line=dict(color="#f59e0b", width=2.5)))
-    fig.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-    fig = _plotly_theme(fig, f"{ticker} Cumulative GEX")
-    fig.update_xaxes(title="Strike")
-    fig.update_yaxes(title="Cumulative (Bn$ / %)")
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
+    mean = x_train.mean(axis=0)
+    std = x_train.std(axis=0)
+    std = np.where(std == 0, 1.0, std)
 
+    z_train = (x_train - mean) / std
+    z_now = (x_now - mean) / std
 
-def load_ticker_bundle(ticker: str) -> dict:
-    ticker = ticker.upper()
-    files = latest_exports_for_ticker(ticker)
+    distances = np.linalg.norm(z_train - z_now, axis=1)
+    k = min(4, len(distances))
+    nn_idx = np.argsort(distances)[:k]
+    nn_dist = distances[nn_idx]
+    weights = 1.0 / (nn_dist + 1e-6)
+    weights = weights / weights.sum()
 
-    strike = _load_series(files["gex_by_strike"], "gex_bn_per_pct") if "gex_by_strike" in files else pd.Series(dtype=float)
-    expiration = _load_series(files["gex_by_expiration"], "gex_bn_per_pct") if "gex_by_expiration" in files else pd.Series(dtype=float)
-    cumulative = _load_series(files["cumulative_gex"], "cumulative_gex_bn_per_pct") if "cumulative_gex" in files else pd.Series(dtype=float)
-    surface = _load_surface(files["gex_surface"]) if "gex_surface" in files else pd.DataFrame(columns=["expiration", "strike", "GEX"])
+    pred_total = float(np.sum([weights[j] * train[i]["target_total_gex"] for j, i in enumerate(nn_idx)]))
 
-    summary = None
-    if "summary" in files:
-        with files["summary"].open("r", encoding="utf-8") as handle:
-            summary = json.load(handle)
-    if summary is None:
-        summary = _derive_summary(ticker, strike, expiration, cumulative, surface)
+    flip_targets = np.array([safe_float(train[i]["target_flip"], safe_float(current["gamma_flip"], 0.0)) for i in nn_idx], dtype=float)
+    pred_flip = float(np.sum(weights * flip_targets))
 
-    images = sorted(IMG_DIR.glob(f"{ticker}_*.*"), key=lambda p: p.stat().st_mtime, reverse=True) if IMG_DIR.exists() else []
-    updated_at = datetime.fromtimestamp(max(file.stat().st_mtime for file in files.values())) if files else None
+    pred_ratio = float(np.sum([weights[j] * train[i]["target_near_term_ratio"] for j, i in enumerate(nn_idx)]))
 
-    concepts = _build_concepts(summary)
-    narrative = _build_narrative(summary)
+    avg_dist = float(nn_dist.mean())
+    confidence = max(0.0, min(1.0, 1.0 / (1.0 + avg_dist)))
 
-    metrics = {
-        "ticker": ticker,
-        "regime": summary.get("net_gamma_regime", "N/A"),
-        "total_gex": _fmt(summary.get("total_gex_bn_per_pct"), 3),
-        "spot": _fmt(summary.get("spot_price"), 2),
-        "flip": _fmt((summary.get("gamma_flip") or {}).get("flip_strike"), 2),
-        "call_wall": _fmt((summary.get("call_wall") or {}).get("strike"), 2),
-        "put_wall": _fmt((summary.get("put_wall") or {}).get("strike"), 2),
-        "updated_at": updated_at.strftime("%Y-%m-%d %H:%M:%S") if updated_at else "N/A",
-    }
-
-    charts = {
-        "heatmap": _make_heatmap(surface, ticker),
-        "surface3d": _make_3d(surface, ticker),
-        "strike": _make_strike_bar(strike, ticker),
-        "expiration": _make_exp_bar(expiration, ticker),
-        "cumulative": _make_cumulative(cumulative, ticker),
-    }
+    neighbors = []
+    for rank, (i, d) in enumerate(zip(nn_idx, nn_dist), start=1):
+        src = next(row for row in history if row["ts"] == train[i]["ts"])
+        neighbors.append(
+            {
+                "rank": rank,
+                "snapshot": src["ts_label"],
+                "distance": float(d),
+                "next_snapshot": ts_label(train[i]["next_ts"]),
+                "next_total_gex": float(train[i]["target_total_gex"]),
+            }
+        )
 
     return {
-        "ticker": ticker,
-        "files": files,
-        "summary": summary,
-        "metrics": metrics,
-        "concepts": concepts,
-        "narrative": narrative,
-        "charts": charts,
-        "images": images,
+        "predicted_total_gex": pred_total,
+        "predicted_regime": "LONG gamma" if pred_total >= 0 else "SHORT gamma",
+        "predicted_flip": pred_flip,
+        "predicted_near_term_ratio": pred_ratio,
+        "confidence": confidence,
+        "neighbors": neighbors,
     }
+
+
+def similar_setups(history, top_n=5):
+    if len(history) < 3:
+        return []
+
+    current = history[-1]
+    rows = []
+    for i in range(len(history) - 1):
+        row = history[i]
+        feat = np.array(
+            [
+                row["total_gex"],
+                row["gex_std"],
+                row["near_term_ratio"],
+                safe_float(row["gamma_flip"], 0.0),
+                safe_float(row["call_wall"], 0.0),
+                safe_float(row["put_wall"], 0.0),
+            ],
+            dtype=float,
+        )
+        rows.append((i, row, feat))
+
+    current_feat = np.array(
+        [
+            current["total_gex"],
+            current["gex_std"],
+            current["near_term_ratio"],
+            safe_float(current["gamma_flip"], 0.0),
+            safe_float(current["call_wall"], 0.0),
+            safe_float(current["put_wall"], 0.0),
+        ],
+        dtype=float,
+    )
+
+    matrix = np.vstack([feat for _, _, feat in rows])
+    mean = matrix.mean(axis=0)
+    std = matrix.std(axis=0)
+    std = np.where(std == 0, 1.0, std)
+
+    z_matrix = (matrix - mean) / std
+    z_current = (current_feat - mean) / std
+    distances = np.linalg.norm(z_matrix - z_current, axis=1)
+
+    idx_sorted = np.argsort(distances)[: min(top_n, len(distances))]
+    results = []
+    for idx in idx_sorted:
+        hist_idx, snap, _ = rows[idx]
+        next_snap = history[hist_idx + 1] if hist_idx + 1 < len(history) else None
+        sim_score = 1.0 / (1.0 + float(distances[idx]))
+        results.append(
+            {
+                "snapshot": snap["ts_label"],
+                "distance": float(distances[idx]),
+                "similarity": sim_score,
+                "regime": snap["regime"],
+                "total_gex": snap["total_gex"],
+                "next_snapshot": next_snap["ts_label"] if next_snap else None,
+                "next_total_gex": next_snap["total_gex"] if next_snap else None,
+                "next_regime": next_snap["regime"] if next_snap else None,
+                "ts": snap["ts"],
+            }
+        )
+    return results
 
 
 @APP.route("/")
 def index():
     tickers = find_available_tickers(EXPORT_DIR)
-    cards = [load_ticker_bundle(ticker)["metrics"] for ticker in tickers]
-    return render_template("index.html", cards=cards)
+    ticker_cards = []
+    for ticker in tickers:
+        history = build_history(ticker)
+        latest = history[-1] if history else None
+        ticker_cards.append(
+            {
+                "ticker": ticker,
+                "history_count": len(history),
+                "latest_ts": latest["ts_label"] if latest else "N/A",
+                "total_gex": f"{latest['total_gex']:.3f}" if latest else "N/A",
+                "regime": latest["regime"] if latest else "N/A",
+            }
+        )
+    return render_template("index.html", tickers=ticker_cards)
 
 
 @APP.route("/ticker/<ticker>")
-def ticker_page(ticker: str):
-    bundle = load_ticker_bundle(ticker)
-    if not bundle["files"]:
+def ticker_page(ticker):
+    ticker = ticker.upper()
+    history = build_history(ticker)
+    if not history:
         abort(404)
 
-    downloads = []
-    for kind in ["summary", "gex_by_strike", "cumulative_gex", "gex_by_expiration", "gex_surface"]:
-        file = bundle["files"].get(kind)
-        if file:
-            downloads.append({"label": kind.replace("_", " "), "filename": file.name})
+    requested_ts = request.args.get("ts")
+    ts_index = {row["ts"]: row for row in history}
+    selected = ts_index.get(requested_ts, history[-1])
+
+    imgs = []
+    if IMG_DIR.exists():
+        imgs = sorted(IMG_DIR.glob(f"{ticker}_*.*"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    heatmap_json = make_heatmap(selected.get("surface_path"), ticker)
+    scatter3d_json = make_surface_scatter(selected.get("surface_path"), ticker)
+    timeline_json = make_timeline_chart(history, ticker)
+
+    prediction = predict_next_snapshot(history)
+    similar = similar_setups(history, top_n=6)
+
+    timeline_options = [
+        {
+            "ts": row["ts"],
+            "label": row["ts_label"],
+            "is_selected": row["ts"] == selected["ts"],
+        }
+        for row in history
+    ]
 
     return render_template(
         "ticker.html",
-        ticker=bundle["ticker"],
-        metrics=bundle["metrics"],
-        summary=bundle["summary"],
-        concepts=bundle["concepts"],
-        narrative=bundle["narrative"],
-        charts=bundle["charts"],
-        downloads=downloads,
-        imgs=bundle["images"],
+        ticker=ticker,
+        imgs=imgs,
+        heatmap_json=heatmap_json,
+        scatter3d_json=scatter3d_json,
+        timeline_json=timeline_json,
+        timeline_options=timeline_options,
+        selected=selected,
+        prediction=prediction,
+        similar_setups=similar,
+        strike_csv=str(selected["strike_path"]),
+        exp_csv=str(selected["exp_path"]),
+        cum_csv=str(selected["cum_path"]),
     )
 
 
-@APP.route("/api/ticker/<ticker>/concepts")
-def ticker_concepts(ticker: str):
-    bundle = load_ticker_bundle(ticker)
-    if not bundle["files"]:
-        abort(404)
-    return jsonify(bundle["concepts"])
-
-
-@APP.route("/exports/<path:filename>")
-def export_file(filename: str):
-    return send_from_directory(EXPORT_DIR, filename)
-
-
 @APP.route("/img/<path:filename>")
-def img_file(filename: str):
-    if not IMG_DIR.exists():
+def img_file(filename):
+    path = IMG_DIR
+    if not path.exists():
         abort(404)
-    return send_from_directory(IMG_DIR, filename)
+    return send_from_directory(path, filename)
 
 
 if __name__ == "__main__":
