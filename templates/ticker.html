@@ -32,6 +32,13 @@
         <a class="btn btn-outline-light" href="/">Back</a>
       </div>
 
+      {% if not has_history %}
+      <div class="alert alert-warning" role="alert">
+        No historical exports were found for {{ ticker }} on this deployment yet. Generate snapshots with
+        <code>python main.py --ticker {{ ticker }} --no-show</code> and refresh.
+      </div>
+      {% endif %}
+
       <div class="row g-3 mb-3">
         <div class="col-lg-8">
           <div class="card h-100">
@@ -40,14 +47,18 @@
               <form method="get" class="row g-2 align-items-end mb-3">
                 <div class="col-md-8">
                   <label for="ts" class="form-label">Snapshot</label>
-                  <select id="ts" name="ts" class="form-select bg-dark text-light border-secondary">
-                    {% for opt in timeline_options %}
-                      <option value="{{ opt.ts }}" {% if opt.is_selected %}selected{% endif %}>{{ opt.label }}</option>
-                    {% endfor %}
+                  <select id="ts" name="ts" class="form-select bg-dark text-light border-secondary" {% if not timeline_options %}disabled{% endif %}>
+                    {% if timeline_options %}
+                      {% for opt in timeline_options %}
+                        <option value="{{ opt.ts }}" {% if opt.is_selected %}selected{% endif %}>{{ opt.label }}</option>
+                      {% endfor %}
+                    {% else %}
+                      <option selected>No snapshots available</option>
+                    {% endif %}
                   </select>
                 </div>
                 <div class="col-md-4 d-grid">
-                  <button class="btn btn-primary" type="submit">Load Snapshot</button>
+                  <button class="btn btn-primary" type="submit" {% if not timeline_options %}disabled{% endif %}>Load Snapshot</button>
                 </div>
               </form>
               {% if timeline_json %}
@@ -163,11 +174,15 @@
           <div class="card">
             <div class="card-body">
               <h5 class="card-title">Selected Raw Exports</h5>
-              <ul class="mb-0">
-                <li><a class="text-light" href="/exports/{{ strike_csv }}">GEX by strike CSV</a></li>
-                <li><a class="text-light" href="/exports/{{ exp_csv }}">GEX by expiration CSV</a></li>
-                <li><a class="text-light" href="/exports/{{ cum_csv }}">Cumulative GEX CSV</a></li>
-              </ul>
+              {% if strike_csv and exp_csv and cum_csv %}
+                <ul class="mb-0">
+                  <li><a class="text-light" href="/exports/{{ strike_csv }}">GEX by strike CSV</a></li>
+                  <li><a class="text-light" href="/exports/{{ exp_csv }}">GEX by expiration CSV</a></li>
+                  <li><a class="text-light" href="/exports/{{ cum_csv }}">Cumulative GEX CSV</a></li>
+                </ul>
+              {% else %}
+                <p class="muted mb-0">No export files are available for the selected ticker yet.</p>
+              {% endif %}
             </div>
           </div>
         </div>
