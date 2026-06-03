@@ -342,7 +342,7 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
         raise RuntimeError("Failed to parse option data from CBOE payload.")
     if option_data.empty:
         raise RuntimeError("Option data was loaded but contains no rows. Check the data source and payload structure.")
-    return spot_price, option_data
+    return spot_price, option_data, quality
 
 
 # ============================================================================
