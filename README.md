@@ -201,6 +201,12 @@ Saved plot: img/SPX_gex_surface_2025-05-28_143027.png
 Saved CSV exports to: data/exports
 ```
 
+Each run also writes a machine-readable summary file:
+
+```
+{TICKER}_summary_{timestamp}.json
+```
+
 ### 0DTE surface example
 
 ```bash
@@ -220,8 +226,9 @@ The repository now includes two interactive interfaces for viewing GEX output:
   - Shows interactive heatmaps and 3D scatter plots
   - Displays PNG snapshots from `img/`
 - **Flask website:** `web_app.py`
-  - Serves a small dashboard with Plotly charts and image previews
-  - Browse available tickers and view the latest surface/strike/expiration exports
+  - Serves a full results dashboard with KPI cards (regime, total GEX, walls, gamma flip)
+  - Renders interactive strike/expiration/cumulative/surface charts using latest exports
+  - Supports direct downloads of latest CSV exports and summary JSON files
 
 Run the Streamlit dashboard:
 ```bash

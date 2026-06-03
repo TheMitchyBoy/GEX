@@ -23,6 +23,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from datetime import timedelta, datetime
 from pathlib import Path
@@ -150,7 +151,8 @@ def run(
                                    (e.g., 0.15 = ±15% around current price)
         max_dte (int): Maximum days-to-expiration to include in analysis (filters long-dated options)
         export_csv (bool): If True, export computed metrics as CSV files
-        export_dir (Path/str): Directory where CSV files are saved
+        summary (dict): Machine-readable analytics summary payload
+        export_dir (Path/str): Directory where CSV/JSON files are saved
     
     Returns:
         None (prints output and generates files as side effects)
@@ -173,12 +175,12 @@ def run(
     )
     
     # Step 2: Compute aggregate gamma exposure and print summary statistics
-    compute_total_gex(spot_price, option_data)
+    total_gex_bn = compute_total_gex(spot_price, option_data)
     compute_total_charm(option_data)
     print_regime_summary(option_data)
     print_key_gex_levels(option_data, top_n=top_n)
     print_key_charm_levels(option_data, top_n=top_n)
-    print_gamma_position_signal(spot_price, option_data, gamma_threshold=5000)
+    print_gamma_position_signal(ticker, spot_price, option_data, gamma_threshold=5000)
     print_future_gex_forecast(spot_price, option_data)
     
     # Step 3: Analyze gamma exposure across strike prices
@@ -194,7 +196,7 @@ def run(
     )
     
     # Step 4: Estimate where gamma exposure crosses zero (gamma flip level)
-    print_gamma_flip_estimate(cumulative_gex)
+    gamma_flip = print_gamma_flip_estimate(cumulative_gex)
     
     # Step 5: Analyze gamma exposure across expiration dates
     gex_by_expiration = compute_gex_by_expiration(
@@ -220,12 +222,24 @@ def run(
     
     # Step 7: Export all computed metrics to CSV for further analysis
     if export_csv:
+        summary = build_gamma_summary(
+            ticker=ticker,
+            spot=spot_price,
+            data=option_data,
+            gex_by_strike=gex_by_strike,
+            gex_by_expiration=gex_by_expiration,
+            cumulative_gex=cumulative_gex,
+            total_gex_bn=total_gex_bn,
+            gamma_flip=gamma_flip,
+            top_n=top_n,
+        )
         export_analytics_csv(
             ticker=ticker,
             gex_by_strike=gex_by_strike,
             cumulative_gex=cumulative_gex,
             gex_by_expiration=gex_by_expiration,
             surface_data=surface_data,
+            summary=summary,
             export_dir=export_dir,
         )
 
@@ -404,54 +418,51 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
 def fix_option_data(data):
     """
     Parse and enrich option data with derived fields.
-    
-    Option symbols follow a standard format: SPX  260620C04800000
+
+    Option symbols follow a standard format: SPX260620C04800000
     This function extracts:
-    - Type (C=Call, P=Put): the middle letter
-    - Strike price: the numeric value after type
-    - Expiration date: the first 6 digits (YYMMDD format)
-    
-    The derived fields are needed for grouping and analysis:
-    - Calls vs Puts have opposite gamma signs
-    - Strikes are grouped for GEX aggregation
-    - Expiration dates define the term structure
-    
+    - Type (C=Call, P=Put)
+    - Strike price
+    - Expiration date
+
     Args:
         data (DataFrame): Raw option data from CBOE with 'option' column
-    
+
     Returns:
-        DataFrame: Enhanced data with added columns:
-                   - 'type': 'C' for calls, 'P' for puts
-                   - 'strike': integer strike price
-                   - 'expiration': datetime of expiration
-    
-    Example:
-        >>> data = fix_option_data(raw_df)
-        >>> print(data[['option', 'type', 'strike', 'expiration']].head())
-        option          type strike expiration
-        SPX  260620C...  C    4800   2026-06-20
+        DataFrame: Enhanced and cleaned data with parsed fields
     """
-    # Extract option type (C or P) using regex on the option symbol
-    # Pattern: any digits, then [A-Z] (the type), then digits
-    data["type"] = data["option"].str.extract(r"\d([A-Z])\d")
-    
-    # Extract strike price (numeric value after type letter)
-    # Pattern: digit, [A-Z], then capture digits (strike), then 3 more digits (cents)
-    data["strike"] = data["option"].str.extract(r"\d[A-Z](\d+)\d\d\d").astype(int)
-    
-    # Extract expiration date (first 6 digits in YYMMDD format)
-    # Pattern: [A-Z], then capture 6 digits
-    data["expiration"] = data["option"].str.extract(r"[A-Z](\d+)").astype(str)
-    
-    # Convert YYMMDD string to datetime for sorting and analysis
-    data["expiration"] = pd.to_datetime(data["expiration"], format="%y%m%d")
-    
-    # Parse charm if available, keeping the raw values numeric
-    if "charm" in data.columns:
-        data["charm"] = pd.to_numeric(data["charm"], errors="coerce").fillna(0.0)
+    if "option" not in data.columns:
+        raise ValueError("Option payload is missing 'option' symbols.")
 
-    return data
+    if "gamma" not in data.columns or "open_interest" not in data.columns:
+        raise ValueError("Option payload is missing required columns: gamma/open_interest.")
 
+    cleaned = data.copy()
+
+    # OCC-like format: ROOT + YYMMDD + [C|P] + 8-digit strike (3 implied decimals)
+    symbol_pattern = re.compile(
+        r"^(?P<root>[A-Z]+)(?P<expiration>\d{6})(?P<type>[CP])(?P<strike_raw>\d{8})$"
+    )
+    parsed = cleaned["option"].astype(str).str.strip().str.extract(symbol_pattern)
+    cleaned = cleaned.join(parsed)
+
+    cleaned["strike"] = pd.to_numeric(cleaned["strike_raw"], errors="coerce") / 1000.0
+    cleaned["gamma"] = pd.to_numeric(cleaned["gamma"], errors="coerce")
+    cleaned["open_interest"] = pd.to_numeric(cleaned["open_interest"], errors="coerce")
+    cleaned["expiration"] = pd.to_datetime(
+        cleaned["expiration"], format="%y%m%d", errors="coerce"
+    )
+
+    cleaned = cleaned.dropna(subset=["type", "strike", "gamma", "open_interest", "expiration"])
+    cleaned = cleaned.loc[cleaned["open_interest"] >= 0].copy()
+
+    if "charm" in cleaned.columns:
+        cleaned["charm"] = pd.to_numeric(cleaned["charm"], errors="coerce").fillna(0.0)
+
+    if cleaned.empty:
+        raise RuntimeError("No valid option rows remained after data cleaning/parsing.")
+
+    return cleaned
 
 def compute_total_gex(spot, data):
     """
@@ -477,7 +488,7 @@ def compute_total_gex(spot, data):
                          (DataFrame is modified in-place)
     
     Returns:
-        None (modifies data['GEX'] in-place and prints total)
+        float: Total GEX in Bn$ / % (also modifies data['GEX'] in-place and prints total)
     
     Example:
         >>> compute_total_gex(4800, options_df)
@@ -503,6 +514,7 @@ def compute_total_gex(spot, data):
     total_gex_bn = round(data.GEX.sum() / 10 ** 9, 4)
     print_section_header("Total GEX")
     print(f"Total notional gamma exposure: {color_text(f'${total_gex_bn:.4f} Bn', ANSI_GREEN)}")
+    return float(total_gex_bn)
 
 
 def compute_total_charm(data):
@@ -641,7 +653,7 @@ def print_key_gex_levels(data, top_n=5):
             print(f"  {color_text('SHORT', ANSI_RED):<12} {strike:<10} {gex:.3f}")
 
 
-def print_gamma_position_signal(spot, data, gamma_threshold=5000):
+def print_gamma_position_signal(ticker, spot, data, gamma_threshold=5000):
     """
     Print a buy/sell signal based on the strike with the strongest gamma exposure.
 
@@ -651,6 +663,7 @@ def print_gamma_position_signal(spot, data, gamma_threshold=5000):
     and sell calls.
 
     Args:
+        ticker (str): Underlying symbol for display.
         spot (float): Current underlying spot price.
         data (DataFrame): Options data with computed 'GEX'.
         gamma_threshold (float): Absolute GEX threshold in raw dollars for the
@@ -686,7 +699,7 @@ def print_gamma_position_signal(spot, data, gamma_threshold=5000):
         action_color = ANSI_YELLOW
 
     print_section_header("Gamma Signal")
-    print(f"{color_text('Signal strike:', ANSI_CYAN)} {signal_strike} is {position} current SPX ({spot}).")
+    print(f"{color_text('Signal strike:', ANSI_CYAN)} {signal_strike} is {position} current {ticker} ({spot}).")
     print(f"{color_text('Total strike GEX:', ANSI_CYAN)} {strike_gex_bn:.3f} Bn$ / %")
     print(f"{color_text('Recommended positioning:', ANSI_CYAN)} {color_text(action, action_color)}")
 
@@ -767,6 +780,43 @@ def print_future_gex_forecast(spot, data, strike_window_pct=0.15, top_n=3):
         print(f"  {color_text('Decline below spot:', ANSI_RED)} strike {strike} ({value:.4f} Bn$ per strike step)")
 
 
+def estimate_gamma_flip(cumulative):
+    """Estimate gamma flip strike and confidence from cumulative GEX."""
+    if cumulative.empty:
+        return {"flip_strike": None, "confidence": "none", "message": "no strike data"}
+
+    signs = np.sign(cumulative.values)
+    change_points = np.where(np.diff(signs) != 0)[0]
+    if len(change_points) == 0:
+        return {"flip_strike": None, "confidence": "none", "message": "no zero-crossing"}
+
+    idx = int(change_points[0])
+    x0 = float(cumulative.index[idx])
+    x1 = float(cumulative.index[idx + 1])
+    y0 = float(cumulative.iloc[idx])
+    y1 = float(cumulative.iloc[idx + 1])
+
+    if y1 == y0:
+        flip_estimate = float(x0)
+    else:
+        flip_estimate = float(x0 - y0 * (x1 - x0) / (y1 - y0))
+
+    local_slope = abs(y1 - y0) / max(abs(x1 - x0), 1e-9)
+    if local_slope >= 0.10:
+        confidence = "high"
+    elif local_slope >= 0.03:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    return {
+        "flip_strike": flip_estimate,
+        "confidence": confidence,
+        "message": "ok",
+        "local_slope": float(local_slope),
+    }
+
+
 def print_gamma_flip_estimate(cumulative):
     """
     Estimate the strike where cumulative GEX crosses zero (gamma flip level).
@@ -793,42 +843,16 @@ def print_gamma_flip_estimate(cumulative):
         >>> print_gamma_flip_estimate(cumulative_gex)
         Estimated gamma flip strike: 4800.50 (confidence: high)
     """
-    if cumulative.empty:
-        print("\nGamma flip estimate: unavailable (no strike data).")
-        return
-
-    # Find where the sign of cumulative GEX changes (zero-crossings)
-    signs = np.sign(cumulative.values)
-    change_points = np.where(np.diff(signs) != 0)[0]
-
-    if len(change_points) == 0:
-        print("\nGamma flip estimate: no zero-crossing in cumulative strike GEX.")
-        return
-
-    # Get the first (lowest strike) zero-crossing point
-    idx = change_points[0]
-    x0 = cumulative.index[idx]
-    x1 = cumulative.index[idx + 1]
-    y0 = cumulative.iloc[idx]
-    y1 = cumulative.iloc[idx + 1]
-
-    # Linear interpolation to estimate the exact strike where cumulative GEX = 0
-    if y1 == y0:
-        flip_estimate = float(x0)
+    result = estimate_gamma_flip(cumulative)
+    print_section_header("Gamma Flip")
+    if result["flip_strike"] is None:
+        print(color_text(f"Gamma flip estimate unavailable: {result['message']}.", ANSI_DIM))
     else:
-        flip_estimate = float(x0 - y0 * (x1 - x0) / (y1 - y0))
-
-    # Measure confidence based on slope steepness
-    # Steep slope = sharp transition = high confidence
-    local_slope = abs(y1 - y0) / max(abs(x1 - x0), 1e-9)
-    if local_slope >= 0.10:
-        confidence = "high"
-    elif local_slope >= 0.03:
-        confidence = "medium"
-    else:
-        confidence = "low"
-    
-    print(f"\nEstimated gamma flip strike: {flip_estimate:.2f} (confidence: {confidence})")
+        print(
+            f"Estimated gamma flip strike: {result['flip_strike']:.2f} "
+            f"(confidence: {result['confidence']})"
+        )
+    return result
 
 
 # ============================================================================
@@ -1191,20 +1215,95 @@ def print_gex_surface(
 
 
 # ============================================================================
+# SUMMARY
+# ============================================================================
+
+def build_gamma_summary(
+    ticker,
+    spot,
+    data,
+    gex_by_strike,
+    gex_by_expiration,
+    cumulative_gex,
+    total_gex_bn,
+    gamma_flip,
+    top_n=5,
+):
+    """Build a machine-readable summary payload for dashboards/APIs."""
+    gex_by_strike = gex_by_strike.sort_index()
+    positive = gex_by_strike[gex_by_strike > 0].sort_values(ascending=False).head(top_n)
+    negative = gex_by_strike[gex_by_strike < 0].sort_values().head(top_n)
+    call_wall = gex_by_strike.idxmax() if not gex_by_strike.empty else None
+    put_wall = gex_by_strike.idxmin() if not gex_by_strike.empty else None
+    net_regime = "LONG gamma" if total_gex_bn >= 0 else "SHORT gamma"
+
+    summary = {
+        "ticker": ticker.upper(),
+        "generated_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "spot_price": float(spot),
+        "option_count": int(len(data)),
+        "total_gex_bn_per_pct": float(total_gex_bn),
+        "net_gamma_regime": net_regime,
+        "call_wall": {
+            "strike": float(call_wall) if call_wall is not None else None,
+            "gex_bn_per_pct": float(gex_by_strike.max()) if call_wall is not None else None,
+        },
+        "put_wall": {
+            "strike": float(put_wall) if put_wall is not None else None,
+            "gex_bn_per_pct": float(gex_by_strike.min()) if put_wall is not None else None,
+        },
+        "gamma_flip": gamma_flip,
+        "top_positive_gex_strikes": [
+            {"strike": float(strike), "gex_bn_per_pct": float(value)}
+            for strike, value in positive.items()
+        ],
+        "top_negative_gex_strikes": [
+            {"strike": float(strike), "gex_bn_per_pct": float(value)}
+            for strike, value in negative.items()
+        ],
+        "nearest_expiration": None,
+        "largest_expiration_gex": None,
+    }
+
+    if "CharmExposure" in data.columns:
+        summary["total_charm_exposure_per_day"] = float(data["CharmExposure"].sum())
+
+    if not gex_by_expiration.empty:
+        near_exp = gex_by_expiration.sort_index().index[0]
+        max_exp = gex_by_expiration.abs().idxmax()
+        summary["nearest_expiration"] = {
+            "expiration": pd.Timestamp(near_exp).date().isoformat(),
+            "gex_bn_per_pct": float(gex_by_expiration.loc[near_exp]),
+        }
+        summary["largest_expiration_gex"] = {
+            "expiration": pd.Timestamp(max_exp).date().isoformat(),
+            "gex_bn_per_pct": float(gex_by_expiration.loc[max_exp]),
+        }
+
+    if not cumulative_gex.empty:
+        summary["cumulative_gex_range_bn_per_pct"] = {
+            "min": float(cumulative_gex.min()),
+            "max": float(cumulative_gex.max()),
+        }
+
+    return summary
+
+# ============================================================================
 # EXPORT
 # ============================================================================
 
 def export_analytics_csv(
-    ticker, gex_by_strike, cumulative_gex, gex_by_expiration, surface_data, export_dir
+    ticker, gex_by_strike, cumulative_gex, gex_by_expiration, surface_data, summary, export_dir
 ):
     """
     Export all computed gamma metrics to CSV files for external analysis.
     
-    Creates four CSV files in the export directory:
+    Creates CSV/JSON files in the export directory:
     1. gex_by_strike: GEX aggregated by strike price
     2. cumulative_gex: Cumulative GEX useful for gamma flip analysis
     3. gex_by_expiration: GEX aggregated by expiration date (term structure)
     4. gex_surface: Full 3D surface data (expiration × strike × GEX)
+    5. summary: Headline metrics used by dashboards
     
     Each file is timestamped to preserve historical runs.
     
@@ -1214,7 +1313,8 @@ def export_analytics_csv(
         cumulative_gex (Series): Cumulative GEX indexed by strike
         gex_by_expiration (Series): GEX indexed by expiration date
         surface_data (DataFrame): Surface data with columns [expiration, strike, GEX]
-        export_dir (Path/str): Directory where CSV files are saved
+        summary (dict): Machine-readable analytics summary payload
+        export_dir (Path/str): Directory where CSV/JSON files are saved
     
     Returns:
         None (creates files as side effect)
@@ -1238,7 +1338,9 @@ def export_analytics_csv(
         export_dir / f"{ticker}_gex_by_expiration_{timestamp}.csv"
     )
     surface_data.to_csv(export_dir / f"{ticker}_gex_surface_{timestamp}.csv", index=False)
-    
+    with (export_dir / f"{ticker}_summary_{timestamp}.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
     print(f"Saved CSV exports to: {export_dir}")
 
 
@@ -1323,7 +1425,7 @@ def parse_args():
         "--strike-window-pct",
         type=float,
         default=0.01,
-        help="Strike window around spot for charts (default: 0.01 means +-1%%). Maximum allowed is 0.01.",
+        help="Strike window around spot for charts (default: 0.01 means +-1%%). Maximum allowed is 0.50.",
     )
     parser.add_argument(
         "--max-dte",
@@ -1368,8 +1470,8 @@ if __name__ == "__main__":
         save_plots=not args.no_save,
         outdir=args.outdir,
         top_n=max(1, args.top_n),
-        # Limit strike window to at most 1% above/below current price
-        strike_window_pct=min(max(0.0, args.strike_window_pct), 0.01),
+        # Allow customizable strike context while still bounding extreme ranges
+        strike_window_pct=min(max(0.0, args.strike_window_pct), 0.50),
         max_dte=max(0, args.max_dte),
         export_csv=not args.no_export_csv,
         export_dir=args.export_dir,
