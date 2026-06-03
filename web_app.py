@@ -480,10 +480,21 @@ def ticker_page(ticker):
         selected=selected,
         prediction=prediction,
         similar_setups=similar,
-        strike_csv=str(selected["strike_path"]),
-        exp_csv=str(selected["exp_path"]),
-        cum_csv=str(selected["cum_path"]),
+        strike_csv=selected["strike_path"].name,
+        exp_csv=selected["exp_path"].name,
+        cum_csv=selected["cum_path"].name,
     )
+
+
+@APP.route("/exports/<path:filename>")
+def export_file(filename):
+    return send_from_directory(EXPORT_DIR, filename)
+
+
+# Backward-compatible path for existing deep links.
+@APP.route("/data/exports/<path:filename>")
+def export_file_legacy(filename):
+    return send_from_directory(EXPORT_DIR, filename)
 
 
 @APP.route("/img/<path:filename>")
