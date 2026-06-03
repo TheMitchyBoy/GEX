@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 import requests
 from matplotlib import dates
-from web_app import APP as app
+from gex_db.store import save_snapshot
 
 # ============================================================================
 # CONFIGURATION & STYLING
@@ -1295,7 +1295,7 @@ def build_gamma_summary(
 
 def export_analytics_csv(
     ticker, gex_by_strike, cumulative_gex, gex_by_expiration, surface_data, summary, export_dir
-):
+) -> str:
     """
     Export all computed gamma metrics to CSV files for external analysis.
     
@@ -1342,7 +1342,18 @@ def export_analytics_csv(
     with (export_dir / f"{ticker}_summary_{timestamp}.json").open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
+    save_snapshot(
+        ticker=ticker,
+        ts=timestamp,
+        gex_by_strike=gex_by_strike,
+        cumulative_gex=cumulative_gex,
+        gex_by_expiration=gex_by_expiration,
+        surface_data=surface_data,
+        summary=summary,
+    )
+
     print(f"Saved CSV exports to: {export_dir}")
+    return timestamp
 
 
 # ============================================================================

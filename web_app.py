@@ -1,31 +1,43 @@
 from __future__ import annotations
 
+import atexit
 import json
+import logging
+import os
 import re
-import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
 from plotly.utils import PlotlyJSONEncoder
 
+from gex_db.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_tickers
+from gex_db.store import (
+    get_latest_ts,
+    get_snapshot,
+    import_csv_exports,
+    init_db,
+    list_tickers,
+    list_timestamps,
+    parse_ts,
+)
+
 APP = Flask(__name__)
 app = APP
+logger = logging.getLogger(__name__)
 
 EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
+REFRESH_TICKERS = DEFAULT_TICKERS
+REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
 CSV_RE = re.compile(
     r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"
 )
-
-
-def parse_ts(ts: str) -> datetime:
-    return datetime.strptime(ts, "%Y-%m-%d_%H%M%S")
 
 
 def ts_label(ts: str) -> str:
@@ -39,9 +51,10 @@ def safe_float(value, default=0.0):
         return float(default)
 
 
-def find_available_tickers(export_dir: Path):
+def find_available_tickers(export_dir: Path | None = None):
+    export_dir = export_dir or EXPORT_DIR
     export_dir.mkdir(parents=True, exist_ok=True)
-    tickers = set()
+    tickers = set(list_tickers())
     for file in export_dir.glob("*.csv"):
         match = CSV_RE.match(file.name)
         if match:
@@ -73,9 +86,9 @@ def estimate_gamma_flip(cumulative: pd.Series):
         return None
 
     values = cumulative.astype(float).values
-    idx = pd.to_numeric(cumulative.index, errors="coerce")
+    idx = pd.to_numeric(cumulative.index, errors="coerce").to_numpy(dtype=float)
     valid = ~np.isnan(idx)
-    if valid.sum() < 2:
+    if int(np.sum(valid)) < 2:
         return None
 
     x = idx[valid]
@@ -91,6 +104,59 @@ def estimate_gamma_flip(cumulative: pd.Series):
             return x0
         return x0 - y0 * (x1 - x0) / (y1 - y0)
     return None
+
+
+def load_snapshot_metrics_from_db(ticker: str, ts: str):
+    row = get_snapshot(ticker, ts)
+    if row is None:
+        return None
+
+    strike = row["strike"]
+    expiration = row["expiration"]
+    cumulative = row["cumulative"]
+    surface_df = row["surface_df"]
+
+    exp_vals = pd.to_numeric(expiration, errors="coerce").fillna(0.0)
+    total_gex = float(strike.sum())
+    pos_gex = float(strike[strike > 0].sum())
+    neg_gex = float(strike[strike < 0].sum())
+    gex_std = float(strike.std()) if len(strike) > 1 else 0.0
+
+    call_wall = float(strike.idxmax()) if len(strike) else None
+    put_wall = float(strike.idxmin()) if len(strike) else None
+    gamma_flip = estimate_gamma_flip(cumulative)
+
+    near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
+    term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
+    near_term_ratio = near_term / term_total if term_total else 0.0
+
+    surface_peak = 0.0
+    if not surface_df.empty and "GEX" in surface_df.columns:
+        surface_peak = float(pd.to_numeric(surface_df["GEX"], errors="coerce").abs().max())
+
+    return {
+        "ts": ts,
+        "ts_label": ts_label(ts),
+        "strike": strike,
+        "exp_df": expiration.reset_index(),
+        "cumulative": cumulative,
+        "surface_df": surface_df,
+        "surface_path": None,
+        "strike_path": None,
+        "exp_path": None,
+        "cum_path": None,
+        "total_gex": total_gex,
+        "pos_gex": pos_gex,
+        "neg_gex": neg_gex,
+        "gex_std": gex_std,
+        "abs_mean": float(strike.abs().mean()) if len(strike) else 0.0,
+        "call_wall": call_wall,
+        "put_wall": put_wall,
+        "gamma_flip": gamma_flip,
+        "near_term_ratio": near_term_ratio,
+        "surface_peak": surface_peak,
+        "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
+    }
 
 
 def load_snapshot_metrics(ts: str, files: dict):
@@ -123,6 +189,7 @@ def load_snapshot_metrics(ts: str, files: dict):
     near_term_ratio = near_term / term_total if term_total else 0.0
 
     surface_peak = 0.0
+    surface_df = pd.DataFrame()
     if "gex_surface" in files:
         surface_df = pd.read_csv(files["gex_surface"])
         if "GEX" in surface_df.columns and not surface_df.empty:
@@ -134,6 +201,7 @@ def load_snapshot_metrics(ts: str, files: dict):
         "strike": strike,
         "exp_df": exp_df,
         "cumulative": cumulative,
+        "surface_df": surface_df,
         "surface_path": files.get("gex_surface"),
         "strike_path": files["gex_by_strike"],
         "exp_path": files["gex_by_expiration"],
@@ -153,14 +221,25 @@ def load_snapshot_metrics(ts: str, files: dict):
 
 
 def build_history(ticker: str):
-    snapshot_files = collect_snapshot_files(ticker)
+    ticker = ticker.upper()
     snapshots = []
-    for ts, files in snapshot_files.items():
-        try:
-            snapshots.append(load_snapshot_metrics(ts, files))
-        except Exception:
-            # skip malformed snapshot
-            continue
+
+    db_timestamps = list_timestamps(ticker)
+    if db_timestamps:
+        for ts in db_timestamps:
+            try:
+                row = load_snapshot_metrics_from_db(ticker, ts)
+                if row:
+                    snapshots.append(row)
+            except Exception:
+                continue
+    else:
+        snapshot_files = collect_snapshot_files(ticker)
+        for ts, files in snapshot_files.items():
+            try:
+                snapshots.append(load_snapshot_metrics(ts, files))
+            except Exception:
+                continue
 
     snapshots.sort(key=lambda row: row["ts"])
     return snapshots
@@ -192,10 +271,18 @@ def make_timeline_chart(history, ticker):
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def make_heatmap(surface_path: Path | None, ticker: str):
+def _load_surface_df(surface_path: Path | None = None, surface_df: pd.DataFrame | None = None):
+    if surface_df is not None and not surface_df.empty:
+        return surface_df
     if surface_path is None:
         return None
-    df = pd.read_csv(surface_path)
+    return pd.read_csv(surface_path)
+
+
+def make_heatmap(surface_path: Path | None = None, ticker: str = "", surface_df: pd.DataFrame | None = None):
+    df = _load_surface_df(surface_path, surface_df)
+    if df is None:
+        return None
     if df.empty or not {"expiration", "strike", "GEX"}.issubset(df.columns):
         return None
     df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
@@ -223,10 +310,14 @@ def make_heatmap(surface_path: Path | None, ticker: str):
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def make_surface_scatter(surface_path: Path | None, ticker: str):
-    if surface_path is None:
+def make_surface_scatter(
+    surface_path: Path | None = None,
+    ticker: str = "",
+    surface_df: pd.DataFrame | None = None,
+):
+    df = _load_surface_df(surface_path, surface_df)
+    if df is None:
         return None
-    df = pd.read_csv(surface_path)
     if df.empty or not {"expiration", "strike", "GEX"}.issubset(df.columns):
         return None
     df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
@@ -477,14 +568,24 @@ def ticker_page(ticker):
             cum_csv=None,
             has_history=False,
             bootstrap_status=bootstrap_status,
+            latest_ts=None,
+            refresh_minutes=REFRESH_MINUTES,
         )
 
     requested_ts = request.args.get("ts")
     ts_index = {row["ts"]: row for row in history}
     selected = ts_index.get(requested_ts, history[-1])
 
-    heatmap_json = make_heatmap(selected.get("surface_path"), ticker)
-    scatter3d_json = make_surface_scatter(selected.get("surface_path"), ticker)
+    heatmap_json = make_heatmap(
+        selected.get("surface_path"),
+        ticker,
+        surface_df=selected.get("surface_df"),
+    )
+    scatter3d_json = make_surface_scatter(
+        selected.get("surface_path"),
+        ticker,
+        surface_df=selected.get("surface_df"),
+    )
     timeline_json = make_timeline_chart(history, ticker)
 
     prediction = predict_next_snapshot(history)
@@ -510,9 +611,11 @@ def ticker_page(ticker):
         selected=selected,
         prediction=prediction,
         similar_setups=similar,
-        strike_csv=selected["strike_path"].name,
-        exp_csv=selected["exp_path"].name,
-        cum_csv=selected["cum_path"].name,
+        strike_csv=selected["strike_path"].name if selected.get("strike_path") else None,
+        exp_csv=selected["exp_path"].name if selected.get("exp_path") else None,
+        cum_csv=selected["cum_path"].name if selected.get("cum_path") else None,
+        latest_ts=ts_label(get_latest_ts(ticker)) if get_latest_ts(ticker) else None,
+        refresh_minutes=REFRESH_MINUTES,
         has_history=True,
         bootstrap_status=bootstrap_status,
     )
@@ -521,21 +624,15 @@ def ticker_page(ticker):
 @APP.post("/ticker/<ticker>/bootstrap")
 def bootstrap_ticker_history(ticker):
     ticker = ticker.upper()
-    project_root = Path(__file__).resolve().parent
-    cmd = [sys.executable, "main.py", "--ticker", ticker, "--no-show"]
     try:
-        completed = subprocess.run(
-            cmd,
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-        )
+        from gex_db.refresh import refresh_ticker
+
+        ok = refresh_ticker(ticker, force=True)
     except Exception:
+        logger.exception("Manual GEX refresh failed for %s", ticker)
         return redirect(url_for("ticker_page", ticker=ticker, bootstrap="error"))
 
-    status = "ok" if completed.returncode == 0 else "failed"
+    status = "ok" if ok else "failed"
     return redirect(url_for("ticker_page", ticker=ticker, bootstrap=status))
 
 
@@ -556,6 +653,69 @@ def img_file(filename):
     if not path.exists():
         abort(404)
     return send_from_directory(path, filename)
+
+
+_scheduler: BackgroundScheduler | None = None
+_scheduler_lock_path = Path(os.environ.get("GEX_SCHEDULER_LOCK", "data/.gex_scheduler.lock"))
+
+
+def _scheduled_refresh():
+    try:
+        refresh_tickers(REFRESH_TICKERS, force=True)
+    except Exception:
+        logger.exception("Scheduled GEX refresh failed")
+
+
+def _acquire_scheduler_lock() -> bool:
+    _scheduler_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_file = _scheduler_lock_path.open("w")
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        return True
+    except OSError:
+        return False
+
+
+def start_background_refresh():
+    global _scheduler
+    init_db()
+    imported = import_csv_exports(EXPORT_DIR)
+    if imported:
+        logger.info("Imported %s historical CSV snapshots into database", imported)
+
+    if os.environ.get("GEX_DISABLE_SCHEDULER", "").lower() in {"1", "true", "yes"}:
+        return
+
+    if _scheduler is not None:
+        return
+
+    if not _acquire_scheduler_lock():
+        logger.info("Another process owns the GEX refresh scheduler lock")
+        return
+
+    _scheduler = BackgroundScheduler(daemon=True)
+    _scheduler.add_job(
+        _scheduled_refresh,
+        trigger="interval",
+        minutes=REFRESH_MINUTES,
+        id="gex_refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.start()
+    atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
+
+    # Ensure data exists immediately on cold deployments.
+    if any(not list_timestamps(ticker) for ticker in REFRESH_TICKERS):
+        _scheduled_refresh()
+
+
+start_background_refresh()
 
 
 if __name__ == "__main__":

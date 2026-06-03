@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+data/gex.db
+data/.gex_scheduler.lock
+.venv/
+venv/
