@@ -21,6 +21,7 @@ from gex_db.store import (
     get_snapshot,
     import_csv_exports,
     init_db,
+    list_snapshots,
     list_tickers,
     list_timestamps,
     parse_ts,
@@ -106,12 +107,9 @@ def estimate_gamma_flip(cumulative: pd.Series):
     return None
 
 
-def load_snapshot_metrics_from_db(ticker: str, ts: str):
-    row = get_snapshot(ticker, ts)
-    if row is None:
-        return None
-
+def load_snapshot_metrics_from_row(row: dict):
     strike = row["strike"]
+    ts = row["ts"]
     expiration = row["expiration"]
     cumulative = row["cumulative"]
     surface_df = row["surface_df"]
@@ -220,17 +218,24 @@ def load_snapshot_metrics(ts: str, files: dict):
     }
 
 
+def load_snapshot_metrics_from_db(ticker: str, ts: str):
+    row = get_snapshot(ticker, ts)
+    if row is None:
+        return None
+    return load_snapshot_metrics_from_row(row)
+
+
 def build_history(ticker: str):
     ticker = ticker.upper()
     snapshots = []
 
-    db_timestamps = list_timestamps(ticker)
-    if db_timestamps:
-        for ts in db_timestamps:
+    db_rows = list_snapshots(ticker)
+    if db_rows:
+        for row in db_rows:
             try:
-                row = load_snapshot_metrics_from_db(ticker, ts)
-                if row:
-                    snapshots.append(row)
+                metrics = load_snapshot_metrics_from_row(row)
+                if metrics:
+                    snapshots.append(metrics)
             except Exception:
                 continue
     else:

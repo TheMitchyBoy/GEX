@@ -256,6 +256,13 @@ Manual database refresh:
 python scripts/gex_db_refresh.py --import-csv --force
 ```
 
+### Performance and data quality
+
+- GEX is computed in a **single vectorized pass** with one aggregate step for strike, expiration, and surface (`gex_core.py`).
+- The web dashboard loads timeline history with **one SQLite query** per ticker.
+- Matplotlib loads **only when plotting** (server refreshes skip it).
+- Option filters and improvement ideas: [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md)
+
 ## Live Option Flow Signal
 
 A live ingest pipeline is included under `live/` that consumes JSON-lines option flow events and computes real-time GEX strike signals.

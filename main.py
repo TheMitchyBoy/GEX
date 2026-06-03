@@ -28,40 +28,57 @@ import sys
 from datetime import timedelta, datetime
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import requests
-from matplotlib import dates
+from gex_core import (
+    aggregate_gex,
+    attach_signed_gex,
+    clean_option_data,
+    data_quality_report,
+    fetch_options_payload,
+    parse_payload,
+)
 from gex_db.store import save_snapshot
 from web_app import APP as app
+
+_plt = None
+_dates = None
+
+
+def _matplotlib():
+    global _plt, _dates
+    if _plt is None:
+        import matplotlib.pyplot as plt
+        from matplotlib import dates
+
+        plt.style.use("dark_background")
+        plt.rcParams.update(
+            {
+                "figure.facecolor": "#0F172A",
+                "axes.facecolor": "#111827",
+                "savefig.facecolor": "#0F172A",
+                "text.color": "#E2E8F0",
+                "axes.labelcolor": "#E2E8F0",
+                "xtick.color": "#CBD5E1",
+                "ytick.color": "#CBD5E1",
+                "axes.edgecolor": "#475569",
+                "grid.color": "#334155",
+                "grid.linestyle": "-",
+                "grid.alpha": 0.25,
+                "font.size": 11,
+                "figure.figsize": (12, 7),
+                "legend.frameon": False,
+                "lines.linewidth": 2,
+                "patch.edgecolor": "none",
+            }
+        )
+        _plt = plt
+        _dates = dates
+    return _plt, _dates
 
 # ============================================================================
 # CONFIGURATION & STYLING
 # ============================================================================
-
-# Set matplotlib plot style to a dark theme for better visualization
-plt.style.use("dark_background")
-plt.rcParams.update(
-    {
-        "figure.facecolor": "#0F172A",
-        "axes.facecolor": "#111827",
-        "savefig.facecolor": "#0F172A",
-        "text.color": "#E2E8F0",
-        "axes.labelcolor": "#E2E8F0",
-        "xtick.color": "#CBD5E1",
-        "ytick.color": "#CBD5E1",
-        "axes.edgecolor": "#475569",
-        "grid.color": "#334155",
-        "grid.linestyle": "-",
-        "grid.alpha": 0.25,
-        "font.size": 11,
-        "figure.figsize": (12, 7),
-        "legend.frameon": False,
-        "lines.linewidth": 2,
-        "patch.edgecolor": "none",
-    }
-)
 
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
@@ -176,51 +193,55 @@ def run(
         f"{color_text('As of', ANSI_DIM)}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     
-    # Step 2: Compute aggregate gamma exposure and print summary statistics
-    total_gex_bn = compute_total_gex(spot_price, option_data)
+    # Step 2: Single-pass GEX + aggregates (avoids repeated groupbys)
+    option_data = attach_signed_gex(spot_price, option_data)
+    agg = aggregate_gex(
+        option_data,
+        spot=spot_price,
+        max_dte=max_dte,
+        strike_window_pct=strike_window_pct,
+    )
+    total_gex_bn = agg.total_gex_bn
+    compute_total_gex(spot_price, option_data, total_gex_bn=total_gex_bn)
     compute_total_charm(option_data)
-    print_regime_summary(option_data)
-    print_key_gex_levels(option_data, top_n=top_n)
+    print_regime_summary(option_data, gex_by_strike=agg.gex_by_strike)
+    print_key_gex_levels(option_data, top_n=top_n, gex_by_strike=agg.gex_by_strike)
     print_key_charm_levels(option_data, top_n=top_n)
     print_gamma_position_signal(ticker, spot_price, option_data, gamma_threshold=5000)
     print_future_gex_forecast(spot_price, option_data)
-    
-    # Step 3: Analyze gamma exposure across strike prices
-    gex_by_strike, cumulative_gex = compute_gex_by_strike(
-        ticker=ticker,
-        spot=spot_price,
-        data=option_data,
-        show_plots=show_plots,
-        save_plots=save_plots,
-        outdir=outdir,
-        top_n=top_n,
-        strike_window_pct=strike_window_pct,
-    )
-    
-    # Step 4: Estimate where gamma exposure crosses zero (gamma flip level)
+
+    gex_by_strike = agg.gex_by_strike
+    cumulative_gex = agg.cumulative_gex
+    gex_by_expiration = agg.gex_by_expiration
+    surface_data = agg.surface_data
+
+    if show_plots or save_plots:
+        plot_gex_by_strike(
+            ticker=ticker,
+            spot=spot_price,
+            gex_by_strike=gex_by_strike,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+            top_n=top_n,
+            strike_window_pct=strike_window_pct,
+        )
+        plot_gex_by_expiration(
+            ticker=ticker,
+            gex_by_expiration=gex_by_expiration,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+        )
+        plot_gex_surface(
+            ticker=ticker,
+            surface_data=surface_data,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+        )
+
     gamma_flip = print_gamma_flip_estimate(cumulative_gex)
-    
-    # Step 5: Analyze gamma exposure across expiration dates
-    gex_by_expiration = compute_gex_by_expiration(
-        ticker=ticker,
-        data=option_data,
-        show_plots=show_plots,
-        save_plots=save_plots,
-        outdir=outdir,
-        max_dte=max_dte,
-    )
-    
-    # Step 6: Create 3D visualization of GEX surface (strike vs expiration)
-    surface_data = print_gex_surface(
-        ticker=ticker,
-        spot=spot_price,
-        data=option_data,
-        show_plots=show_plots,
-        save_plots=save_plots,
-        outdir=outdir,
-        max_dte=max_dte,
-        strike_window_pct=strike_window_pct,
-    )
     
     # Step 7: Export all computed metrics to CSV for further analysis
     if export_csv:
@@ -279,94 +300,6 @@ def is_cache_fresh(cache_file, cache_ttl_minutes):
     return datetime.now() - modified_at <= max_age
 
 
-def fetch_options_payload(ticker):
-    """
-    Fetch raw options data from CBOE API.
-    
-    Attempts to fetch JSON data from CBOE's delayed quotes API using two possible
-    endpoint formats. The API returns current price and all active options data.
-    
-    CBOE Endpoints:
-    - https://cdn.cboe.com/api/global/delayed_quotes/options/_{ticker}.json
-    - https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json
-    
-    Args:
-        ticker (str): Stock ticker symbol (e.g., 'SPX', 'XES')
-    
-    Returns:
-        dict: Raw JSON payload containing current price and options list
-    
-    Raises:
-        RuntimeError: If both endpoints fail to return data
-    
-    Example:
-        >>> data = fetch_options_payload("SPX")
-        >>> print(data["data"]["current_price"])
-        4800.25
-    """
-    endpoints = [
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{ticker}.json",
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json",
-    ]
-
-    last_error = None
-    for endpoint in endpoints:
-        try:
-            response = requests.get(endpoint, timeout=REQUEST_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as err:
-            last_error = err
-
-    raise RuntimeError(f"Could not fetch options data for {ticker}: {last_error}")
-
-
-def parse_payload(payload):
-    """
-    Parse raw CBOE API response into structured format.
-    
-    Extracts spot price and option data from the nested JSON structure returned
-    by CBOE, converting options to a pandas DataFrame for easier analysis.
-    
-    Expected payload structure:
-    {
-        "data": {
-            "current_price": 4800.25,
-            "options": [
-                {"option": "SPX  260620C04800000", "gamma": 0.00012, ...},
-                ...
-            ]
-        }
-    }
-    
-    Args:
-        payload (dict): Raw JSON response from CBOE API
-    
-    Returns:
-        tuple: (spot_price: float, option_data: DataFrame)
-               - spot_price: Current underlying price
-               - option_data: DataFrame with all options and their Greeks
-    
-    Raises:
-        ValueError: If payload structure is unexpected or missing required fields
-    
-    Example:
-        >>> spot, options_df = parse_payload(raw_json)
-        >>> print(f"Spot: {spot}, Options: {len(options_df)}")
-    """
-    if "data" not in payload:
-        raise ValueError("Unexpected response format: missing 'data' field.")
-    if "current_price" not in payload["data"] or "options" not in payload["data"]:
-        raise ValueError("Unexpected response format: missing current price or options.")
-    
-    spot_price = float(payload["data"]["current_price"])
-    raw_options = payload["data"].get("options", [])
-    if raw_options is None:
-        raw_options = []
-    option_data = pd.DataFrame(raw_options)
-    return spot_price, option_data
-
-
 def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUTES):
     """
     Fetch and cache options data from CBOE website.
@@ -405,7 +338,17 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
             json.dump(payload, f)
 
     spot_price, option_data = parse_payload(payload)
-    option_data = fix_option_data(option_data)
+    rows_before = len(option_data)
+    option_data = clean_option_data(option_data, spot=spot_price)
+    report = data_quality_report(rows_before, len(option_data))
+    if report["rows_removed"]:
+        print(
+            color_text(
+                f"Data quality: kept {report['rows_after']}/{report['rows_before']} contracts "
+                f"({report['rows_removed']} filtered).",
+                ANSI_DIM,
+            )
+        )
     if option_data is None or not isinstance(option_data, pd.DataFrame):
         raise RuntimeError("Failed to parse option data from CBOE payload.")
     if option_data.empty:
@@ -417,56 +360,12 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
 # DATA PROCESSING
 # ============================================================================
 
-def fix_option_data(data):
-    """
-    Parse and enrich option data with derived fields.
+def fix_option_data(data, spot=None):
+    """Backward-compatible wrapper around gex_core.clean_option_data."""
+    return clean_option_data(data, spot=spot)
 
-    Option symbols follow a standard format: SPX260620C04800000
-    This function extracts:
-    - Type (C=Call, P=Put)
-    - Strike price
-    - Expiration date
 
-    Args:
-        data (DataFrame): Raw option data from CBOE with 'option' column
-
-    Returns:
-        DataFrame: Enhanced and cleaned data with parsed fields
-    """
-    if "option" not in data.columns:
-        raise ValueError("Option payload is missing 'option' symbols.")
-
-    if "gamma" not in data.columns or "open_interest" not in data.columns:
-        raise ValueError("Option payload is missing required columns: gamma/open_interest.")
-
-    cleaned = data.copy()
-
-    # OCC-like format: ROOT + YYMMDD + [C|P] + 8-digit strike (3 implied decimals)
-    symbol_pattern = re.compile(
-        r"^(?P<root>[A-Z]+)(?P<expiration>\d{6})(?P<type>[CP])(?P<strike_raw>\d{8})$"
-    )
-    parsed = cleaned["option"].astype(str).str.strip().str.extract(symbol_pattern)
-    cleaned = cleaned.join(parsed)
-
-    cleaned["strike"] = pd.to_numeric(cleaned["strike_raw"], errors="coerce") / 1000.0
-    cleaned["gamma"] = pd.to_numeric(cleaned["gamma"], errors="coerce")
-    cleaned["open_interest"] = pd.to_numeric(cleaned["open_interest"], errors="coerce")
-    cleaned["expiration"] = pd.to_datetime(
-        cleaned["expiration"], format="%y%m%d", errors="coerce"
-    )
-
-    cleaned = cleaned.dropna(subset=["type", "strike", "gamma", "open_interest", "expiration"])
-    cleaned = cleaned.loc[cleaned["open_interest"] >= 0].copy()
-
-    if "charm" in cleaned.columns:
-        cleaned["charm"] = pd.to_numeric(cleaned["charm"], errors="coerce").fillna(0.0)
-
-    if cleaned.empty:
-        raise RuntimeError("No valid option rows remained after data cleaning/parsing.")
-
-    return cleaned
-
-def compute_total_gex(spot, data):
+def compute_total_gex(spot, data, total_gex_bn=None):
     """
     Calculate dealers' total notional gamma exposure (GEX).
     
@@ -503,17 +402,12 @@ def compute_total_gex(spot, data):
     if data.empty:
         raise ValueError("compute_total_gex() received an empty option DataFrame.")
 
-    # Compute gross gamma exposure for each option
-    # Units: notional dollar exposure per 1% spot price move
-    data["GEX"] = spot * data.gamma * data.open_interest * contract_size * spot * 0.01
-
-    # Apply sign convention: calls are positive (dealers long calls), puts are negative
-    # (dealers short puts). This aligns with dealer delta hedging behavior.
-    type_multiplier = np.where(data["type"] == "P", -1, 1)
-    data["GEX"] = data["GEX"] * type_multiplier
-    
-    # Print aggregate GEX in billions
-    total_gex_bn = round(data.GEX.sum() / 10 ** 9, 4)
+    if "GEX" not in data.columns:
+        data = attach_signed_gex(spot, data)
+    if total_gex_bn is None:
+        total_gex_bn = round(float(data.GEX.sum() / 10**9), 4)
+    else:
+        total_gex_bn = round(float(total_gex_bn), 4)
     print_section_header("Total GEX")
     print(f"Total notional gamma exposure: {color_text(f'${total_gex_bn:.4f} Bn', ANSI_GREEN)}")
     return float(total_gex_bn)
@@ -562,7 +456,7 @@ def print_key_charm_levels(data, top_n=5):
             print(f"  Strike {strike}: {charm:.3f}")
 
 
-def print_regime_summary(data):
+def print_regime_summary(data, gex_by_strike=None):
     """
     Print high-level gamma regime analysis and key price levels.
     
@@ -586,9 +480,11 @@ def print_regime_summary(data):
         Estimated call wall: strike 4800 (45.123)
         Estimated put wall: strike 4750 (-38.105)
     """
-    # Aggregate GEX by strike (sum across all expirations and option types)
-    gex_by_strike = data.groupby("strike")["GEX"].sum().sort_values(ascending=False) / 10**9
-    net_gex = gex_by_strike.sum()
+    if gex_by_strike is None:
+        gex_by_strike = data.groupby("strike")["GEX"].sum().sort_values(ascending=False) / 10**9
+    else:
+        gex_by_strike = gex_by_strike.sort_values(ascending=False)
+    net_gex = float(gex_by_strike.sum())
     
     # Determine if the market is in a long or short gamma regime
     regime = "LONG gamma" if net_gex >= 0 else "SHORT gamma"
@@ -604,7 +500,7 @@ def print_regime_summary(data):
         print(f"Estimated put wall: strike {color_text(put_wall_strike, ANSI_RED)} ({gex_by_strike.min():.3f})")
 
 
-def print_key_gex_levels(data, top_n=5):
+def print_key_gex_levels(data, top_n=5, gex_by_strike=None):
     """
     Print the top N positive and negative GEX strikes.
     
@@ -630,9 +526,9 @@ def print_key_gex_levels(data, top_n=5):
           Strike 4650: -35.200
           Strike 4600: -28.900
     """
-    # Aggregate GEX by strike across all expirations
-    gex_by_strike = data.groupby("strike")["GEX"].sum() / 10**9
-    
+    if gex_by_strike is None:
+        gex_by_strike = data.groupby("strike")["GEX"].sum() / 10**9
+
     # Separate positive and negative GEX and sort by magnitude
     positive = gex_by_strike[gex_by_strike > 0].sort_values(ascending=False).head(top_n)
     negative = gex_by_strike[gex_by_strike < 0].sort_values(ascending=True).head(top_n)
@@ -914,17 +810,25 @@ def finalize_plot(fig, output_path, show_plots, save_plots):
         print(f"Saved plot: {output_path}")
 
     if show_plots:
+        plt, _ = _matplotlib()
         try:
             plt.show(block=True)
         except Exception:
             plt.show()
 # ============================================================================
 
-def compute_gex_by_strike(
-    ticker, spot, data, show_plots, save_plots, outdir, top_n=5, strike_window_pct=0.15
+def plot_gex_by_strike(
+    ticker,
+    spot,
+    gex_by_strike,
+    show_plots,
+    save_plots,
+    outdir,
+    top_n=5,
+    strike_window_pct=0.15,
 ):
     """
-    Analyze and visualize gamma exposure distribution across strike prices.
+    Visualize pre-aggregated gamma exposure distribution across strike prices.
     
     This function creates two key outputs:
     1. Bar chart of GEX by strike (within configurable window around spot price)
@@ -957,10 +861,9 @@ def compute_gex_by_strike(
         >>> print(f"Strike range: {gex_by_strike.index.min()} to {gex_by_strike.index.max()}")
     """
     
-    # Step 1: Aggregate GEX across all expirations by strike
-    gex_by_strike = data.groupby("strike")["GEX"].sum() / 10**9
+    plt, _ = _matplotlib()
 
-    # Step 2: Filter to a window around the current spot price
+    # Filter to a window around the current spot price
     # This focuses the visualization on relevant price levels
     lower = spot * (1 - strike_window_pct)
     upper = spot * (1 + strike_window_pct)
@@ -1015,52 +918,24 @@ def compute_gex_by_strike(
         save_plots,
     )
     
-    # Step 6: Compute and return cumulative GEX for gamma flip analysis
-    cumulative = gex_by_strike.sort_index().cumsum()
-    return gex_by_strike, cumulative
+def compute_gex_by_strike(
+    ticker, spot, data, show_plots, save_plots, outdir, top_n=5, strike_window_pct=0.15
+):
+    """Backward-compatible wrapper that aggregates then plots."""
+    gex_by_strike = data.groupby("strike")["GEX"].sum() / 10**9
+    plot_gex_by_strike(
+        ticker, spot, gex_by_strike, show_plots, save_plots, outdir, top_n, strike_window_pct
+    )
+    return gex_by_strike, gex_by_strike.sort_index().cumsum()
 
 
 # ============================================================================
 # ANALYSIS: GAMMA BY EXPIRATION
 # ============================================================================
 
-def compute_gex_by_expiration(ticker, data, show_plots, save_plots, outdir, max_dte=365):
-    """
-    Analyze and visualize gamma exposure distribution across expiration dates.
-    
-    Shows how gamma exposure is distributed across the term structure of options.
-    Near-term expirations typically have more gamma per dollar due to theta decay.
-    This helps understand which expiration cycles are most impactful for price moves.
-    
-    Args:
-        ticker (str): Stock ticker symbol (for labeling)
-        data (DataFrame): Options data with 'expiration' and 'GEX' columns
-        show_plots (bool): Display chart in window
-        save_plots (bool): Save chart to disk
-        outdir (Path/str): Output directory for plots
-        max_dte (int): Maximum days-to-expiration to include (filters distant expirations)
-                       Use 0 to include same-day (0DTE) expirations only.
-    
-    Returns:
-        Series: GEX indexed by expiration date
-    
-    Example:
-        >>> gex_by_exp = compute_gex_by_expiration("SPX", options_df, True, True, "img", max_dte=90)
-        >>> print(gex_by_exp.head())
-    """
-    
-    # Step 1: Filter to expirations within max_dte
-    today = datetime.today().date()
-    selected_date = today + timedelta(days=max_dte)
-    data = data.loc[
-        (data.expiration.dt.date >= today)
-        & (data.expiration.dt.date <= selected_date)
-    ]
-
-    # Step 2: Aggregate GEX by expiration date across all strikes
-    gex_by_expiration = data.groupby("expiration")["GEX"].sum() / 10**9
-
-    # Step 3: Create bar chart showing term structure
+def plot_gex_by_expiration(ticker, gex_by_expiration, show_plots, save_plots, outdir):
+    """Visualize pre-aggregated GEX by expiration."""
+    plt, _ = _matplotlib()
     fig, ax = plt.subplots(figsize=(14, 7))
     ax.bar(
         gex_by_expiration.index,
@@ -1089,6 +964,15 @@ def compute_gex_by_expiration(ticker, data, show_plots, save_plots, outdir, max_
         save_plots,
     )
     
+def compute_gex_by_expiration(ticker, data, show_plots, save_plots, outdir, max_dte=365):
+    """Backward-compatible wrapper that aggregates then plots."""
+    term = data.loc[
+        (data.expiration.dt.date >= datetime.today().date())
+        & (data.expiration.dt.date <= datetime.today().date() + timedelta(days=max_dte))
+    ]
+    gex_by_expiration = term.groupby("expiration")["GEX"].sum() / 10**9
+    if show_plots or save_plots:
+        plot_gex_by_expiration(ticker, gex_by_expiration, show_plots, save_plots, outdir)
     return gex_by_expiration
 
 
@@ -1096,124 +980,49 @@ def compute_gex_by_expiration(ticker, data, show_plots, save_plots, outdir, max_
 # ANALYSIS: 3D GAMMA SURFACE
 # ============================================================================
 
-def print_gex_surface(
-    ticker, spot, data, show_plots, save_plots, outdir, max_dte=365, strike_window_pct=0.15
-):
-    """
-    Create and visualize a 3D surface plot of GEX across strikes and expirations.
-    
-    This visualization shows how gamma exposure varies across two dimensions:
-    - X-axis: Strike prices
-    - Y-axis: Expiration dates (term structure)
-    - Z-axis: GEX magnitude
-    
-    This provides a comprehensive view of the gamma landscape and can highlight
-    clusters of gamma exposure (hot spots) across both dimensions.
-    
-    Args:
-        ticker (str): Stock ticker symbol (for labeling)
-        spot (float): Current spot price
-        data (DataFrame): Options data with 'strike', 'expiration', and 'GEX' columns
-        show_plots (bool): Display plot in window
-        save_plots (bool): Save plot to disk
-        outdir (Path/str): Output directory for plots
-        max_dte (int): Maximum days-to-expiration to include
-                       Use 0 to include same-day (0DTE) expirations only.
-        strike_window_pct (float): Percentage window around spot for strike axis
-    
-    Returns:
-        DataFrame: Surface data with columns ['expiration', 'strike', 'GEX']
-    
-    Example:
-        >>> surface = print_gex_surface("SPX", 4800, options_df, True, True, "img")
-    """
-    
-    # Step 1: Apply filters (date and strike range)
-    today = datetime.today().date()
-    selected_date = today + timedelta(days=max_dte)
-    limit_criteria = (
-        (data.expiration.dt.date >= today)
-        & (data.expiration.dt.date <= selected_date)
-        & (data.strike > spot * (1 - strike_window_pct))
-        & (data.strike < spot * (1 + strike_window_pct))
-    )
-    data = data.loc[limit_criteria]
+def plot_gex_surface(ticker, surface_data, show_plots, save_plots, outdir):
+    """Visualize pre-aggregated GEX surface."""
+    plt, dates = _matplotlib()
+    data = surface_data
+    if data.empty:
+        print("No surface data available for the selected filters.")
+        return data
 
-    # Step 2: Aggregate GEX by [expiration, strike] pairs
-    # Convert to millions for better numerical scale on Z-axis
-    data = data.groupby(["expiration", "strike"])["GEX"].sum() / 10**6
-    data = data.reset_index()
-
-    # Step 3: Create 3D surface plot
     fig = plt.figure(figsize=(14, 9))
     ax = fig.add_subplot(111, projection="3d")
-
-    # Convert dates to numeric for 3D plotting
     x = data["strike"].to_numpy()
     y = dates.date2num(data["expiration"])
     z = data["GEX"].to_numpy()
 
-    if data.empty:
-        print("No surface data available for the selected filters.")
-    elif len(data) < 3:
-        ax.scatter(
-            x,
-            y,
-            z,
-            c=z,
-            cmap="coolwarm",
-            depthshade=True,
-            s=60,
-            edgecolors="k",
-            linewidths=0.3,
-        )
+    if len(data) < 3:
+        ax.scatter(x, y, z, c=z, cmap="coolwarm", depthshade=True, s=60, edgecolors="k", linewidths=0.3)
     else:
         try:
-            ax.plot_trisurf(
-                x,
-                y,
-                z,
-                cmap="coolwarm",
-                linewidth=0.2,
-                antialiased=True,
-                alpha=0.95,
-            )
-        except (RuntimeError, ValueError):
-            ax.scatter(
-                x,
-                y,
-                z,
-                c=z,
-                cmap="coolwarm",
-                depthshade=True,
-                s=60,
-                edgecolors="k",
-                linewidths=0.3,
-            )
-
-    # Format Y-axis (expiration) with proper date labels
-    ax.yaxis.set_major_formatter(dates.AutoDateFormatter(ax.xaxis.get_major_locator()))
-    ax.view_init(elev=30, azim=-60)
-    
-    # Labeling
-    ax.set_ylabel("Expiration date", fontweight="heavy")
-    ax.set_xlabel("Strike Price", fontweight="heavy")
-    ax.set_zlabel("Gamma (M$ / %)", fontweight="heavy")
-    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
-        try:
-            axis.line.set_color("#475569")
+            ax.plot_trisurf(x, y, z, cmap="coolwarm", linewidth=0.2, antialiased=True, alpha=0.95)
         except Exception:
-            pass
-    
-    # Step 4: Save/display the plot
+            ax.scatter(x, y, z, c=z, cmap="coolwarm", depthshade=True, s=60, edgecolors="k", linewidths=0.3)
+
+    ax.set_xlabel("Strike", fontweight="heavy")
+    ax.set_ylabel("Expiration", fontweight="heavy")
+    ax.set_zlabel("GEX (Mn$ / %)", fontweight="heavy")
+    ax.set_title(f"{ticker} GEX Surface", fontweight="heavy")
     finalize_plot(
         fig,
         build_output_path(outdir, ticker, "gex_surface", "png"),
         show_plots,
         save_plots,
     )
-    
     return data
+
+
+def print_gex_surface(
+    ticker, spot, data, show_plots, save_plots, outdir, max_dte=365, strike_window_pct=0.15
+):
+    """Backward-compatible wrapper that aggregates then plots."""
+    surface = aggregate_gex(data, spot, max_dte, strike_window_pct).surface_data
+    if show_plots or save_plots:
+        plot_gex_surface(ticker, surface, show_plots, save_plots, outdir)
+    return surface
 
 
 # ============================================================================

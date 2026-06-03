@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+import numpy as np
 import pandas as pd
 
 CSV_RE = re.compile(
@@ -59,15 +60,14 @@ def init_db(db_path: Path | None = None) -> None:
 
 
 def _series_to_records(series: pd.Series) -> list[list[float]]:
-    records: list[list[float]] = []
-    for index, value in series.items():
-        try:
-            strike = float(index)
-            gex = float(value)
-        except (TypeError, ValueError):
-            continue
-        records.append([strike, gex])
-    return records
+    if series.empty:
+        return []
+    idx = pd.to_numeric(series.index, errors="coerce")
+    vals = pd.to_numeric(series.values, errors="coerce")
+    mask = ~(np.isnan(idx) | np.isnan(vals))
+    if not mask.any():
+        return []
+    return np.column_stack([idx[mask], vals[mask]]).tolist()
 
 
 def _records_to_series(records: list[list[float]], value_name: str = "gex") -> pd.Series:
@@ -167,24 +167,14 @@ def get_latest_ts(ticker: str, db_path: Path | None = None) -> str | None:
     return timestamps[-1] if timestamps else None
 
 
-def get_snapshot(ticker: str, ts: str, db_path: Path | None = None) -> dict | None:
-    init_db(db_path)
-    ticker = ticker.upper()
-    with connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM gex_snapshots WHERE ticker = ? AND ts = ?",
-            (ticker, ts),
-        ).fetchone()
-    if row is None:
-        return None
-
+def _row_to_snapshot(row: sqlite3.Row) -> dict:
+    ticker = row["ticker"]
     strike = _records_to_series(json.loads(row["strike_json"]), "gex_bn_per_pct")
     expiration = _records_to_series(json.loads(row["expiration_json"]), "gex_bn_per_pct")
     cumulative = _records_to_series(json.loads(row["cumulative_json"]), "cumulative_gex_bn_per_pct")
     surface_records = json.loads(row["surface_json"] or "[]")
     surface_df = _records_to_surface_df(surface_records)
     summary = json.loads(row["summary_json"]) if row["summary_json"] else None
-
     return {
         "ticker": ticker,
         "ts": row["ts"],
@@ -195,6 +185,37 @@ def get_snapshot(ticker: str, ts: str, db_path: Path | None = None) -> dict | No
         "surface_df": surface_df,
         "summary": summary,
     }
+
+
+def list_snapshots(ticker: str, db_path: Path | None = None) -> list[dict]:
+    """Load all snapshots for a ticker in one query."""
+    init_db(db_path)
+    ticker = ticker.upper()
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT ticker, ts, created_at, strike_json, expiration_json,
+                   cumulative_json, surface_json, summary_json
+            FROM gex_snapshots
+            WHERE ticker = ?
+            ORDER BY ts ASC
+            """,
+            (ticker,),
+        ).fetchall()
+    return [_row_to_snapshot(row) for row in rows]
+
+
+def get_snapshot(ticker: str, ts: str, db_path: Path | None = None) -> dict | None:
+    init_db(db_path)
+    ticker = ticker.upper()
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM gex_snapshots WHERE ticker = ? AND ts = ?",
+            (ticker, ts),
+        ).fetchone()
+    if row is None:
+        return None
+    return _row_to_snapshot(row)
 
 
 def parse_ts(ts: str) -> datetime:
