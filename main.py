@@ -34,6 +34,7 @@ import pandas as pd
 import requests
 from matplotlib import dates
 from gex_db.store import save_snapshot
+from web_app import APP as app
 
 # ============================================================================
 # CONFIGURATION & STYLING
