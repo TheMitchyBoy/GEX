@@ -249,11 +249,7 @@ def run(
             gamma_flip=gamma_flip,
             top_n=top_n,
         )
-        summary["data_quality"] = {
-            "rows_in": quality.rows_in,
-            "rows_out": quality.rows_out,
-            "removed": quality.removed,
-        }
+        summary["data_quality"] = quality.to_dict()
         export_analytics_csv(
             ticker=ticker,
             gex_by_strike=gex_by_strike,
@@ -315,8 +311,8 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
         cache_ttl_minutes (int): Cache validity duration in minutes
     
     Returns:
-        tuple: (spot_price: float, option_data: DataFrame)
-               Returns cleaned option data with derived fields (type, strike, expiration)
+        tuple: (spot_price, option_data, quality_report)
+               Cleaned option data with parsed fields and a filter breakdown
     
     Example:
         >>> spot, options_df = scrape_data("SPX", refresh=False)
@@ -348,12 +344,6 @@ def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUT
 # ============================================================================
 # DATA PROCESSING
 # ============================================================================
-
-def fix_option_data(data, spot=None):
-    """Backward-compatible wrapper around gex_core.clean_option_data."""
-    cleaned, _report = clean_option_data(data, spot=spot)
-    return cleaned
-
 
 def compute_total_gex(spot, data, total_gex_bn=None):
     """

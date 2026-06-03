@@ -11,8 +11,6 @@ import numpy as np
 import pandas as pd
 import requests
 
-from gex_core.data_quality import DataQualityReport
-
 CONTRACT_SIZE = 100
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("GEX_REQUEST_TIMEOUT", "10"))
 
@@ -108,10 +106,3 @@ def aggregate_gex(
         total_gex_bn=total_gex_bn,
     )
 
-
-def data_quality_report(before: int, after: int) -> DataQualityReport:
-    """Backward-compatible helper when only row counts are available."""
-    report = DataQualityReport(rows_in=before, rows_out=after)
-    if before > after:
-        report.removed["unspecified"] = before - after
-    return report

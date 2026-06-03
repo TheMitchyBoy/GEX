@@ -242,26 +242,25 @@ python web_app.py
 
 GEX snapshots are stored in a SQLite database (`data/gex.db` by default) and refreshed automatically every 10 minutes from CBOE. On startup, any existing CSV files in `data/exports/` are imported into the database so historical timelines are available immediately.
 
-Environment variables:
+Configuration (environment variables):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GEX_DB_PATH` | `data/gex.db` | SQLite database path |
-| `GEX_DEFAULT_TICKERS` | `SPX` | Comma-separated tickers to refresh |
+| `GEX_DEFAULT_TICKERS` | `SPX` | Tickers refreshed on a schedule |
 | `GEX_REFRESH_INTERVAL_MINUTES` | `10` | Auto-refresh interval |
 | `GEX_DISABLE_SCHEDULER` | (unset) | Set to `1` to disable background refresh |
+| `GEX_DATA_FILTERS` | `1` | Set to `0` to skip option filters |
+| `GEX_MIN_OPEN_INTEREST` | `1` | Minimum open interest per contract |
+| `GEX_MAX_STRIKE_DISTANCE_PCT` | `0.35` | Max strike distance from spot |
+
+See [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md) for all filter settings.
 
 Manual database refresh:
+
 ```bash
 python scripts/gex_db_refresh.py --import-csv --force
 ```
-
-### Performance and data quality
-
-- GEX is computed in a **single vectorized pass** with one aggregate step for strike, expiration, and surface (`gex_core.py`).
-- The web dashboard loads timeline history with **one SQLite query** per ticker.
-- Matplotlib loads **only when plotting** (server refreshes skip it).
-- Option filters and improvement ideas: [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md)
 
 ## Live Option Flow Signal
 
@@ -557,7 +556,7 @@ run dashboards
 run live ingest
 train models
 Add unit tests for:
-fix_option_data
+clean_option_data (gex_core.data_quality)
 live event parsing
 model feature generation
 Add linting / formatting configs for consistency.
