@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 import requests
 from matplotlib import dates
+from web_app import APP as app
 
 # ============================================================================
 # CONFIGURATION & STYLING

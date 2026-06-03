@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 
 APP = Flask(__name__)
+app = APP
 
 EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
