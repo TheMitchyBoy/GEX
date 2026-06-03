@@ -226,9 +226,9 @@ The repository now includes two interactive interfaces for viewing GEX output:
   - Shows interactive heatmaps and 3D scatter plots
   - Displays PNG snapshots from `img/`
 - **Flask website:** `web_app.py`
-  - Serves a full results dashboard with KPI cards (regime, total GEX, walls, gamma flip)
-  - Renders interactive strike/expiration/cumulative/surface charts using latest exports
-  - Supports direct downloads of latest CSV exports and summary JSON files
+  - Serves an ultra-modern dashboard with glassmorphism styling, narrative pulse, and concept widgets
+  - Adds a what-if regime simulator (GEX/spot shock) and wall-tension scoring
+  - Includes interactive heatmap/3D/strike/expiration/cumulative charts and export downloads
 
 Run the Streamlit dashboard:
 ```bash
