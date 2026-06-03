@@ -240,6 +240,22 @@ Run the Flask dashboard:
 python web_app.py
 ```
 
+GEX snapshots are stored in a SQLite database (`data/gex.db` by default) and refreshed automatically every 10 minutes from CBOE. On startup, any existing CSV files in `data/exports/` are imported into the database so historical timelines are available immediately.
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEX_DB_PATH` | `data/gex.db` | SQLite database path |
+| `GEX_DEFAULT_TICKERS` | `SPX` | Comma-separated tickers to refresh |
+| `GEX_REFRESH_INTERVAL_MINUTES` | `10` | Auto-refresh interval |
+| `GEX_DISABLE_SCHEDULER` | (unset) | Set to `1` to disable background refresh |
+
+Manual database refresh:
+```bash
+python scripts/gex_db_refresh.py --import-csv --force
+```
+
 ## Live Option Flow Signal
 
 A live ingest pipeline is included under `live/` that consumes JSON-lines option flow events and computes real-time GEX strike signals.

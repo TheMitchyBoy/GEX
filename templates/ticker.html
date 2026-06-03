@@ -75,6 +75,9 @@
             </div>
             <h1 class="h2 mb-2 title-grad">{{ ticker }} · Ultra-modern Gamma Experience</h1>
             <p class="muted mb-0">Timeline replay, AI analog forecasting, similar setup memory, and interactive regime simulation.</p>
+            {% if latest_ts %}
+            <p class="small muted mb-0 mt-2">Database snapshot · last update {{ latest_ts }} · auto-refresh every {{ refresh_minutes }} minutes</p>
+            {% endif %}
           </div>
           <div class="d-flex gap-2">
             <a class="btn btn-outline-light" href="/">All tickers</a>
@@ -85,7 +88,7 @@
 
       {% if bootstrap_status == "ok" %}
       <div class="alert alert-success" role="alert">
-        Snapshot bootstrap completed. Latest exports were generated for {{ ticker }}.
+        Snapshot refresh completed. Latest GEX data for {{ ticker }} was saved to the database.
       </div>
       {% elif bootstrap_status == "failed" %}
       <div class="alert alert-danger" role="alert">
@@ -99,10 +102,10 @@
 
       {% if not has_history %}
       <div class="alert alert-warning" role="alert">
-        <div class="mb-2">No historical exports were found for {{ ticker }} on this deployment yet.</div>
+        <div class="mb-2">No GEX snapshots are in the database for {{ ticker }} yet. The server refreshes from CBOE every {{ refresh_minutes }} minutes; the first load may take a minute.</div>
         <form method="post" action="{{ url_for('bootstrap_ticker_history', ticker=ticker) }}" class="d-flex gap-2 flex-wrap align-items-center">
-          <button class="btn btn-sm btn-warning" type="submit">Generate snapshots now</button>
-          <span class="small">Runs <code>python main.py --ticker {{ ticker }} --no-show</code> on the server, then reloads this page.</span>
+          <button class="btn btn-sm btn-warning" type="submit">Refresh now</button>
+          <span class="small">Runs <code>python main.py --ticker {{ ticker }} --no-show</code> immediately and stores results in the database.</span>
         </form>
       </div>
       {% endif %}
