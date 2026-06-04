@@ -2,7 +2,7 @@ name: Daily GEX Exports
 
 on:
   schedule:
-    - cron: '0 6 * * *' # daily at 06:00 UTC
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,14 +11,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -27,28 +25,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run GEX exports for ticker SPX
+      - name: Run GEX exports for SPX
         env:
           TICKERS: SPX
+          UW_API_KEY: ${{ secrets.UW_API_KEY }}
         run: |
           set -euo pipefail
-          mkdir -p data/exports
+          mkdir -p data/exports img
           IFS=',' read -ra TS <<< "${TICKERS}"
           for t in "${TS[@]}"; do
             echo "Running main.py for $t"
-            python main.py --ticker "$t" --no-show || true
+            python main.py --ticker "$t" --no-show --no-save || python main.py --ticker "$t" --no-show --no-save --refresh
           done
 
-      - name: Commit and push CSV exports
+      - name: Commit and push exports
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Stage CSVs in data/exports
-          git add data/exports/*.csv || true
-          # Only commit if there are staged changes
+          git add data/exports/*.csv data/exports/*.json img/*.png 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "No CSV changes to commit"
+            echo "No export changes to commit"
           else
             git commit -m "chore: daily GEX exports [skip ci] $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             git push

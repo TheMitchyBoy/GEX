@@ -1,0 +1,24 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - UW_API_KEY=${UW_API_KEY:-}
+      - GEX_DEFAULT_TICKERS=SPX
+      - GEX_REFRESH_INTERVAL_MINUTES=10
+      - GEX_DISABLE_SCHEDULER=0
+    volumes:
+      - ./data:/app/data
+      - ./data/exports:/app/data/exports
+
+  refresh:
+    build: .
+    command: python scripts/gex_refresh.py --force
+    environment:
+      - UW_API_KEY=${UW_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./data/exports:/app/data/exports
+    profiles:
+      - tools
