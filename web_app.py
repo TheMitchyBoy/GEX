@@ -103,6 +103,14 @@ def find_available_tickers(export_dir: Path | None = None):
     return list_tickers(export_dir)
 
 
+def _safe_similar_setups(history: list) -> list:
+    try:
+        return similar_setups(history, top_n=5)
+    except Exception:
+        logger.exception("Similar setups lookup failed")
+        return []
+
+
 
 @APP.route("/")
 def index():
@@ -217,12 +225,20 @@ def ticker_page(ticker):
         )
         current_profile_series = selected.get("strike")
 
-    prediction = predict_next_snapshot(history)
-    backtest = backtest_delta_sign_accuracy(ticker)
-    if prediction and backtest.get("accuracy") is not None:
-        prediction = dict(prediction)
-        prediction["backtest_sign_accuracy"] = backtest["accuracy"]
-        prediction["backtest_n"] = backtest["n"]
+    prediction = None
+    try:
+        prediction = predict_next_snapshot(history)
+    except Exception:
+        logger.exception("Prediction failed for %s", ticker)
+
+    try:
+        backtest = backtest_delta_sign_accuracy(ticker)
+        if prediction and backtest.get("accuracy") is not None:
+            prediction = dict(prediction)
+            prediction["backtest_sign_accuracy"] = backtest["accuracy"]
+            prediction["backtest_n"] = backtest["n"]
+    except Exception:
+        logger.exception("Backtest metrics failed for %s", ticker)
 
     current_strike_chart_json = make_positive_strike_chart(
         current_profile_series,
@@ -261,7 +277,7 @@ def ticker_page(ticker):
         cumulative_chart_json=make_cumulative_gex_chart(
             selected.get("cumulative"), ticker, gamma_flip=selected.get("gamma_flip"),
         ),
-        similar_setups=similar_setups(history, top_n=5),
+        similar_setups=_safe_similar_setups(history),
         data_source=data_source,
         spot_distance_to_flip=spot_dist,
         ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,

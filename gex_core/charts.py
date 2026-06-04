@@ -160,8 +160,25 @@ def make_gex_profile_chart(
     if spot is not None and spot > 0:
         spot_label = f"{int(spot)}"
         if spot_label in y_labels:
-            fig.add_hline(y=spot_label, line_color=_AMBER, line_dash="dash", line_width=1.5,
-                          annotation_text=f"Spot {int(spot)}", annotation_font_color=_AMBER)
+            # add_hline breaks on categorical y-axes (Plotly TypeError); use shape instead.
+            fig.add_shape(
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=spot_label,
+                y1=spot_label,
+                line=dict(color=_AMBER, dash="dash", width=1.5),
+            )
+            fig.add_annotation(
+                x=max(x_values) if x_values else 0,
+                y=spot_label,
+                text=f"Spot {int(spot)}",
+                showarrow=False,
+                font=dict(color=_AMBER, size=10),
+                xanchor="left",
+            )
     _apply_base(fig, title=f"{ticker} · {title}", height=max(420, len(window) * 14),
                 xaxis_title="GEX (Bn$ / %)", bargap=0.18)
     return json.dumps(fig, cls=PlotlyJSONEncoder)
