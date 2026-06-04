@@ -17,7 +17,7 @@ from flask import Flask, abort, redirect, render_template, request, send_from_di
 from plotly.utils import PlotlyJSONEncoder
 
 from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip
-from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
+from gex_core.predict import predict_next_snapshot
 from gex_db.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_tickers
 from gex_db.store import (
     get_latest_ts,
@@ -145,7 +145,6 @@ def make_ai_insights_chart(analysis) -> str | None:
 
 EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
-FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
 REFRESH_TICKERS = DEFAULT_TICKERS
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
@@ -752,10 +751,6 @@ def ticker_page(ticker):
     history = build_history(ticker)
     bootstrap_status = request.args.get("bootstrap")
 
-    imgs = []
-    if IMG_DIR.exists():
-        imgs = sorted(IMG_DIR.glob(f"{ticker}_*.*"), key=lambda p: p.stat().st_mtime, reverse=True)
-
     if not history:
         selected = {
             "ts_label": "No snapshot history available yet",
@@ -764,98 +759,84 @@ def ticker_page(ticker):
             "call_wall": None,
             "put_wall": None,
             "gamma_flip": None,
-            "near_term_ratio": 0.0,
+            "spot": None,
         }
         uw_entry = get_uw_data(ticker)
-        uw_analysis_d = uw_entry["analysis"].to_dict() if (uw_entry and uw_entry.get("analysis")) else None
+        profile_json = None
+        current_strike_chart_json = None
+        if uw_entry and uw_entry.get("agg") is not None:
+            uw_agg = uw_entry["agg"]
+            selected.update(
+                {
+                    "regime": "LONG gamma" if uw_agg.total_gex_bn >= 0 else "SHORT gamma",
+                    "total_gex": float(uw_agg.total_gex_bn),
+                    "call_wall": float(uw_agg.gex_by_strike.idxmax()) if len(uw_agg.gex_by_strike) else None,
+                    "put_wall": float(uw_agg.gex_by_strike.idxmin()) if len(uw_agg.gex_by_strike) else None,
+                    "gamma_flip": uw_entry.get("gamma_flip"),
+                    "spot": uw_entry.get("spot"),
+                }
+            )
+            profile_json = make_gex_profile_chart(
+                uw_agg.gex_by_strike,
+                ticker,
+                spot=uw_entry.get("spot"),
+                title="Market Maker Position (UW Live)",
+            )
+            current_strike_chart_json = make_positive_strike_chart(
+                uw_agg.gex_by_strike,
+                ticker,
+                "Current Position Focus (Positive GEX)",
+            )
+
         return render_template(
             "ticker.html",
             ticker=ticker,
-            imgs=imgs,
-            heatmap_json=None,
-            scatter3d_json=None,
-            timeline_json=None,
-            cumulative_gex_json=None,
-            breakdown_json=None,
-            profile_json=None,
-            ai_table_json=None,
-            uw_analysis=uw_analysis_d,
-            uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
-            timeline_options=[],
+            profile_json=profile_json,
             selected=selected,
             prediction=None,
-            similar_setups=[],
-            flow_overlay=None,
-            strike_csv=None,
-            exp_csv=None,
-            cum_csv=None,
             has_history=False,
             bootstrap_status=bootstrap_status,
             latest_ts=None,
             refresh_minutes=REFRESH_MINUTES,
-            current_strike_chart_json=None,
+            current_strike_chart_json=current_strike_chart_json,
             predicted_strike_chart_json=None,
+            uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
         )
 
-    # ── Live UW data + AI analysis (if UW is configured) ─────────────────────
     uw_entry = get_uw_data(ticker)
     if uw_entry:
         uw_spot = uw_entry["spot"]
         uw_agg = uw_entry["agg"]
-        uw_analysis = uw_entry["analysis"]
         uw_fetched_at = uw_entry["fetched_at"]
-        uw_gamma_flip = uw_entry["gamma_flip"]
     else:
         uw_spot = None
         uw_agg = None
-        uw_analysis = None
         uw_fetched_at = None
-        uw_gamma_flip = None
 
-    requested_ts = request.args.get("ts")
-    ts_index = {row["ts"]: row for row in history}
-    selected = ts_index.get(requested_ts, history[-1])
+    selected = history[-1]
 
-    heatmap_json = make_heatmap(
-        selected.get("surface_path"),
-        ticker,
-        surface_df=selected.get("surface_df"),
-    )
-    scatter3d_json = make_surface_scatter(
-        selected.get("surface_path"),
-        ticker,
-        surface_df=selected.get("surface_df"),
-    )
-    timeline_json = make_timeline_chart(history, ticker)
-    breakdown_json = make_gex_breakdown_chart(history, ticker)
-
-    # Prefer live UW data for the profile + cumulative charts
     if uw_agg is not None:
         profile_json = make_gex_profile_chart(
-            uw_agg.gex_by_strike, ticker,
-            spot=uw_spot, title="Dealer Gamma Profile (UW Live)",
+            uw_agg.gex_by_strike,
+            ticker,
+            spot=uw_spot,
+            title="Market Maker Position (UW Live)",
         )
-        cumulative_gex_json = make_cumulative_gex_chart(
-            uw_agg.cumulative_gex, ticker, gamma_flip=uw_gamma_flip,
-        )
+        current_profile_series = uw_agg.gex_by_strike
     else:
         profile_json = make_gex_profile_chart(
-            selected.get("strike"), ticker,
+            selected.get("strike"),
+            ticker,
             spot=safe_float(selected.get("spot"), None) or None,
-            title="Dealer Gamma Profile",
+            title="Market Maker Position",
         )
-        cumulative_gex_json = make_cumulative_gex_chart(
-            selected.get("cumulative"), ticker,
-            gamma_flip=selected.get("gamma_flip"),
-        )
-
-    ai_table_json = make_ai_insights_chart(uw_analysis)
+        current_profile_series = selected.get("strike")
 
     prediction = predict_next_snapshot(history)
     current_strike_chart_json = make_positive_strike_chart(
-        selected.get("strike"),
+        current_profile_series,
         ticker,
-        "Current Positive GEX by Strike",
+        "Current Position Focus (Positive GEX)",
     )
     predicted_strike_chart_json = None
     if prediction and prediction.get("predicted_strike") is not None:
@@ -865,52 +846,14 @@ def ticker_page(ticker):
             "Predicted Positive GEX by Strike",
         )
         prediction = {k: v for k, v in prediction.items() if k != "predicted_strike"}
-    similar = similar_setups(history, top_n=6)
-
-    flow_overlay = None
-    if history:
-        spot = safe_float(history[-1].get("spot"), 4800.0)
-        try:
-            flow_overlay = load_flow_predictions(FLOW_FEED_PATH, spot=spot)
-            if prediction and flow_overlay:
-                flow_delta = flow_overlay.get("predicted_flow_delta_gex_bn", 0.0)
-                prediction["predicted_flow_delta_gex"] = flow_delta
-                prediction["predicted_total_gex_with_flow"] = (
-                    prediction["predicted_total_gex"] + flow_delta
-                )
-        except Exception:
-            logger.debug("Flow overlay unavailable", exc_info=True)
-
-    timeline_options = [
-        {
-            "ts": row["ts"],
-            "label": row["ts_label"],
-            "is_selected": row["ts"] == selected["ts"],
-        }
-        for row in history
-    ]
 
     return render_template(
         "ticker.html",
         ticker=ticker,
-        imgs=imgs,
-        heatmap_json=heatmap_json,
-        scatter3d_json=scatter3d_json,
-        timeline_json=timeline_json,
-        cumulative_gex_json=cumulative_gex_json,
-        breakdown_json=breakdown_json,
         profile_json=profile_json,
-        ai_table_json=ai_table_json,
-        uw_analysis=uw_analysis.to_dict() if uw_analysis else None,
         uw_fetched_at=uw_fetched_at,
-        timeline_options=timeline_options,
         selected=selected,
         prediction=prediction,
-        similar_setups=similar,
-        flow_overlay=flow_overlay,
-        strike_csv=selected["strike_path"].name if selected.get("strike_path") else None,
-        exp_csv=selected["exp_path"].name if selected.get("exp_path") else None,
-        cum_csv=selected["cum_path"].name if selected.get("cum_path") else None,
         latest_ts=ts_label(get_latest_ts(ticker)) if get_latest_ts(ticker) else None,
         refresh_minutes=REFRESH_MINUTES,
         has_history=True,
