@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +33,115 @@ from gex_db.store import (
 APP = Flask(__name__)
 app = APP
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unusual Whales live data layer
+# ─────────────────────────────────────────────────────────────────────────────
+
+_UW_CACHE: dict[str, dict] = {}          # ticker → {spot, agg, ts, analysis}
+_UW_CACHE_TTL = 600                       # seconds (10 minutes)
+_UW_API_KEY = os.environ.get("UW_API_KEY")
+_UW_ENABLED = bool(_UW_API_KEY)
+
+_uw_lock = threading.Lock()
+
+
+def _uw_cache_fresh(ticker: str) -> bool:
+    entry = _UW_CACHE.get(ticker.upper())
+    return bool(entry and (time.monotonic() - entry["ts"]) < _UW_CACHE_TTL)
+
+
+def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
+    """Fetch live UW GEX and run AI analysis; cache the result."""
+    if not _UW_ENABLED:
+        return None
+    ticker = ticker.upper()
+    if not force and _uw_cache_fresh(ticker):
+        return _UW_CACHE[ticker]
+    try:
+        from gex_core.uw_loader import fetch_uw_gex
+        from gex_core.ai_analyst import analyze_dealer_gamma
+        from gex_core.features import estimate_gamma_flip
+
+        spot, agg = fetch_uw_gex(ticker, api_key=_UW_API_KEY)
+        gamma_flip = estimate_gamma_flip(agg.cumulative_gex)
+        analysis = analyze_dealer_gamma(
+            ticker=ticker, spot=spot,
+            gex_by_strike=agg.gex_by_strike,
+            cumulative_gex=agg.cumulative_gex,
+            total_gex_bn=agg.total_gex_bn,
+            gamma_flip=gamma_flip,
+        )
+        entry = {
+            "spot": spot, "agg": agg,
+            "gamma_flip": gamma_flip,
+            "analysis": analysis,
+            "ts": time.monotonic(),
+            "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        }
+        with _uw_lock:
+            _UW_CACHE[ticker] = entry
+        logger.info("UW data refreshed for %s: spot=%.2f, GEX=%.3f Bn$", ticker, spot, agg.total_gex_bn)
+        return entry
+    except Exception:
+        logger.exception("UW data refresh failed for %s", ticker)
+        return None
+
+
+def get_uw_data(ticker: str) -> dict | None:
+    """Return cached UW data, refreshing if stale."""
+    if not _UW_ENABLED:
+        return None
+    ticker = ticker.upper()
+    with _uw_lock:
+        if _uw_cache_fresh(ticker):
+            return _UW_CACHE[ticker]
+    return refresh_uw_data(ticker)
+
+
+def make_ai_insights_chart(analysis) -> str | None:
+    """Render a visual signal scorecard as a Plotly figure (JSON)."""
+    if analysis is None:
+        return None
+    try:
+        signals = analysis.signals
+        labels = [s.label for s in signals]
+        values = [s.value for s in signals]
+        colors = {
+            "bullish": _GREEN,
+            "bearish": _RED,
+            "caution": _AMBER,
+            "neutral": "#94a3b8",
+        }
+        bar_colors = [colors.get(s.sentiment, "#94a3b8") for s in signals]
+
+        fig = go.Figure(go.Table(
+            columnwidth=[140, 120, 380],
+            header=dict(
+                values=["<b>Signal</b>", "<b>Value</b>", "<b>Interpretation</b>"],
+                fill_color=_CHART_BG,
+                font=dict(color="#c9d1d9", family="ui-monospace, monospace", size=11),
+                line_color="rgba(255,255,255,0.1)",
+                align="left",
+            ),
+            cells=dict(
+                values=[labels, values, [s.detail for s in signals]],
+                fill_color=[
+                    [_CHART_BG] * len(signals),
+                    bar_colors,
+                    [_CHART_BG] * len(signals),
+                ],
+                font=dict(color="#c9d1d9", family="ui-monospace, monospace", size=10),
+                line_color="rgba(255,255,255,0.06)",
+                align="left",
+                height=30,
+            ),
+        ))
+        _apply_base(fig, height=max(260, len(signals) * 34 + 60),
+                    margin=dict(l=0, r=0, t=10, b=0))
+        return json.dumps(fig, cls=PlotlyJSONEncoder)
+    except Exception:
+        return None
 
 EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
@@ -655,6 +766,8 @@ def ticker_page(ticker):
             "gamma_flip": None,
             "near_term_ratio": 0.0,
         }
+        uw_entry = get_uw_data(ticker)
+        uw_analysis_d = uw_entry["analysis"].to_dict() if (uw_entry and uw_entry.get("analysis")) else None
         return render_template(
             "ticker.html",
             ticker=ticker,
@@ -665,6 +778,9 @@ def ticker_page(ticker):
             cumulative_gex_json=None,
             breakdown_json=None,
             profile_json=None,
+            ai_table_json=None,
+            uw_analysis=uw_analysis_d,
+            uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
             timeline_options=[],
             selected=selected,
             prediction=None,
@@ -681,6 +797,21 @@ def ticker_page(ticker):
             predicted_strike_chart_json=None,
         )
 
+    # ── Live UW data + AI analysis (if UW is configured) ─────────────────────
+    uw_entry = get_uw_data(ticker)
+    if uw_entry:
+        uw_spot = uw_entry["spot"]
+        uw_agg = uw_entry["agg"]
+        uw_analysis = uw_entry["analysis"]
+        uw_fetched_at = uw_entry["fetched_at"]
+        uw_gamma_flip = uw_entry["gamma_flip"]
+    else:
+        uw_spot = None
+        uw_agg = None
+        uw_analysis = None
+        uw_fetched_at = None
+        uw_gamma_flip = None
+
     requested_ts = request.args.get("ts")
     ts_index = {row["ts"]: row for row in history}
     selected = ts_index.get(requested_ts, history[-1])
@@ -696,18 +827,29 @@ def ticker_page(ticker):
         surface_df=selected.get("surface_df"),
     )
     timeline_json = make_timeline_chart(history, ticker)
-    cumulative_gex_json = make_cumulative_gex_chart(
-        selected.get("cumulative"),
-        ticker,
-        gamma_flip=selected.get("gamma_flip"),
-    )
     breakdown_json = make_gex_breakdown_chart(history, ticker)
-    profile_json = make_gex_profile_chart(
-        selected.get("strike"),
-        ticker,
-        spot=safe_float(selected.get("spot"), None) or None,
-        title="Dealer Gamma Profile",
-    )
+
+    # Prefer live UW data for the profile + cumulative charts
+    if uw_agg is not None:
+        profile_json = make_gex_profile_chart(
+            uw_agg.gex_by_strike, ticker,
+            spot=uw_spot, title="Dealer Gamma Profile (UW Live)",
+        )
+        cumulative_gex_json = make_cumulative_gex_chart(
+            uw_agg.cumulative_gex, ticker, gamma_flip=uw_gamma_flip,
+        )
+    else:
+        profile_json = make_gex_profile_chart(
+            selected.get("strike"), ticker,
+            spot=safe_float(selected.get("spot"), None) or None,
+            title="Dealer Gamma Profile",
+        )
+        cumulative_gex_json = make_cumulative_gex_chart(
+            selected.get("cumulative"), ticker,
+            gamma_flip=selected.get("gamma_flip"),
+        )
+
+    ai_table_json = make_ai_insights_chart(uw_analysis)
 
     prediction = predict_next_snapshot(history)
     current_strike_chart_json = make_positive_strike_chart(
@@ -758,6 +900,9 @@ def ticker_page(ticker):
         cumulative_gex_json=cumulative_gex_json,
         breakdown_json=breakdown_json,
         profile_json=profile_json,
+        ai_table_json=ai_table_json,
+        uw_analysis=uw_analysis.to_dict() if uw_analysis else None,
+        uw_fetched_at=uw_fetched_at,
         timeline_options=timeline_options,
         selected=selected,
         prediction=prediction,

@@ -390,50 +390,268 @@ def render_gex_breakdown(history: list[dict]):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def main():
-    st.set_page_config(page_title="GEX Dashboard", layout="wide")
-    st.title("GEX Dashboard")
+def render_ai_insights(analysis) -> None:
+    """Render the AI dealer gamma analysis panel in Streamlit."""
+    if analysis is None:
+        st.info("AI analysis unavailable — configure UW_API_KEY.")
+        return
 
-    tickers = find_available_tickers(EXPORT_DIR)
-    ticker = st.sidebar.selectbox("Ticker", options=tickers if tickers else ["SPX"], index=0)
+    bias_color = "#00d97e" if analysis.bias == "bullish" else "#ff4757" if analysis.bias == "bearish" else "#f59e0b"
+
+    col_bias, col_regime = st.columns([1, 2])
+    with col_bias:
+        st.markdown(
+            f"<div style='font-size:1.4rem;font-weight:700;color:{bias_color};font-family:ui-monospace,monospace;'>"
+            f"{analysis.bias.upper()}</div>"
+            f"<div style='font-size:.75rem;color:#6e7681;'>Confidence: {analysis.confidence*100:.0f}%</div>",
+            unsafe_allow_html=True,
+        )
+    with col_regime:
+        st.markdown(
+            f"<div style='font-size:.85rem;color:#c9d1d9;padding-top:.25rem;'>{analysis.regime_detail}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Key levels
+    c1, c2, c3, c4, c5 = st.columns(5)
+    def _kv(col, label, val, color="#c9d1d9"):
+        col.markdown(
+            f"<div style='font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:#6e7681;font-family:ui-monospace,monospace;'>{label}</div>"
+            f"<div style='font-size:1rem;font-weight:600;color:{color};font-family:ui-monospace,monospace;'>{val}</div>",
+            unsafe_allow_html=True,
+        )
+    _kv(c1, "Total GEX", f"{analysis.total_gex_bn_per_pct:+.1f} Bn$",
+        "#00d97e" if analysis.total_gex_bn_per_pct >= 0 else "#ff4757")
+    _kv(c2, "Gamma Flip", f"{analysis.gamma_flip:.0f}" if analysis.gamma_flip else "N/A", "#f59e0b")
+    flip_d = f"{analysis.flip_distance_pct:+.1f}%" if analysis.flip_distance_pct is not None else "N/A"
+    _kv(c3, "Flip Dist", flip_d)
+    _kv(c4, "Call Wall ▲", f"{analysis.call_wall:.0f}" if analysis.call_wall else "N/A", "#00d97e")
+    _kv(c5, "Put Wall ▼", f"{analysis.put_wall:.0f}" if analysis.put_wall else "N/A", "#ff4757")
+
+    st.markdown("---")
+    st.markdown(f"<p style='font-size:.82rem;color:#94a3b8;line-height:1.6;'>{analysis.narrative}</p>",
+                unsafe_allow_html=True)
+
+    # Predictions
+    if analysis.predictions:
+        st.markdown("**Predictions**")
+        for i, p in enumerate(analysis.predictions, 1):
+            st.markdown(f"<div style='font-size:.8rem;margin-bottom:.35rem;'><span style='color:#4dabf7;font-family:ui-monospace,monospace;'>{i}.</span> {p}</div>",
+                        unsafe_allow_html=True)
+
+    # Signal table
+    if analysis.signals:
+        st.markdown("**Signals**")
+        import pandas as _pd
+        sig_rows = [{"Signal": s.label, "Value": s.value, "Interpretation": s.detail, "Tone": s.sentiment}
+                    for s in analysis.signals]
+        st.dataframe(
+            _pd.DataFrame(sig_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def main():
+    st.set_page_config(page_title="GEX · Dealer Intelligence", layout="wide")
+
+    # ── Sidebar ──────────────────────────────────────────────────────────────
+    tickers_from_exports = find_available_tickers(EXPORT_DIR)
+    ticker = st.sidebar.selectbox(
+        "Ticker", options=tickers_from_exports if tickers_from_exports else ["SPX"], index=0
+    )
     custom = st.sidebar.text_input("Or enter ticker manually", value="")
     if custom.strip():
         ticker = custom.strip().upper()
 
-    show_images = st.sidebar.checkbox("Show image snapshots", value=True)
+    uw_enabled = bool(os.environ.get("UW_API_KEY"))
+    if uw_enabled:
+        st.sidebar.success("Unusual Whales: connected")
+    else:
+        st.sidebar.warning("UW_API_KEY not set — showing historical exports only")
+
+    show_images = st.sidebar.checkbox("Show image snapshots", value=False)
     show_heatmap = st.sidebar.checkbox("Show heatmap", value=True)
     show_3d = st.sidebar.checkbox("Show 3D scatter", value=False)
-    positive_gamma_focus = st.sidebar.checkbox("Strike charts: positive gamma focus", value=True)
-    show_predictions = st.sidebar.checkbox("Show GEX predictions", value=True)
+    positive_gamma_focus = st.sidebar.checkbox("Strike focus: positive gamma only", value=True)
+    show_predictions = st.sidebar.checkbox("Show KNN predictions", value=True)
 
+    # ── Live UW data ─────────────────────────────────────────────────────────
+    uw_spot: float | None = None
+    uw_agg = None
+    uw_analysis = None
+
+    if uw_enabled:
+        with st.spinner("Fetching live data from Unusual Whales…"):
+            try:
+                from gex_core.uw_loader import fetch_uw_gex
+                from gex_core.ai_analyst import analyze_dealer_gamma
+                from gex_core.features import estimate_gamma_flip
+
+                uw_spot, uw_agg = fetch_uw_gex(ticker)
+                uw_gamma_flip = estimate_gamma_flip(uw_agg.cumulative_gex)
+                uw_analysis = analyze_dealer_gamma(
+                    ticker=ticker, spot=uw_spot,
+                    gex_by_strike=uw_agg.gex_by_strike,
+                    cumulative_gex=uw_agg.cumulative_gex,
+                    total_gex_bn=uw_agg.total_gex_bn,
+                    gamma_flip=uw_gamma_flip,
+                )
+            except Exception as e:
+                st.sidebar.error(f"UW fetch failed: {e}")
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    hdr_col, spot_col = st.columns([3, 1])
+    with hdr_col:
+        st.title(f"{ticker} · Dealer Gamma Intelligence")
+    with spot_col:
+        if uw_spot:
+            st.metric("Live Spot (UW)", f"${uw_spot:,.2f}")
+
+    # ── Main tabs ─────────────────────────────────────────────────────────────
+    if uw_enabled and uw_agg is not None:
+        tab_ai, tab_profile, tab_timeline, tab_breakdown, tab_cumulative, tab_exports = st.tabs(
+            ["AI Analysis", "Dealer Profile", "GEX Timeline", "Composition", "Cumulative GEX", "Historical Exports"]
+        )
+    else:
+        tab_ai = None
+        tab_profile, tab_timeline, tab_breakdown, tab_cumulative, tab_exports = st.tabs(
+            ["Dealer Profile", "GEX Timeline", "Composition", "Cumulative GEX", "Historical Exports"]
+        )
+
+    # ── AI Analysis tab ───────────────────────────────────────────────────────
+    if tab_ai is not None:
+        with tab_ai:
+            render_ai_insights(uw_analysis)
+
+    # ── Dealer Profile tab ────────────────────────────────────────────────────
+    with tab_profile:
+        if uw_agg is not None:
+            st.caption("Live Unusual Whales dealer gamma profile — green = long gamma, red = short gamma.")
+            render_gex_profile(uw_agg.gex_by_strike, spot=uw_spot)
+        else:
+            st.info("Connect Unusual Whales API to see the live dealer profile.")
+
+    # ── History from exports (for timeline / composition / cumulative) ─────────
     history = build_history_from_exports(ticker)
 
-    if show_predictions and history:
-        render_predictions(ticker, history)
-
-    if history:
-        tab_profile, tab_timeline, tab_breakdown, tab_cumulative = st.tabs(
-            ["Dealer Profile", "GEX Timeline", "GEX Composition", "Cumulative GEX"]
-        )
-        latest = history[-1]
-        with tab_profile:
-            st.caption("Horizontal exposure profile — Periscope style. Green bars = dealer long gamma, red = short.")
-            render_gex_profile(
-                latest.get("strike", pd.Series(dtype=float)),
-                spot=float(latest.get("spot", 0) or 0) or None,
-            )
-        with tab_timeline:
+    with tab_timeline:
+        if history:
             render_gex_timeline(history)
-        with tab_breakdown:
-            if len(history) >= 2:
-                render_gex_breakdown(history)
-            else:
-                st.info("Need at least 2 snapshots for composition chart.")
-        with tab_cumulative:
+        elif uw_agg is not None:
+            st.info("No snapshot history yet — showing live cumulative GEX.")
+            render_cumulative_gex(uw_agg.cumulative_gex, gamma_flip=uw_gamma_flip if uw_enabled else None)
+        else:
+            st.info("No data available.")
+
+    with tab_breakdown:
+        if len(history) >= 2:
+            render_gex_breakdown(history)
+        else:
+            st.info("Need at least 2 historical snapshots for composition chart.")
+
+    with tab_cumulative:
+        if uw_agg is not None:
+            st.caption("Live cumulative GEX from Unusual Whales — zero-crossing = gamma flip.")
+            render_cumulative_gex(uw_agg.cumulative_gex, gamma_flip=uw_gamma_flip if uw_enabled else None)
+        elif history:
+            latest = history[-1]
             render_cumulative_gex(
                 latest.get("cumulative", pd.Series(dtype=float)),
                 gamma_flip=latest.get("gamma_flip"),
             )
+        else:
+            st.info("No data available.")
+
+    # ── Historical exports tab ────────────────────────────────────────────────
+    with tab_exports:
+        if show_predictions and history:
+            render_predictions(ticker, history)
+
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.subheader("Snapshots")
+            imgs = list_img_snapshots(ticker, IMG_DIR)
+            if imgs and show_images:
+                cols = st.columns(2)
+                for i, img_path in enumerate(imgs[:6]):
+                    with cols[i % 2]:
+                        st.image(str(img_path), caption=img_path.name, use_container_width=True)
+            elif not imgs:
+                st.info("No PNG snapshots in img/.")
+            surface_path = latest_file_for(f"{ticker}_gex_surface_*.csv", EXPORT_DIR)
+            if surface_path:
+                st.markdown(f"**Latest surface CSV:** {surface_path.name}")
+
+        with col2:
+            st.subheader("Interactive exports")
+            strike_path = latest_file_for(f"{ticker}_gex_by_strike_*.csv", EXPORT_DIR)
+            exp_path = latest_file_for(f"{ticker}_gex_by_expiration_*.csv", EXPORT_DIR)
+
+            if surface_path:
+                df_surface = load_surface_csv(surface_path)
+                if not df_surface.empty:
+                    min_date = df_surface["expiration"].min().date()
+                    max_date = df_surface["expiration"].max().date()
+                    date_range = st.slider("Expiration range", value=(min_date, max_date),
+                                           min_value=min_date, max_value=max_date)
+                    strikes = sorted(df_surface["strike"].unique())
+                    strike_range = st.slider("Strike range",
+                                             min_value=int(min(strikes)), max_value=int(max(strikes)),
+                                             value=(int(min(strikes)), int(max(strikes))))
+                    df_filtered = df_surface.loc[
+                        (df_surface["expiration"].dt.date >= date_range[0])
+                        & (df_surface["expiration"].dt.date <= date_range[1])
+                        & (df_surface["strike"] >= strike_range[0])
+                        & (df_surface["strike"] <= strike_range[1])
+                    ]
+                    st.metric("Surface total GEX (M$)", f"{df_filtered['GEX'].sum():,.1f}")
+                    if show_heatmap:
+                        st.subheader("GEX surface (heatmap)")
+                        render_surface_heatmap(df_filtered)
+                    if show_3d:
+                        st.subheader("GEX surface (3D)")
+                        render_surface_3d(df_filtered)
+
+            if strike_path:
+                st.subheader("GEX by strike (historical)")
+                df_strike = pd.read_csv(str(strike_path), index_col=0, parse_dates=False)
+                try:
+                    df_strike.index = df_strike.index.astype(float)
+                except Exception:
+                    pass
+                strike_chart = pd.DataFrame({"strike": df_strike.index, "gex": df_strike.iloc[:, 0]})
+                strike_chart["gex"] = pd.to_numeric(strike_chart["gex"], errors="coerce").fillna(0.0)
+                if positive_gamma_focus:
+                    strike_chart = strike_chart.loc[strike_chart["gex"] > 0].sort_values("gex", ascending=False).head(40).sort_values("strike")
+                if strike_chart.empty:
+                    st.info("No positive gamma strikes available.")
+                else:
+                    y_label = "Positive GEX (Bn$)" if positive_gamma_focus else "GEX (Bn$)"
+                    bar_colors = [_ST_GREEN] * len(strike_chart) if positive_gamma_focus else \
+                                 [_ST_GREEN if v >= 0 else _ST_RED for v in strike_chart["gex"]]
+                    fig = go.Figure(go.Bar(
+                        x=strike_chart["strike"], y=strike_chart["gex"],
+                        marker_color=bar_colors, marker_line_width=0,
+                        hovertemplate="Strike %{x:.0f}<br>GEX %{y:.3f} Bn$<extra></extra>",
+                    ))
+                    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.2)", line_width=1)
+                    fig.update_layout(xaxis_title="Strike", yaxis_title=y_label, height=340, **_ST_BASE)
+                    st.plotly_chart(fig, use_container_width=True)
+
+            if exp_path:
+                st.subheader("GEX by expiration (historical)")
+                df_exp = pd.read_csv(str(exp_path), index_col=0)
+                exp_vals = pd.to_numeric(df_exp.iloc[:, 0], errors="coerce").fillna(0.0)
+                exp_colors = [_ST_GREEN if v >= 0 else _ST_RED for v in exp_vals]
+                fig2 = go.Figure(go.Bar(
+                    x=df_exp.index, y=exp_vals,
+                    marker_color=exp_colors, marker_line_width=0,
+                    hovertemplate="Expiry %{x}<br>GEX %{y:.3f} Bn$<extra></extra>",
+                ))
+                fig2.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.2)", line_width=1)
+                fig2.update_layout(xaxis_title="Expiration", yaxis_title="GEX (Bn$)", height=320, **_ST_BASE)
+                st.plotly_chart(fig2, use_container_width=True)
 
     col1, col2 = st.columns([1, 2])
 

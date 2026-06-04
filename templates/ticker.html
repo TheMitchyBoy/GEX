@@ -134,6 +134,14 @@
       <section class="row g-3 mb-3">
         <div class="col-12 col-xxl-8">
 
+          <!-- AI SIGNAL TABLE -->
+          {% if ai_table_json %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <div class="section-label mb-1">Dealer Gamma Signal Table</div>
+            <div id="aiTable"></div>
+          </div>
+          {% endif %}
+
           <!-- PERISCOPE-STYLE PROFILE CHART -->
           <div class="glass rounded-4 p-3 mb-3 profile-card">
             <div class="d-flex justify-content-between align-items-center mb-1">
@@ -240,6 +248,90 @@
         </div>
 
         <div class="col-12 col-xxl-4">
+
+          <!-- AI Insights card (UW live data) -->
+          {% if uw_analysis %}
+          <div class="glass rounded-4 p-3 mb-3" style="border-left:3px solid
+            {% if uw_analysis.bias == 'bullish' %}var(--green)
+            {% elif uw_analysis.bias == 'bearish' %}var(--red)
+            {% else %}var(--amber){% endif %};">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="section-label">AI Dealer Gamma Intelligence</div>
+              <span class="pill {% if uw_analysis.bias == 'bullish' %}pill-long{% elif uw_analysis.bias == 'bearish' %}pill-short{% else %}concept-chip{% endif %}">
+                {{ uw_analysis.bias | upper }} · {{ (uw_analysis.confidence * 100) | int }}%
+              </span>
+            </div>
+            {% if uw_fetched_at %}
+            <div class="muted mb-2" style="font-size:.68rem;font-family:ui-monospace,monospace;">UW live · {{ uw_fetched_at }}</div>
+            {% endif %}
+
+            <!-- Key levels row -->
+            <div class="row g-2 mb-3">
+              <div class="col-4">
+                <div class="metric-label">Dealer GEX</div>
+                <div class="metric-value {% if uw_analysis.total_gex_bn_per_pct >= 0 %}text-success{% else %}text-danger{% endif %}" style="font-size:.95rem;">
+                  {{ '%+.1f'|format(uw_analysis.total_gex_bn_per_pct) }} Bn
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="metric-label">Gamma Flip</div>
+                <div class="metric-value" style="color:var(--amber);font-size:.95rem;">
+                  {{ '%.0f'|format(uw_analysis.gamma_flip) if uw_analysis.gamma_flip else 'N/A' }}
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="metric-label">Flip Distance</div>
+                <div class="metric-value" style="font-size:.95rem;">
+                  {% if uw_analysis.flip_distance_pct is not none %}
+                    {{ '%+.1f'|format(uw_analysis.flip_distance_pct) }}%
+                  {% else %}N/A{% endif %}
+                </div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Call Wall ▲</div>
+                <div class="metric-value" style="color:var(--green);font-size:.95rem;">
+                  {{ '%.0f'|format(uw_analysis.call_wall) if uw_analysis.call_wall else 'N/A' }}
+                </div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Put Wall ▼</div>
+                <div class="metric-value" style="color:var(--red);font-size:.95rem;">
+                  {{ '%.0f'|format(uw_analysis.put_wall) if uw_analysis.put_wall else 'N/A' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- Narrative -->
+            <p style="font-size:.78rem;color:var(--muted);line-height:1.5;margin-bottom:.75rem;">{{ uw_analysis.narrative }}</p>
+
+            <!-- Predictions -->
+            {% if uw_analysis.predictions %}
+            <div class="section-label mb-1">Predictions</div>
+            {% for p in uw_analysis.predictions %}
+            <div class="d-flex gap-2 mb-1" style="font-size:.75rem;">
+              <span style="color:var(--blue);flex-shrink:0;">{{ loop.index }}</span>
+              <span style="color:var(--txt);">{{ p }}</span>
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            <!-- Signal pills -->
+            {% if uw_analysis.signals %}
+            <div class="section-label mt-3 mb-1">Signals</div>
+            <div class="d-flex flex-wrap gap-1">
+              {% for sig in uw_analysis.signals %}
+              <span class="concept-chip" style="
+                border-color:{% if sig.sentiment == 'bullish' %}rgba(0,217,126,.4){% elif sig.sentiment == 'bearish' %}rgba(255,71,87,.4){% elif sig.sentiment == 'caution' %}rgba(245,158,11,.4){% else %}rgba(255,255,255,.12){% endif %};
+                color:{% if sig.sentiment == 'bullish' %}var(--green){% elif sig.sentiment == 'bearish' %}var(--red){% elif sig.sentiment == 'caution' %}var(--amber){% else %}var(--muted){% endif %};"
+                title="{{ sig.detail }}"
+              >{{ sig.label }}: {{ sig.value }}</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          <!-- Historical snapshot metrics -->
           <div class="glass rounded-4 p-3 mb-3">
             <div class="section-label mb-2">Snapshot Metrics</div>
             <div class="muted mb-1" style="font-size:.7rem;font-family:ui-monospace,monospace;">{{ selected.ts_label }}</div>
@@ -395,6 +487,7 @@
         Plotly.react(id, parsed.data, parsed.layout || {}, { responsive: true });
       }
 
+      renderPlot('aiTable', {{ ai_table_json|tojson }});
       renderPlot('profileChart', {{ profile_json|tojson }});
       renderPlot('timeline', {{ timeline_json|tojson }});
       renderPlot('cumulativeGex', {{ cumulative_gex_json|tojson }});

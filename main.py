@@ -23,6 +23,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import timedelta, datetime
@@ -192,6 +193,33 @@ def _run_uw(
     gamma_flip = print_gamma_flip_estimate(cumulative_gex)
     gamma_flip_strike = gamma_flip.get("flip_strike") if isinstance(gamma_flip, dict) else None
 
+    # ── AI Dealer Gamma Analysis ──────────────────────────────────────────
+    try:
+        from gex_core.ai_analyst import analyze_dealer_gamma
+        analysis = analyze_dealer_gamma(
+            ticker=ticker, spot=spot_price,
+            gex_by_strike=gex_by_strike, cumulative_gex=cumulative_gex,
+            total_gex_bn=total_gex_bn, gamma_flip=gamma_flip_strike,
+        )
+        print_section_header("AI Dealer Gamma Analysis")
+        bias_color = ANSI_GREEN if analysis.bias == "bullish" else ANSI_RED if analysis.bias == "bearish" else ANSI_YELLOW
+        print(color_text(f"Bias: {analysis.bias.upper()}  (confidence {analysis.confidence*100:.0f}%)", bias_color))
+        print()
+        print(color_text(analysis.narrative, ANSI_DIM))
+        print()
+        print(color_text("Predictions:", ANSI_BOLD))
+        for i, p in enumerate(analysis.predictions, 1):
+            print(f"  {color_text(str(i), ANSI_CYAN)}. {p}")
+        print()
+        print(color_text("Signals:", ANSI_BOLD))
+        for sig in analysis.signals:
+            icon = color_text("▲", ANSI_GREEN) if sig.sentiment == "bullish" else \
+                   color_text("▼", ANSI_RED) if sig.sentiment == "bearish" else \
+                   color_text("◆", ANSI_YELLOW)
+            print(f"  {icon} {color_text(sig.label, ANSI_BOLD)}: {sig.value}")
+    except Exception:
+        pass
+
     # ── Spot-exposures: OI vs volume breakdown for the tightest ATM window ──
     try:
         spot_df = fetch_uw_spot_exposures(ticker, api_key=uw_api_key)
@@ -321,8 +349,8 @@ def run(
     
     print_banner(ticker)
 
-    # ── Unusual Whales data path ───────────────────────────────────────────────
-    if use_uw:
+    # ── Unusual Whales data path (explicit flag OR env var present) ───────────
+    if use_uw or (not gcs_source and os.environ.get("UW_API_KEY")):
         return _run_uw(
             ticker=ticker,
             show_plots=show_plots,
