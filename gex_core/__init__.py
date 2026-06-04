@@ -1,5 +1,6 @@
 """GEX analytics: data quality, fetch, aggregation, features, and prediction."""
 
+from gex_core.ai_analyst import GammaAnalysis, GammaSignal, analyze_dealer_gamma
 from gex_core.data_quality import DataQualityConfig, DataQualityReport, clean_option_data
 from gex_core.gcs_loader import latest_gcs_url, load_gcs_options
 from gex_core.uw_loader import fetch_uw_gex, fetch_uw_greek_exposure, fetch_uw_spot
@@ -26,6 +27,9 @@ from gex_core.pipeline import (
 from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
 
 __all__ = [
+    "GammaAnalysis",
+    "GammaSignal",
+    "analyze_dealer_gamma",
     "DataQualityConfig",
     "DataQualityReport",
     "EXPORT_DIR",
