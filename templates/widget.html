@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ ticker }} · GEX Widget</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: #07090f;
+        color: #c9d1d9;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      .wrap {
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 10px;
+        padding: 12px;
+        background: rgba(10,14,24,0.95);
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+      }
+      .muted { color: #8b949e; font-size: 12px; }
+      .value { font-weight: 600; }
+      .long { color: #00d97e; }
+      .short { color: #ff4757; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="row">
+        <div class="value">{{ ticker }} · GEX</div>
+        <div class="muted">{{ updated_at }}</div>
+      </div>
+      <div class="row">
+        <div class="muted">Regime</div>
+        <div class="value {{ 'long' if summary.regime and 'LONG' in summary.regime else 'short' }}">{{ summary.regime or 'N/A' }}</div>
+      </div>
+      <div class="row">
+        <div class="muted">Total GEX</div>
+        <div class="value">{{ '%+.3f'|format(summary.total_gex or 0) }} Bn$ / %</div>
+      </div>
+      <div class="row">
+        <div class="muted">Gamma Flip</div>
+        <div class="value">{{ '%.0f'|format(summary.gamma_flip) if summary.gamma_flip is not none else 'N/A' }}</div>
+      </div>
+      <div class="row">
+        <div class="muted">Confluence</div>
+        <div class="value">{{ '%.1f'|format(confluence.score or 0) }} / 100</div>
+      </div>
+    </div>
+  </body>
+</html>
