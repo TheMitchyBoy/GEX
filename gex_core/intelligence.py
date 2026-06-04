@@ -1,0 +1,502 @@
+"""Higher-level intelligence helpers for dashboard and API layers."""
+
+from __future__ import annotations
+
+import math
+import os
+from datetime import datetime, timezone
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import requests
+
+from gex_core.features import safe_float
+from gex_core.history import build_history
+
+
+def _sigmoid(value: float) -> float:
+    return 1.0 / (1.0 + math.exp(-value))
+
+
+def _to_utc(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.strptime(ts, "%Y-%m-%d_%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _selected_index(history: list[dict], selected_ts: str | None) -> int:
+    if not history:
+        return -1
+    if not selected_ts:
+        return len(history) - 1
+    for idx, row in enumerate(history):
+        if row.get("ts") == selected_ts:
+            return idx
+    return len(history) - 1
+
+
+def build_today_regime_snapshot(selected: dict, prediction: dict | None) -> dict:
+    """Build compact regime summary card payload."""
+    confidence = safe_float(prediction.get("confidence"), 0.0) if prediction else 0.0
+    spot = safe_float(selected.get("spot"), 0.0)
+    gamma_flip = safe_float(selected.get("gamma_flip"), 0.0)
+    flip_distance = abs(spot - gamma_flip) if spot > 0 and gamma_flip > 0 else None
+    return {
+        "regime": selected.get("regime", "N/A"),
+        "total_gex": safe_float(selected.get("total_gex"), 0.0),
+        "call_wall": selected.get("call_wall"),
+        "put_wall": selected.get("put_wall"),
+        "gamma_flip": selected.get("gamma_flip"),
+        "spot": selected.get("spot"),
+        "flip_distance_pts": flip_distance,
+        "forecast_confidence": confidence,
+        "predicted_regime": prediction.get("predicted_regime") if prediction else None,
+    }
+
+
+def generate_alerts(
+    history: list[dict],
+    selected: dict,
+    prediction: dict | None = None,
+    wall_shift_threshold: float = 20.0,
+) -> list[dict]:
+    """Compute rule-based alerts for regime and structure changes."""
+    alerts: list[dict] = []
+    idx = _selected_index(history, selected.get("ts"))
+    prev = history[idx - 1] if idx > 0 else None
+
+    if prev:
+        if prev.get("regime") != selected.get("regime"):
+            alerts.append(
+                {
+                    "severity": "high",
+                    "title": "Regime shift detected",
+                    "detail": f"{prev.get('regime', 'N/A')} → {selected.get('regime', 'N/A')}",
+                }
+            )
+
+        for label, field in (("Call wall", "call_wall"), ("Put wall", "put_wall")):
+            cur = safe_float(selected.get(field), 0.0)
+            prv = safe_float(prev.get(field), 0.0)
+            if cur and prv and abs(cur - prv) >= wall_shift_threshold:
+                alerts.append(
+                    {
+                        "severity": "medium",
+                        "title": f"{label} migration",
+                        "detail": f"{prv:.0f} → {cur:.0f} ({cur - prv:+.0f} pts)",
+                    }
+                )
+
+        prev_spot = safe_float(prev.get("spot"), 0.0)
+        prev_flip = safe_float(prev.get("gamma_flip"), 0.0)
+        cur_spot = safe_float(selected.get("spot"), 0.0)
+        cur_flip = safe_float(selected.get("gamma_flip"), 0.0)
+        if prev_spot and prev_flip and cur_spot and cur_flip:
+            prev_side = prev_spot - prev_flip
+            cur_side = cur_spot - cur_flip
+            if prev_side == 0 or cur_side == 0 or (prev_side > 0) != (cur_side > 0):
+                alerts.append(
+                    {
+                        "severity": "high",
+                        "title": "Gamma flip crossing",
+                        "detail": "Spot moved across the estimated flip zone.",
+                    }
+                )
+
+        near_ratio_prev = safe_float(prev.get("near_term_ratio"), 0.0)
+        near_ratio_cur = safe_float(selected.get("near_term_ratio"), 0.0)
+        if (near_ratio_cur - near_ratio_prev) >= 0.12:
+            alerts.append(
+                {
+                    "severity": "medium",
+                    "title": "0DTE / near-term concentration spike",
+                    "detail": f"Near-term ratio increased by {(near_ratio_cur - near_ratio_prev) * 100:.1f} pts.",
+                }
+            )
+
+    if prediction:
+        flip_prob = safe_float(prediction.get("regime_flip_probability"), 0.0)
+        confidence = safe_float(prediction.get("confidence"), 0.0)
+        delta = safe_float(prediction.get("predicted_delta_gex"), 0.0)
+        total = abs(safe_float(selected.get("total_gex"), 0.0))
+        if flip_prob >= 0.55:
+            alerts.append(
+                {
+                    "severity": "high" if flip_prob >= 0.7 else "medium",
+                    "title": "Elevated regime-flip probability",
+                    "detail": f"Model estimates {flip_prob * 100:.1f}% chance of regime transition.",
+                }
+            )
+        if abs(delta) > max(3.0, total * 0.25):
+            alerts.append(
+                {
+                    "severity": "medium",
+                    "title": "Large forecasted ΔGEX",
+                    "detail": f"Projected next change: {delta:+.3f} Bn$ / %. (confidence {confidence * 100:.0f}%)",
+                }
+            )
+
+    severity_rank = {"high": 3, "medium": 2, "low": 1}
+    alerts.sort(key=lambda row: severity_rank.get(row["severity"], 0), reverse=True)
+    return alerts
+
+
+def compute_forecast_probabilities(
+    selected: dict,
+    prediction: dict | None,
+    history: list[dict],
+) -> dict | None:
+    """Estimate probabilistic outcomes around flip and expected move."""
+    if not prediction:
+        return None
+
+    spot = safe_float(selected.get("spot"), 0.0)
+    pred_flip = safe_float(prediction.get("predicted_flip"), safe_float(selected.get("gamma_flip"), 0.0))
+    confidence = safe_float(prediction.get("confidence"), 0.0)
+    flip_prob = safe_float(prediction.get("regime_flip_probability"), 0.0)
+    distance = 0.0 if not spot else (spot - pred_flip) / max(abs(spot), 1.0)
+
+    # Start from spot-vs-flip geometry and blend with model certainty.
+    above_flip = _sigmoid(distance * 24.0)
+    above_flip = (0.65 * above_flip) + (0.35 * (1.0 - (flip_prob * 0.5)))
+    above_flip = min(0.99, max(0.01, above_flip))
+    below_flip = 1.0 - above_flip
+
+    spot_moves: list[float] = []
+    for idx in range(len(history) - 1):
+        s0 = safe_float(history[idx].get("spot"), 0.0)
+        s1 = safe_float(history[idx + 1].get("spot"), 0.0)
+        if s0 > 0 and s1 > 0:
+            spot_moves.append((s1 - s0) / s0)
+    expected_abs_move_pct = float(sum(abs(x) for x in spot_moves) / len(spot_moves)) if spot_moves else 0.0
+    expected_directional_move_pct = safe_float(prediction.get("predicted_delta_gex"), 0.0) * 0.00035
+
+    return {
+        "prob_close_above_flip": above_flip,
+        "prob_close_below_flip": below_flip,
+        "prob_regime_flip": flip_prob,
+        "expected_abs_move_pct": expected_abs_move_pct,
+        "expected_directional_move_pct": expected_directional_move_pct,
+        "confidence": confidence,
+    }
+
+
+def compute_confluence_overlay(
+    selected: dict,
+    prediction: dict | None,
+    flow_overlay: dict | None,
+) -> dict:
+    """Compute confluence score combining structure, model, and flow."""
+    spot = safe_float(selected.get("spot"), 0.0)
+    gamma_flip = safe_float(selected.get("gamma_flip"), 0.0)
+    call_wall = safe_float(selected.get("call_wall"), 0.0)
+    put_wall = safe_float(selected.get("put_wall"), 0.0)
+    total = abs(safe_float(selected.get("total_gex"), 0.0))
+
+    flip_component = 0.0
+    if spot > 0 and gamma_flip > 0:
+        flip_dist_pct = abs(spot - gamma_flip) / spot
+        flip_component = max(0.0, 30.0 * (1.0 - (flip_dist_pct / 0.03)))
+
+    wall_component = 0.0
+    if spot > 0 and call_wall and put_wall:
+        nearest_wall = min(abs(spot - call_wall), abs(spot - put_wall)) / spot
+        wall_component = max(0.0, 20.0 * (1.0 - (nearest_wall / 0.03)))
+
+    model_component = min(20.0, safe_float(prediction.get("confidence"), 0.0) * 20.0) if prediction else 0.0
+
+    flow_component = 0.0
+    if flow_overlay and flow_overlay.get("event_count", 0) > 0:
+        events = int(flow_overlay["event_count"])
+        flow_component += min(12.0, math.log1p(events) * 3.0)
+        pred_delta = safe_float(prediction.get("predicted_delta_gex"), 0.0) if prediction else 0.0
+        flow_delta = safe_float(flow_overlay.get("predicted_flow_delta_gex_bn"), 0.0)
+        if pred_delta == 0 or flow_delta == 0:
+            flow_component += 4.0
+        elif (pred_delta > 0) == (flow_delta > 0):
+            flow_component += 8.0
+        else:
+            flow_component += 2.0
+
+    stability_component = min(10.0, total / 8.0)
+    score = min(100.0, flip_component + wall_component + model_component + flow_component + stability_component)
+    if score >= 75:
+        label = "high"
+    elif score >= 45:
+        label = "medium"
+    else:
+        label = "low"
+
+    return {
+        "score": score,
+        "label": label,
+        "components": [
+            {"name": "Flip proximity", "score": flip_component, "max": 30},
+            {"name": "Wall proximity", "score": wall_component, "max": 20},
+            {"name": "Forecast confidence", "score": model_component, "max": 20},
+            {"name": "Flow alignment", "score": flow_component, "max": 20},
+            {"name": "Regime stability", "score": stability_component, "max": 10},
+        ],
+    }
+
+
+def simulate_spot_scenario(selected: dict, spot_shift_pct: float) -> dict | None:
+    """What-if simulation for spot shift impact on structure."""
+    spot = safe_float(selected.get("spot"), 0.0)
+    if spot <= 0:
+        return None
+    strike = selected.get("strike")
+    if strike is None:
+        return None
+
+    strike_series = pd.Series(strike, dtype=float).sort_index()
+    if strike_series.empty:
+        return None
+
+    new_spot = spot * (1.0 + spot_shift_pct)
+    total = safe_float(selected.get("total_gex"), 0.0)
+    idx = strike_series.index.astype(float).to_numpy()
+    vals = strike_series.to_numpy(dtype=float)
+    local_now = float(np.interp(spot, idx, vals))
+    local_new = float(np.interp(new_spot, idx, vals))
+    projected_total = total + ((local_new - local_now) * 0.65)
+
+    gamma_flip = selected.get("gamma_flip")
+    projected_flip = None
+    if gamma_flip is not None:
+        projected_flip = safe_float(gamma_flip) - (spot_shift_pct * spot * 0.35)
+
+    window = max(spot * 0.02, 1.0)
+    local_band = strike_series.loc[(strike_series.index >= new_spot - window) & (strike_series.index <= new_spot + window)]
+    if len(local_band) < 3:
+        local_band = strike_series
+
+    projected_call = float(local_band.idxmax()) if len(local_band) else None
+    projected_put = float(local_band.idxmin()) if len(local_band) else None
+
+    return {
+        "spot_shift_pct": spot_shift_pct,
+        "new_spot": new_spot,
+        "projected_total_gex": projected_total,
+        "projected_regime": "LONG gamma" if projected_total >= 0 else "SHORT gamma",
+        "projected_flip": projected_flip,
+        "projected_call_wall": projected_call,
+        "projected_put_wall": projected_put,
+    }
+
+
+def build_strategy_assistant(selected: dict, prediction: dict | None, confluence: dict | None) -> list[str]:
+    """Educational strategy guidance tied to regime state."""
+    regime = str(selected.get("regime", "N/A")).upper()
+    confidence = safe_float(prediction.get("confidence"), 0.0) if prediction else 0.0
+    confluence_label = confluence.get("label", "low") if confluence else "low"
+    notes: list[str] = []
+
+    if "LONG" in regime:
+        notes.append("Long-gamma conditions often favor mean-reversion around major walls.")
+        notes.append("Watch for failed breakouts near call wall and support bounces near put wall.")
+    elif "SHORT" in regime:
+        notes.append("Short-gamma conditions often amplify momentum once key walls break.")
+        notes.append("Trend continuation risk increases when spot is far from gamma flip.")
+    else:
+        notes.append("Neutral gamma can produce mixed behavior; prioritize confirmation from flow and breadth.")
+
+    if prediction:
+        notes.append(
+            f"Model confidence is {confidence * 100:.0f}% with projected regime {prediction.get('predicted_regime', 'N/A')}."
+        )
+    if confluence_label == "high":
+        notes.append("High confluence suggests structure + flow are aligned; expect cleaner reactions at key levels.")
+    elif confluence_label == "medium":
+        notes.append("Medium confluence suggests selective setups; avoid forcing trades between major levels.")
+    else:
+        notes.append("Low confluence suggests noisy structure; reduce size and require stronger confirmation.")
+    return notes
+
+
+def build_data_quality_panel(selected: dict, history: list[dict]) -> dict:
+    """Compute data-trust diagnostics for current snapshot."""
+    strike = pd.Series(selected.get("strike"), dtype=float) if selected.get("strike") is not None else pd.Series(dtype=float)
+    contracts = int(len(strike))
+    non_zero_ratio = float((strike != 0).mean()) if contracts else 0.0
+    top5_concentration = float(strike.abs().sort_values(ascending=False).head(5).sum() / max(strike.abs().sum(), 1e-9)) if contracts else 0.0
+
+    gamma_flip = selected.get("gamma_flip")
+    flip_in_range = True
+    if contracts and gamma_flip is not None:
+        low = float(strike.index.min())
+        high = float(strike.index.max())
+        flip_val = safe_float(gamma_flip)
+        flip_in_range = low <= flip_val <= high
+
+    age_minutes = None
+    ts_value = _to_utc(selected.get("ts"))
+    if ts_value is not None:
+        age_minutes = (datetime.now(timezone.utc) - ts_value).total_seconds() / 60.0
+
+    trust_score = 100.0
+    if contracts < 25:
+        trust_score -= 22
+    if non_zero_ratio < 0.7:
+        trust_score -= 12
+    if top5_concentration > 0.7:
+        trust_score -= 12
+    if not flip_in_range:
+        trust_score -= 18
+    if age_minutes is not None and age_minutes > 120:
+        trust_score -= 18
+    if len(history) < 6:
+        trust_score -= 8
+    trust_score = max(0.0, min(100.0, trust_score))
+
+    flags: list[str] = []
+    if contracts < 25:
+        flags.append("Limited strike depth in current export.")
+    if top5_concentration > 0.7:
+        flags.append("Exposure heavily concentrated in a few strikes.")
+    if not flip_in_range:
+        flags.append("Estimated gamma flip lies outside observed strike range.")
+    if age_minutes is not None and age_minutes > 120:
+        flags.append("Snapshot is stale relative to intraday cadence.")
+    if not flags:
+        flags.append("No major quality warnings detected.")
+
+    return {
+        "trust_score": trust_score,
+        "contracts": contracts,
+        "non_zero_ratio": non_zero_ratio,
+        "top5_concentration": top5_concentration,
+        "flip_in_range": flip_in_range,
+        "age_minutes": age_minutes,
+        "history_depth": len(history),
+        "flags": flags,
+    }
+
+
+def build_outcome_panel(history: list[dict], selected_ts: str | None) -> dict | None:
+    """Compute forward outcomes and by-regime realized behavior."""
+    if len(history) < 2:
+        return None
+
+    idx = _selected_index(history, selected_ts)
+    selected = history[idx]
+    selected_spot = safe_float(selected.get("spot"), 0.0)
+
+    horizon_rows = []
+    for horizon in (1, 3):
+        target_idx = idx + horizon
+        if selected_spot <= 0 or target_idx >= len(history):
+            continue
+        target_spot = safe_float(history[target_idx].get("spot"), 0.0)
+        if target_spot <= 0:
+            continue
+        pts = target_spot - selected_spot
+        pct = pts / selected_spot
+        horizon_rows.append(
+            {
+                "horizon": horizon,
+                "spot": target_spot,
+                "move_points": pts,
+                "move_pct": pct,
+            }
+        )
+
+    regime_buckets: dict[str, list[float]] = {}
+    for i in range(len(history) - 1):
+        s0 = safe_float(history[i].get("spot"), 0.0)
+        s1 = safe_float(history[i + 1].get("spot"), 0.0)
+        if s0 <= 0 or s1 <= 0:
+            continue
+        regime = history[i].get("regime", "N/A")
+        regime_buckets.setdefault(regime, []).append((s1 - s0) / s0)
+
+    regime_stats = []
+    for regime, values in regime_buckets.items():
+        if not values:
+            continue
+        positives = sum(1 for v in values if v > 0)
+        regime_stats.append(
+            {
+                "regime": regime,
+                "samples": len(values),
+                "avg_move_pct": sum(values) / len(values),
+                "hit_rate_up": positives / len(values),
+            }
+        )
+
+    return {
+        "horizons": horizon_rows,
+        "regime_stats": regime_stats,
+        "selected_ts": selected.get("ts_label"),
+    }
+
+
+def build_watchlist_rows(tickers: list[str]) -> list[dict]:
+    """Aggregate multi-ticker watchlist metrics."""
+    rows = []
+    for ticker in tickers:
+        history = build_history(ticker)
+        if not history:
+            continue
+        latest = history[-1]
+        confluence = compute_confluence_overlay(latest, prediction=None, flow_overlay=None)
+        total = safe_float(latest.get("total_gex"), 0.0)
+        spot = safe_float(latest.get("spot"), 0.0)
+        gamma_flip = safe_float(latest.get("gamma_flip"), 0.0)
+        call_wall = safe_float(latest.get("call_wall"), 0.0)
+        put_wall = safe_float(latest.get("put_wall"), 0.0)
+        flip_distance_pct = abs(spot - gamma_flip) / spot if spot > 0 and gamma_flip > 0 else None
+        nearest_wall = min(abs(spot - call_wall), abs(spot - put_wall)) if spot > 0 and call_wall and put_wall else None
+        wall_proximity_pct = (nearest_wall / spot) if nearest_wall is not None and spot > 0 else None
+
+        lookback = history[-6:]
+        if len(lookback) > 1:
+            totals = [safe_float(x.get("total_gex"), 0.0) for x in lookback]
+            mean_abs = sum(abs(x) for x in totals) / len(totals)
+            variance = sum((x - (sum(totals) / len(totals))) ** 2 for x in totals) / len(totals)
+            std_dev = math.sqrt(variance)
+            stability = 1.0 - min(1.0, std_dev / max(mean_abs, 1.0))
+        else:
+            stability = 0.5
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "history_count": len(history),
+                "latest_ts": latest.get("ts_label", "N/A"),
+                "total_gex": total,
+                "regime": latest.get("regime", "N/A"),
+                "flip_distance_pct": flip_distance_pct,
+                "wall_proximity_pct": wall_proximity_pct,
+                "regime_stability": stability,
+                "confluence_score": confluence["score"],
+            }
+        )
+
+    return sorted(rows, key=lambda row: abs(row.get("total_gex", 0.0)), reverse=True)
+
+
+def dispatch_alerts_to_webhook(ticker: str, alerts: list[dict]) -> tuple[bool, str]:
+    """Dispatch alerts to webhook if configured."""
+    url = os.environ.get("GEX_ALERT_WEBHOOK_URL")
+    if not url:
+        return False, "GEX_ALERT_WEBHOOK_URL not configured."
+    if not alerts:
+        return False, "No alerts to dispatch."
+    payload = {
+        "ticker": ticker,
+        "alert_count": len(alerts),
+        "alerts": alerts,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=7)
+        if 200 <= resp.status_code < 300:
+            return True, f"Dispatched {len(alerts)} alerts."
+        return False, f"Webhook returned status {resp.status_code}."
+    except requests.RequestException as exc:
+        return False, f"Webhook error: {exc}"

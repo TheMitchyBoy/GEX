@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
 from gex_core.charts import (
@@ -23,6 +23,18 @@ from gex_core.charts import (
 )
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import build_history, get_latest_ts, list_tickers, list_timestamps, ts_label
+from gex_core.intelligence import (
+    build_data_quality_panel,
+    build_outcome_panel,
+    build_strategy_assistant,
+    build_today_regime_snapshot,
+    build_watchlist_rows,
+    compute_confluence_overlay,
+    compute_forecast_probabilities,
+    dispatch_alerts_to_webhook,
+    generate_alerts,
+    simulate_spot_scenario,
+)
 from gex_core.predict import (
     apply_flow_to_prediction,
     load_flow_predictions,
@@ -132,20 +144,74 @@ def _safe_similar_setups(history: list) -> list:
         return []
 
 
+def _prediction_public_view(prediction: dict | None) -> dict | None:
+    if not prediction:
+        return None
+    return {
+        k: v
+        for k, v in prediction.items()
+        if k not in {"predicted_strike", "knn_strike", "flow_strike"}
+    }
+
+
+def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
+    history = build_history(ticker)
+    if not history:
+        return {
+            "ticker": ticker,
+            "has_history": False,
+            "summary": None,
+            "alerts": [],
+            "strategy_notes": [],
+            "watchlist": [],
+        }
+    selected = _select_snapshot(history, selected_ts)
+    prediction = predict_next_snapshot(history)
+    flow_overlay = None
+    spot_for_flow = safe_float(selected.get("spot"), 0.0) or 4800.0
+    try:
+        flow_overlay = load_flow_predictions(FLOW_FEED_PATH, spot=float(spot_for_flow))
+        prediction = apply_flow_to_prediction(prediction, flow_overlay)
+    except Exception:
+        logger.exception("Flow overlay failed for %s", ticker)
+    confluence = compute_confluence_overlay(selected, prediction, flow_overlay)
+    today = build_today_regime_snapshot(selected, prediction)
+    alerts = generate_alerts(history, selected, prediction)
+    probs = compute_forecast_probabilities(selected, prediction, history)
+    strategy_notes = build_strategy_assistant(selected, prediction, confluence)
+    return {
+        "ticker": ticker,
+        "has_history": True,
+        "selected_ts": selected.get("ts"),
+        "summary": today,
+        "prediction": _prediction_public_view(prediction),
+        "probabilities": probs,
+        "confluence": confluence,
+        "alerts": alerts,
+        "strategy_notes": strategy_notes,
+        "data_quality": build_data_quality_panel(selected, history),
+        "outcomes": build_outcome_panel(history, selected.get("ts")),
+        "watchlist": build_watchlist_rows([ticker]),
+    }
+
+
 @APP.route("/")
 def index():
     tickers = find_available_tickers(EXPORT_DIR)
+    watchlist_rows = build_watchlist_rows(tickers)
     ticker_cards = []
-    for ticker in tickers:
-        history = build_history(ticker)
-        latest = history[-1] if history else None
+    for row in watchlist_rows:
         ticker_cards.append(
             {
-                "ticker": ticker,
-                "history_count": len(history),
-                "latest_ts": latest["ts_label"] if latest else "N/A",
-                "total_gex": f"{latest['total_gex']:.3f}" if latest else "N/A",
-                "regime": latest["regime"] if latest else "N/A",
+                **row,
+                "total_gex_text": f"{row['total_gex']:.3f}",
+                "flip_distance_text": (
+                    f"{row['flip_distance_pct'] * 100:.2f}%"
+                    if row.get("flip_distance_pct") is not None
+                    else "N/A"
+                ),
+                "confluence_text": f"{row['confluence_score']:.1f}",
+                "stability_text": f"{row['regime_stability'] * 100:.0f}%",
             }
         )
     return render_template("index.html", tickers=ticker_cards)
@@ -218,6 +284,19 @@ def ticker_page(ticker):
             data_source="Unusual Whales (live)" if uw_entry else "No data",
             spot_distance_to_flip=None,
             ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
+            today_regime=build_today_regime_snapshot(selected, None),
+            alert_feed=[],
+            forecast_probs=None,
+            confluence_overlay=compute_confluence_overlay(selected, None, None),
+            strategy_notes=build_strategy_assistant(selected, None, None),
+            data_quality=build_data_quality_panel(selected, history),
+            outcome_panel=None,
+            scenario=None,
+            scenario_pct=0.0,
+            replay_index=0,
+            prev_ts=None,
+            next_ts=None,
+            alert_dispatch_status=None,
         )
 
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
@@ -228,8 +307,12 @@ def ticker_page(ticker):
     requested_ts = request.args.get("ts")
     selected = _select_snapshot(history, requested_ts)
     timestamps = list_timestamps(ticker)
+    replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
+    prev_ts = timestamps[replay_index - 1] if replay_index > 0 else None
+    next_ts = timestamps[replay_index + 1] if replay_index + 1 < len(timestamps) else None
 
-    csv_spot = safe_float(selected.get("spot"), None) or (uw_spot if uw_spot else None)
+    selected_spot = safe_float(selected.get("spot"), 0.0)
+    csv_spot = selected_spot if selected_spot > 0 else (uw_spot if uw_spot else None)
     profile_json = make_gex_profile_chart(
         selected.get("strike"),
         ticker,
@@ -254,7 +337,7 @@ def ticker_page(ticker):
     except Exception:
         logger.exception("Prediction failed for %s", ticker)
 
-    spot_for_flow = csv_spot or safe_float(selected.get("spot"), 4800.0)
+    spot_for_flow = csv_spot or selected_spot or 4800.0
     try:
         flow_overlay = load_flow_predictions(FLOW_FEED_PATH, spot=float(spot_for_flow))
         prediction = apply_flow_to_prediction(prediction, flow_overlay)
@@ -276,9 +359,6 @@ def ticker_page(ticker):
         "Current Position Focus (Positive GEX)",
     )
     predicted_strike_chart_json = None
-    knn_strike = None
-    flow_strike = None
-    combined_strike = None
     if prediction:
         knn_strike = prediction.get("knn_strike") or prediction.get("predicted_strike")
         flow_strike = prediction.get("flow_strike")
@@ -291,17 +371,32 @@ def ticker_page(ticker):
                 ticker=ticker,
                 spot=csv_spot,
             )
-        prediction = {
-            k: v
-            for k, v in prediction.items()
-            if k not in {"predicted_strike", "knn_strike", "flow_strike"}
-        }
+
+    prediction_raw = prediction
+    prediction = _prediction_public_view(prediction_raw)
+
+    today_regime = build_today_regime_snapshot(selected, prediction_raw)
+    alert_feed = generate_alerts(history, selected, prediction_raw)
+    forecast_probs = compute_forecast_probabilities(selected, prediction_raw, history)
+    confluence_overlay = compute_confluence_overlay(selected, prediction_raw, flow_overlay)
+    strategy_notes = build_strategy_assistant(selected, prediction_raw, confluence_overlay)
+    data_quality = build_data_quality_panel(selected, history)
+    outcome_panel = build_outcome_panel(history, selected.get("ts"))
+
+    scenario_pct = safe_float(request.args.get("scenario_pct"), 0.0)
+    scenario = simulate_spot_scenario(selected, scenario_pct / 100.0) if scenario_pct else None
+
+    alert_dispatch_status = None
+    if request.args.get("dispatch_alerts") == "1":
+        dispatched, message = dispatch_alerts_to_webhook(ticker, alert_feed)
+        alert_dispatch_status = {"ok": dispatched, "message": message}
 
     latest_raw = get_latest_ts(ticker)
     csv_source = selected.get("data_source") or "unusual_whales"
     data_source = f"Unusual Whales CSV · {selected['ts_label']} ({csv_source})"
     if uw_agg is not None:
         data_source += " · live API"
+
     spot_dist = None
     if selected.get("spot") and selected.get("gamma_flip"):
         spot_dist = abs(float(selected["spot"]) - float(selected["gamma_flip"]))
@@ -331,6 +426,19 @@ def ticker_page(ticker):
         data_source=data_source,
         spot_distance_to_flip=spot_dist,
         ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
+        today_regime=today_regime,
+        alert_feed=alert_feed,
+        forecast_probs=forecast_probs,
+        confluence_overlay=confluence_overlay,
+        strategy_notes=strategy_notes,
+        data_quality=data_quality,
+        outcome_panel=outcome_panel,
+        scenario=scenario,
+        scenario_pct=scenario_pct,
+        replay_index=replay_index,
+        prev_ts=prev_ts,
+        next_ts=next_ts,
+        alert_dispatch_status=alert_dispatch_status,
     )
 
 
@@ -345,6 +453,50 @@ def bootstrap_ticker_history(ticker):
 
     status = "ok" if ok else "failed"
     return redirect(url_for("ticker_page", ticker=ticker, bootstrap=status))
+
+
+@APP.get("/api/latest-summary")
+def api_latest_summary():
+    ticker = request.args.get("ticker", "SPX").upper()
+    payload = _ticker_api_payload(ticker, request.args.get("ts"))
+    return jsonify(payload)
+
+
+@APP.get("/api/signals")
+def api_signals():
+    ticker = request.args.get("ticker", "SPX").upper()
+    payload = _ticker_api_payload(ticker, request.args.get("ts"))
+    return jsonify(
+        {
+            "ticker": ticker,
+            "selected_ts": payload.get("selected_ts"),
+            "alerts": payload.get("alerts", []),
+            "strategy_notes": payload.get("strategy_notes", []),
+            "confluence": payload.get("confluence"),
+            "probabilities": payload.get("probabilities"),
+        }
+    )
+
+
+@APP.get("/api/watchlist")
+def api_watchlist():
+    tickers = find_available_tickers(EXPORT_DIR)
+    return jsonify({"rows": build_watchlist_rows(tickers), "count": len(tickers)})
+
+
+@APP.get("/widget/<ticker>")
+def ticker_widget(ticker: str):
+    ticker = ticker.upper()
+    payload = _ticker_api_payload(ticker, request.args.get("ts"))
+    summary = payload.get("summary") or {}
+    confluence = payload.get("confluence") or {"score": 0.0, "label": "low"}
+    return render_template(
+        "widget.html",
+        ticker=ticker,
+        summary=summary,
+        confluence=confluence,
+        updated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+    )
 
 
 @APP.route("/exports/<path:filename>")

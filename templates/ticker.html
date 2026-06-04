@@ -64,6 +64,16 @@
       .chart-lg > div {
         min-height: 560px;
       }
+      .alert-chip {
+        border-radius: 999px;
+        padding: .1rem .45rem;
+        font-size: .65rem;
+        letter-spacing: .04em;
+        font-family: ui-monospace, monospace;
+      }
+      .alert-high { color: #fecaca; background: rgba(185,28,28,.25); border: 1px solid rgba(248,113,113,.45); }
+      .alert-medium { color: #fde68a; background: rgba(217,119,6,.25); border: 1px solid rgba(251,191,36,.45); }
+      .alert-low { color: #bfdbfe; background: rgba(29,78,216,.2); border: 1px solid rgba(96,165,250,.45); }
     </style>
   </head>
   <body>
@@ -89,6 +99,11 @@
       {% elif bootstrap_status == "error" %}
       <div class="alert alert-danger" role="alert">Snapshot refresh encountered an internal error before execution.</div>
       {% endif %}
+      {% if alert_dispatch_status %}
+      <div class="alert {{ 'alert-success' if alert_dispatch_status.ok else 'alert-warning' }}" role="alert">
+        {{ alert_dispatch_status.message }}
+      </div>
+      {% endif %}
 
       {% if not has_history %}
       <div class="alert alert-warning" role="alert">
@@ -108,6 +123,18 @@
           </select>
           <span class="small text-secondary">Charts and metrics use this Unusual Whales CSV export.</span>
         </form>
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+          {% if prev_ts %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker, ts=prev_ts) }}">◀ Previous</a>
+          {% endif %}
+          {% if next_ts %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker, ts=next_ts) }}">Next ▶</a>
+          {% endif %}
+          <button id="replayToggle" class="btn btn-sm btn-outline-info" type="button">Auto Replay</button>
+          <span class="small text-secondary">Step {{ replay_index + 1 }} / {{ timestamps|length }}</span>
+          <a class="btn btn-sm btn-outline-secondary ms-auto" href="{{ url_for('api_latest_summary') }}?ticker={{ ticker }}">API summary</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_widget', ticker=ticker) }}">Widget</a>
+        </div>
       </div>
       {% endif %}
 
@@ -145,6 +172,50 @@
           </div>
           {% endif %}
 
+          {% if outcome_panel %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h5 mb-2">What happened next?</h2>
+            <p class="small text-secondary mb-2">Forward outcomes from the selected setup and historical behavior by regime.</p>
+            {% if outcome_panel.horizons %}
+            <div class="table-responsive mb-2">
+              <table class="table table-dark table-sm mb-0">
+                <thead>
+                  <tr><th>Horizon</th><th class="text-end">Move (pts)</th><th class="text-end">Move (%)</th></tr>
+                </thead>
+                <tbody>
+                  {% for row in outcome_panel.horizons %}
+                  <tr>
+                    <td>+{{ row.horizon }} snapshot{{ '' if row.horizon == 1 else 's' }}</td>
+                    <td class="text-end {{ 'text-success' if row.move_points >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.move_points) }}</td>
+                    <td class="text-end {{ 'text-success' if row.move_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.move_pct * 100) }}%</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% if outcome_panel.regime_stats %}
+            <div class="table-responsive">
+              <table class="table table-dark table-sm mb-0">
+                <thead>
+                  <tr><th>Regime</th><th class="text-end">Samples</th><th class="text-end">Avg next move</th><th class="text-end">Up hit-rate</th></tr>
+                </thead>
+                <tbody>
+                  {% for row in outcome_panel.regime_stats %}
+                  <tr>
+                    <td>{{ row.regime }}</td>
+                    <td class="text-end">{{ row.samples }}</td>
+                    <td class="text-end {{ 'text-success' if row.avg_move_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.avg_move_pct * 100) }}%</td>
+                    <td class="text-end">{{ '%.1f'|format(row.hit_rate_up * 100) }}%</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
           <div class="glass rounded-4 p-3">
             <h2 class="h5 mb-2">Positive GEX Focus</h2>
             {% if current_strike_chart_json %}
@@ -179,33 +250,39 @@
         <div class="col-12 col-xl-4">
           <div class="glass rounded-4 p-3 mb-3">
             <div class="d-flex justify-content-between align-items-center mb-2">
-              <h2 class="h6 mb-0">Current Snapshot</h2>
-              {% if selected and selected.regime %}
-              <span class="pill {{ 'pill-long' if 'LONG' in selected.regime else 'pill-short' }}">{{ selected.regime }}</span>
+              <h2 class="h6 mb-0">Today's Regime</h2>
+              {% if today_regime and today_regime.regime %}
+              <span class="pill {{ 'pill-long' if 'LONG' in today_regime.regime else 'pill-short' }}">{{ today_regime.regime }}</span>
               {% endif %}
             </div>
             <div class="small text-secondary mb-2 mono">{{ selected.ts_label }}</div>
             <div class="row g-2">
               <div class="col-6">
                 <div class="metric-label">Total GEX</div>
-                <div class="metric-value {% if selected.total_gex >= 0 %}text-success{% else %}text-danger{% endif %}">{{ '%.3f'|format(selected.total_gex) }}</div>
+                <div class="metric-value {% if today_regime.total_gex >= 0 %}text-success{% else %}text-danger{% endif %}">{{ '%.3f'|format(today_regime.total_gex) }}</div>
               </div>
               <div class="col-6">
                 <div class="metric-label">Gamma Flip</div>
-                <div class="metric-value">{{ '%.0f'|format(selected.gamma_flip) if selected.gamma_flip is not none else 'N/A' }}</div>
+                <div class="metric-value">{{ '%.0f'|format(today_regime.gamma_flip) if today_regime.gamma_flip is not none else 'N/A' }}</div>
               </div>
               <div class="col-6">
                 <div class="metric-label">Call Wall</div>
-                <div class="metric-value text-success">{{ '%.0f'|format(selected.call_wall) if selected.call_wall is not none else 'N/A' }}</div>
+                <div class="metric-value text-success">{{ '%.0f'|format(today_regime.call_wall) if today_regime.call_wall is not none else 'N/A' }}</div>
               </div>
               <div class="col-6">
                 <div class="metric-label">Put Wall</div>
-                <div class="metric-value text-danger">{{ '%.0f'|format(selected.put_wall) if selected.put_wall is not none else 'N/A' }}</div>
+                <div class="metric-value text-danger">{{ '%.0f'|format(today_regime.put_wall) if today_regime.put_wall is not none else 'N/A' }}</div>
               </div>
               {% if spot_distance_to_flip is not none %}
               <div class="col-12">
                 <div class="metric-label">Spot → Flip Distance</div>
                 <div class="metric-value">{{ '%.0f'|format(spot_distance_to_flip) }} pts</div>
+              </div>
+              {% endif %}
+              {% if today_regime.forecast_confidence %}
+              <div class="col-12">
+                <div class="metric-label">Forecast Confidence</div>
+                <div class="metric-value">{{ '%.1f'|format(today_regime.forecast_confidence * 100) }}%</div>
               </div>
               {% endif %}
             </div>
@@ -235,9 +312,94 @@
             {% endif %}
             <div class="metric-label">Regime Flip Probability</div>
             <div class="metric-value">{{ '%.1f'|format(prediction.regime_flip_probability * 100) }}%</div>
+            {% if forecast_probs %}
+            <div class="metric-label mt-2">Prob. close above flip</div>
+            <div class="metric-value">{{ '%.1f'|format(forecast_probs.prob_close_above_flip * 100) }}%</div>
+            <div class="metric-label">Expected absolute move</div>
+            <div class="metric-value">{{ '%.2f'|format(forecast_probs.expected_abs_move_pct * 100) }}%</div>
+            {% endif %}
             {% else %}
             <div class="text-secondary">Need at least 4 CSV snapshots to forecast.</div>
             {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h2 class="h6 mb-0">Confluence Overlay</h2>
+              <span class="pill {{ 'pill-long' if confluence_overlay.label == 'high' else 'pill-short' if confluence_overlay.label == 'low' else '' }}">{{ confluence_overlay.label|upper }}</span>
+            </div>
+            <div class="metric-label">Confluence Score</div>
+            <div class="metric-value mb-2">{{ '%.1f'|format(confluence_overlay.score) }} / 100</div>
+            <ul class="list-unstyled small mono mb-0">
+              {% for component in confluence_overlay.components %}
+              <li class="mb-1">{{ component.name }}: <span class="text-secondary">{{ '%.1f'|format(component.score) }}/{{ component.max }}</span></li>
+              {% endfor %}
+            </ul>
+          </div>
+
+          <div class="glass rounded-4 p-3 mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h2 class="h6 mb-0">Alert Engine</h2>
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker, ts=selected_ts, dispatch_alerts=1) }}">Dispatch</a>
+            </div>
+            {% if alert_feed %}
+            <ul class="list-unstyled mb-0">
+              {% for alert in alert_feed %}
+              <li class="mb-2">
+                <div class="d-flex align-items-center gap-2 mb-1">
+                  <span class="alert-chip alert-{{ alert.severity }}">{{ alert.severity|upper }}</span>
+                  <strong class="small">{{ alert.title }}</strong>
+                </div>
+                <div class="small text-secondary">{{ alert.detail }}</div>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <div class="text-secondary">No active alert conditions for this snapshot.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h6 mb-2">Scenario Simulator</h2>
+            <form method="get" class="row g-2 align-items-center">
+              <input type="hidden" name="ts" value="{{ selected_ts }}">
+              <div class="col-7">
+                <input class="form-control form-control-sm mono" type="number" step="0.1" name="scenario_pct" value="{{ scenario_pct }}" placeholder="Spot shift %">
+              </div>
+              <div class="col-5 d-grid">
+                <button class="btn btn-sm btn-outline-light" type="submit">Simulate</button>
+              </div>
+            </form>
+            {% if scenario %}
+            <div class="small text-secondary mt-2 mono">Spot {{ '%+.2f'|format(scenario.spot_shift_pct) }}% → {{ '%.2f'|format(scenario.new_spot) }}</div>
+            <div class="metric-label mt-2">Projected regime</div>
+            <div class="metric-value">{{ scenario.projected_regime }}</div>
+            <div class="metric-label">Projected total GEX</div>
+            <div class="metric-value">{{ '%+.3f'|format(scenario.projected_total_gex) }} Bn$ / %</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h6 mb-2">Strategy Assistant (educational)</h2>
+            <ul class="small mb-0">
+              {% for note in strategy_notes %}
+              <li class="mb-1">{{ note }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h6 mb-2">Data Quality / Trust</h2>
+            <div class="metric-label">Trust score</div>
+            <div class="metric-value mb-2">{{ '%.1f'|format(data_quality.trust_score) }} / 100</div>
+            <div class="small text-secondary mono mb-2">
+              Contracts {{ data_quality.contracts }} · Non-zero {{ '%.1f'|format(data_quality.non_zero_ratio * 100) }}%
+            </div>
+            <ul class="small mb-0">
+              {% for flag in data_quality.flags %}
+              <li>{{ flag }}</li>
+              {% endfor %}
+            </ul>
           </div>
 
           {% if similar_setups %}
@@ -267,8 +429,7 @@
             <ul class="list-unstyled small mono mb-0">
               {% for sig in prediction.flow_top_signals[:6] %}
               <li class="mb-2">
-                Strike {{ sig.strike }} · {{ sig.direction }}
-                · score {{ '%.2f'|format(sig.score) }}
+                Strike {{ sig.strike }} · {{ sig.direction }} · score {{ '%.2f'|format(sig.score) }}
               </li>
               {% endfor %}
             </ul>
@@ -292,6 +453,28 @@
       renderPlot("timelineChart", {{ timeline_chart_json|tojson }});
       renderPlot("cumulativeChart", {{ cumulative_chart_json|tojson }});
       renderPlot("aiInsights", {{ ai_insights_json|tojson }});
+
+      const replayTimestamps = {{ timestamps|tojson }};
+      let replayIndex = {{ replay_index|tojson }};
+      let replayTimer = null;
+      const replayBtn = document.getElementById("replayToggle");
+      replayBtn?.addEventListener("click", () => {
+        if (!replayTimestamps || replayTimestamps.length < 2) return;
+        if (replayTimer) {
+          clearInterval(replayTimer);
+          replayTimer = null;
+          replayBtn.textContent = "Auto Replay";
+          return;
+        }
+        replayBtn.textContent = "Stop Replay";
+        replayTimer = setInterval(() => {
+          replayIndex = (replayIndex + 1) % replayTimestamps.length;
+          const ts = replayTimestamps[replayIndex];
+          const url = new URL(window.location.href);
+          url.searchParams.set("ts", ts);
+          window.location.href = url.toString();
+        }, 2000);
+      });
     </script>
   </body>
 </html>

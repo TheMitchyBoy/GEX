@@ -72,6 +72,7 @@
         border-color: rgba(96,165,250,0.6);
         box-shadow: 0 0 0 0.2rem rgba(59,130,246,0.16);
       }
+      .mono { font-family: ui-monospace, monospace; }
     </style>
   </head>
   <body>
@@ -115,7 +116,9 @@
               </div>
               <div class="small muted">Snapshots: {{ row.history_count }}</div>
               <div class="small muted mb-2">Latest: {{ row.latest_ts }}</div>
-              <div class="mb-3"><strong>Total GEX:</strong> {{ row.total_gex }}</div>
+              <div class="mb-1"><strong>Total GEX:</strong> {{ row.total_gex_text }}</div>
+              <div class="small muted mb-2">Flip distance: {{ row.flip_distance_text }}</div>
+              <div class="small muted mb-3">Confluence {{ row.confluence_text }} · Stability {{ row.stability_text }}</div>
               <a class="btn btn-primary mt-auto w-100" href="{{ url_for('ticker_page', ticker=row.ticker) }}">Open {{ row.ticker }} Experience</a>
             </div>
           </article>
@@ -129,6 +132,39 @@
           </div>
         {% endif %}
       </section>
+      {% if tickers %}
+      <section class="glass rounded-4 p-3 p-lg-4 mt-4">
+        <h2 class="h5 mb-3">Multi-ticker watchlist</h2>
+        <div class="table-responsive">
+          <table class="table table-dark table-striped table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Regime</th>
+                <th class="text-end">Net GEX</th>
+                <th class="text-end">Flip distance</th>
+                <th class="text-end">Confluence</th>
+                <th class="text-end">Stability</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in tickers %}
+              <tr>
+                <td class="fw-semibold">{{ row.ticker }}</td>
+                <td>{{ row.regime }}</td>
+                <td class="text-end mono">{{ row.total_gex_text }}</td>
+                <td class="text-end mono">{{ row.flip_distance_text }}</td>
+                <td class="text-end mono">{{ row.confluence_text }}</td>
+                <td class="text-end mono">{{ row.stability_text }}</td>
+                <td class="text-end"><a class="btn btn-sm btn-outline-light" href="{{ url_for('ticker_page', ticker=row.ticker) }}">Open</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {% endif %}
     </main>
 
     <script>
