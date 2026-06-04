@@ -387,6 +387,8 @@ def ticker_page(ticker):
             timeline_json=None,
             timeline_options=[],
             selected=selected,
+            current_gamma=selected,
+            viewing_historical=False,
             prediction=None,
             similar_setups=[],
             flow_overlay=None,
@@ -441,6 +443,9 @@ def ticker_page(ticker):
         for row in history
     ]
 
+    current_gamma = history[-1]
+    viewing_historical = selected["ts"] != current_gamma["ts"]
+
     return render_template(
         "ticker.html",
         ticker=ticker,
@@ -450,6 +455,8 @@ def ticker_page(ticker):
         timeline_json=timeline_json,
         timeline_options=timeline_options,
         selected=selected,
+        current_gamma=current_gamma,
+        viewing_historical=viewing_historical,
         prediction=prediction,
         similar_setups=similar,
         flow_overlay=flow_overlay,

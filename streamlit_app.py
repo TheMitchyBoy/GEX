@@ -125,43 +125,83 @@ def list_img_snapshots(ticker: str, img_dir: Path):
     return sorted(img_dir.glob(f"{ticker}_*.*"), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def render_predictions(ticker: str, history: list[dict]):
-    st.subheader("GEX Change Prediction")
+def render_gamma_hero(history: list[dict]):
+    """Primary focus: current gamma and future gamma prediction side by side."""
+    if not history:
+        st.info("No GEX history for this ticker.")
+        return
+
+    current = history[-1]
+    pred = predict_next_snapshot(history) if len(history) >= 4 else None
+
+    st.markdown(f"### {current.get('ticker', '')} · Gamma Outlook")
+    col_current, col_future = st.columns(2)
+
+    with col_current:
+        st.markdown("#### Current Gamma")
+        regime = current["regime"]
+        st.metric(
+            label=f"{regime} · {current['ts_label']}",
+            value=f"{current['total_gex']:+.3f} Bn$ / %",
+            delta=None,
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Gamma Flip", f"{current['gamma_flip']:.0f}" if current.get("gamma_flip") else "N/A")
+        c2.metric("Call Wall", f"{current['call_wall']:.0f}" if current.get("call_wall") else "N/A")
+        c3.metric("Put Wall", f"{current['put_wall']:.0f}" if current.get("put_wall") else "N/A")
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Near-term", f"{current['near_term_ratio'] * 100:.0f}%")
+        c5.metric("+GEX", f"{current['pos_gex']:.2f}")
+        c6.metric("−GEX", f"{current['neg_gex']:.2f}")
+
+    with col_future:
+        st.markdown("#### Future Gamma · Next Snapshot")
+        if pred:
+            st.metric(
+                label=pred["predicted_regime"],
+                value=f"{pred['predicted_total_gex']:+.3f} Bn$ / %",
+                delta=f"{pred['predicted_delta_gex']:+.3f} ΔGEX",
+            )
+            f1, f2, f3 = st.columns(3)
+            f1.metric("Pred. Flip", f"{pred['predicted_flip']:.0f}")
+            f2.metric("Confidence", f"{pred['confidence'] * 100:.0f}%")
+            f3.metric("Regime Flip", f"{pred['regime_flip_probability'] * 100:.0f}%")
+            spot = float(current.get("spot", 4800))
+            flow = load_flow_predictions(FLOW_FEED_PATH, spot=spot)
+            if flow["event_count"] > 0:
+                st.caption(
+                    f"Flow overlay: {flow['predicted_flow_delta_gex_bn']:+.4f} Bn$ · "
+                    f"combined {pred['predicted_total_gex'] + flow['predicted_flow_delta_gex_bn']:.3f} Bn$"
+                )
+        else:
+            st.info("Need at least 4 snapshots to forecast the next gamma update.")
+
+    st.divider()
+
+
+def render_predictions_detail(ticker: str, history: list[dict]):
+    """Secondary prediction details below the hero."""
     if len(history) < 4:
-        st.info("Need at least 4 snapshots for prediction.")
         return
 
     pred = predict_next_snapshot(history)
     if not pred:
-        st.warning("Could not generate prediction.")
         return
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Predicted ΔGEX", f"{pred['predicted_delta_gex']:+.3f} Bn$")
-    c2.metric("Predicted Total GEX", f"{pred['predicted_total_gex']:.3f} Bn$")
-    c3.metric("Regime Flip Prob", f"{pred['regime_flip_probability'] * 100:.1f}%")
-    c4.metric("Confidence", f"{pred['confidence'] * 100:.1f}%")
-
-    st.caption(f"Predicted regime: **{pred['predicted_regime']}** · flip: {pred['predicted_flip']:.2f}")
-
-    spot = float(history[-1].get("spot", 4800))
-    flow = load_flow_predictions(FLOW_FEED_PATH, spot=spot)
-    if flow["event_count"] > 0:
-        st.markdown("**Live flow overlay**")
-        fc1, fc2 = st.columns(2)
-        fc1.metric("Flow ΔGEX", f"{flow['predicted_flow_delta_gex_bn']:+.4f} Bn$")
-        fc2.metric("Combined forecast", f"{pred['predicted_total_gex'] + flow['predicted_flow_delta_gex_bn']:.3f} Bn$")
-        if flow["top_signals"]:
-            sig_df = pd.DataFrame(flow["top_signals"])
-            st.dataframe(sig_df[["strike", "direction", "score", "recent_gex"]], use_container_width=True)
 
     similar = similar_setups(history, top_n=5)
     if similar:
-        st.markdown("**Similar historical setups**")
-        sim_df = pd.DataFrame(similar)[
-            ["snapshot", "similarity", "total_gex", "next_delta_gex", "next_regime"]
-        ]
-        st.dataframe(sim_df, use_container_width=True)
+        with st.expander("Similar historical setups"):
+            sim_df = pd.DataFrame(similar)[
+                ["snapshot", "similarity", "total_gex", "next_delta_gex", "next_regime"]
+            ]
+            st.dataframe(sim_df, use_container_width=True)
+
+    spot = float(history[-1].get("spot", 4800))
+    flow = load_flow_predictions(FLOW_FEED_PATH, spot=spot)
+    if flow["event_count"] > 0 and flow.get("top_signals"):
+        with st.expander("Live flow strike signals"):
+            sig_df = pd.DataFrame(flow["top_signals"])
+            st.dataframe(sig_df[["strike", "direction", "score", "recent_gex"]], use_container_width=True)
 
 
 def render_gex_timeline(history: list[dict]):
@@ -178,8 +218,7 @@ def render_gex_timeline(history: list[dict]):
 
 
 def main():
-    st.set_page_config(page_title="GEX Dashboard", layout="wide")
-    st.title("GEX Dashboard")
+    st.set_page_config(page_title="Gamma Tracker", layout="wide", page_icon="γ")
 
     tickers = find_available_tickers(EXPORT_DIR)
     ticker = st.sidebar.selectbox("Ticker", options=tickers if tickers else ["SPX"], index=0)
@@ -187,17 +226,23 @@ def main():
     if custom.strip():
         ticker = custom.strip().upper()
 
-    show_images = st.sidebar.checkbox("Show image snapshots", value=True)
+    show_images = st.sidebar.checkbox("Show image snapshots", value=False)
     show_heatmap = st.sidebar.checkbox("Show heatmap", value=True)
     show_3d = st.sidebar.checkbox("Show 3D scatter", value=False)
-    show_predictions = st.sidebar.checkbox("Show GEX predictions", value=True)
+    show_timeline = st.sidebar.checkbox("Show GEX timeline", value=True)
 
     history = build_history_from_exports(ticker)
+    for row in history:
+        row["ticker"] = ticker
 
-    if show_predictions and history:
-        render_predictions(ticker, history)
+    # Primary focus at top
+    render_gamma_hero(history)
+    render_predictions_detail(ticker, history)
+
+    if show_timeline and len(history) >= 2:
         render_gex_timeline(history)
 
+    st.markdown("#### Analysis & Exports")
     col1, col2 = st.columns([1, 2])
 
     with col1:

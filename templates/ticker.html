@@ -13,6 +13,9 @@
         --line: rgba(148, 163, 184, 0.26);
         --txt: #e2e8f0;
         --muted: #94a3b8;
+        --long: #4ade80;
+        --short: #fb7185;
+        --future: #a78bfa;
       }
       body {
         min-height: 100vh;
@@ -38,15 +41,15 @@
         -webkit-text-fill-color: transparent;
       }
       .muted { color: var(--muted); }
-      .metric-label { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
-      .metric-value { font-size: 1.15rem; font-weight: 600; }
-      .pill { border-radius: 999px; font-size: .72rem; letter-spacing: .04em; padding: .2rem .55rem; }
+      .metric-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .15rem; }
+      .metric-value { font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .pill { border-radius: 999px; font-size: .75rem; letter-spacing: .04em; padding: .25rem .65rem; font-weight: 600; }
       .pill-long { color: #bbf7d0; background: rgba(22,163,74,.24); border: 1px solid rgba(34,197,94,.35); }
       .pill-short { color: #fecdd3; background: rgba(190,24,93,.24); border: 1px solid rgba(244,63,94,.35); }
+      .pill-future { color: #ddd6fe; background: rgba(139,92,246,.22); border: 1px solid rgba(167,139,250,.4); }
       .chart-box { min-height: 430px; }
       .thumb { border-radius: .55rem; border: 1px solid rgba(148,163,184,.35); }
       .sim-value { font-variant-numeric: tabular-nums; font-weight: 600; }
-      .insight-item { border-left: 2px solid rgba(96,165,250,.55); padding-left: .75rem; }
       .download-list a { color: #c7d2fe; text-decoration: none; }
       .download-list a:hover { text-decoration: underline; }
       input[type=range] { accent-color: #60a5fa; }
@@ -59,6 +62,84 @@
       }
       .table { color: var(--txt); }
       .table td, .table th { border-color: #334155; }
+
+      /* Gamma hero — primary focus */
+      .gamma-hero { margin-bottom: 1.25rem; }
+      .gamma-card {
+        height: 100%;
+        border-radius: 1rem;
+        padding: 1.35rem 1.5rem;
+        position: relative;
+        overflow: hidden;
+      }
+      .gamma-card-current {
+        background: linear-gradient(145deg, rgba(15,23,42,.92) 0%, rgba(30,41,59,.75) 100%);
+        border: 1px solid rgba(96,165,250,.35);
+      }
+      .gamma-card-future {
+        background: linear-gradient(145deg, rgba(30,27,75,.85) 0%, rgba(49,46,129,.55) 100%);
+        border: 1px solid rgba(167,139,250,.4);
+      }
+      .gamma-card::before {
+        content: "";
+        position: absolute;
+        top: -40%;
+        right: -20%;
+        width: 55%;
+        height: 120%;
+        border-radius: 50%;
+        filter: blur(60px);
+        opacity: .25;
+        pointer-events: none;
+      }
+      .gamma-card-current::before { background: rgba(59,130,246,.5); }
+      .gamma-card-future::before { background: rgba(139,92,246,.55); }
+      .gamma-card-inner { position: relative; z-index: 1; }
+      .gamma-card-title {
+        font-size: .8rem;
+        text-transform: uppercase;
+        letter-spacing: .12em;
+        color: var(--muted);
+        margin-bottom: .5rem;
+      }
+      .gamma-card-current .gamma-card-title { color: #93c5fd; }
+      .gamma-card-future .gamma-card-title { color: #c4b5fd; }
+      .gamma-hero-value {
+        font-size: clamp(2rem, 4vw, 2.75rem);
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.1;
+        margin: .35rem 0 .75rem;
+      }
+      .gamma-hero-value.long { color: var(--long); }
+      .gamma-hero-value.short { color: var(--short); }
+      .gamma-hero-value.future { color: #c4b5fd; }
+      .gamma-hero-delta {
+        font-size: 1.1rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .gamma-hero-delta.positive { color: var(--long); }
+      .gamma-hero-delta.negative { color: var(--short); }
+      .gamma-hero-delta.neutral { color: var(--muted); }
+      .gamma-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: .75rem 1rem;
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid rgba(148,163,184,.15);
+      }
+      @media (max-width: 576px) {
+        .gamma-stat-grid { grid-template-columns: repeat(2, 1fr); }
+      }
+      .section-label {
+        font-size: .7rem;
+        text-transform: uppercase;
+        letter-spacing: .14em;
+        color: var(--muted);
+        margin-bottom: .75rem;
+      }
     </style>
   </head>
   <body>
@@ -66,80 +147,169 @@
     <div class="orb orb-b"></div>
 
     <main class="container-fluid px-3 px-xl-4 py-4 shell">
-      <section class="glass rounded-4 p-4 mb-3">
-        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-          <div>
-            <div class="d-flex align-items-center gap-2 mb-2">
-              <span class="concept-chip">TICKER: {{ ticker }}</span>
-              <span class="concept-chip">Gamma Intelligence Layer</span>
-            </div>
-            <h1 class="h2 mb-2 title-grad">{{ ticker }} · Ultra-modern Gamma Experience</h1>
-            <p class="muted mb-0">Timeline replay, AI analog forecasting, similar setup memory, and interactive regime simulation.</p>
-            {% if latest_ts %}
-            <p class="small muted mb-0 mt-2">Database snapshot · last update {{ latest_ts }} · auto-refresh every {{ refresh_minutes }} minutes</p>
-            {% endif %}
-          </div>
-          <div class="d-flex gap-2">
-            <a class="btn btn-outline-light" href="/">All tickers</a>
-            <a class="btn btn-outline-light" href="{{ url_for('ticker_page', ticker=ticker) }}">Refresh</a>
-          </div>
+      <!-- Compact header -->
+      <section class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <h1 class="h4 mb-0 title-grad">{{ ticker }}</h1>
+          <span class="concept-chip">Gamma Tracker</span>
+          {% if latest_ts %}
+          <span class="small muted">Updated {{ latest_ts }} · every {{ refresh_minutes }}m</span>
+          {% endif %}
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-sm btn-outline-light" href="/">All tickers</a>
+          <a class="btn btn-sm btn-outline-light" href="{{ url_for('ticker_page', ticker=ticker) }}">Refresh</a>
         </div>
       </section>
 
       {% if bootstrap_status == "ok" %}
-      <div class="alert alert-success" role="alert">
-        Snapshot refresh completed. Latest GEX data for {{ ticker }} was saved to the database.
-      </div>
+      <div class="alert alert-success py-2" role="alert">Snapshot refresh completed for {{ ticker }}.</div>
       {% elif bootstrap_status == "failed" %}
-      <div class="alert alert-danger" role="alert">
-        Snapshot bootstrap failed for {{ ticker }}. Check deployment logs and verify dependencies/data source access.
-      </div>
+      <div class="alert alert-danger py-2" role="alert">Snapshot bootstrap failed for {{ ticker }}.</div>
       {% elif bootstrap_status == "error" %}
-      <div class="alert alert-danger" role="alert">
-        Snapshot bootstrap encountered an internal error before execution.
-      </div>
+      <div class="alert alert-danger py-2" role="alert">Snapshot bootstrap encountered an internal error.</div>
       {% endif %}
 
       {% if not has_history %}
       <div class="alert alert-warning" role="alert">
-        <div class="mb-2">No GEX snapshots are in the database for {{ ticker }} yet. The server refreshes from CBOE every {{ refresh_minutes }} minutes; the first load may take a minute.</div>
-        <form method="post" action="{{ url_for('bootstrap_ticker_history', ticker=ticker) }}" class="d-flex gap-2 flex-wrap align-items-center">
+        <div class="mb-2">No GEX snapshots for {{ ticker }} yet.</div>
+        <form method="post" action="{{ url_for('bootstrap_ticker_history', ticker=ticker) }}">
           <button class="btn btn-sm btn-warning" type="submit">Refresh now</button>
-          <span class="small">Runs <code>python main.py --ticker {{ ticker }} --no-show</code> immediately and stores results in the database.</span>
         </form>
+      </div>
+      {% else %}
+
+      <!-- PRIMARY FOCUS: Current Gamma + Future Gamma -->
+      <section class="gamma-hero row g-3">
+        <div class="col-12 col-lg-6">
+          <div class="gamma-card gamma-card-current">
+            <div class="gamma-card-inner">
+              <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                <div class="gamma-card-title">Current Gamma</div>
+                <span class="pill {{ 'pill-long' if 'LONG' in current_gamma.regime else 'pill-short' }}">{{ current_gamma.regime }}</span>
+              </div>
+              <div class="gamma-hero-value {{ 'long' if current_gamma.total_gex >= 0 else 'short' }}">
+                {{ '%+.3f'|format(current_gamma.total_gex) }} <span class="fs-5 text-white-50">Bn$ / %</span>
+              </div>
+              <div class="small muted">{{ current_gamma.ts_label }}</div>
+              <div class="gamma-stat-grid">
+                <div>
+                  <div class="metric-label">Gamma Flip</div>
+                  <div class="metric-value">{{ '%.0f'|format(current_gamma.gamma_flip) if current_gamma.gamma_flip is not none else 'N/A' }}</div>
+                </div>
+                <div>
+                  <div class="metric-label">Call Wall</div>
+                  <div class="metric-value">{{ '%.0f'|format(current_gamma.call_wall) if current_gamma.call_wall is not none else 'N/A' }}</div>
+                </div>
+                <div>
+                  <div class="metric-label">Put Wall</div>
+                  <div class="metric-value">{{ '%.0f'|format(current_gamma.put_wall) if current_gamma.put_wall is not none else 'N/A' }}</div>
+                </div>
+                <div>
+                  <div class="metric-label">Near-term GEX</div>
+                  <div class="metric-value">{{ '%.0f'|format(current_gamma.near_term_ratio * 100) }}%</div>
+                </div>
+                <div>
+                  <div class="metric-label">Pos GEX</div>
+                  <div class="metric-value text-success">{{ '%.2f'|format(current_gamma.pos_gex) }}</div>
+                </div>
+                <div>
+                  <div class="metric-label">Neg GEX</div>
+                  <div class="metric-value text-danger">{{ '%.2f'|format(current_gamma.neg_gex) }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12 col-lg-6">
+          <div class="gamma-card gamma-card-future">
+            <div class="gamma-card-inner">
+              {% if prediction %}
+              <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                <div class="gamma-card-title">Future Gamma · Next Snapshot</div>
+                <span class="pill pill-future">{{ prediction.predicted_regime }}</span>
+              </div>
+              <div class="gamma-hero-value future">
+                {{ '%+.3f'|format(prediction.predicted_total_gex) }} <span class="fs-5 text-white-50">Bn$ / %</span>
+              </div>
+              {% set delta = prediction.predicted_delta_gex %}
+              <div class="gamma-hero-delta {{ 'positive' if delta > 0 else ('negative' if delta < 0 else 'neutral') }}">
+                ΔGEX {{ '%+.3f'|format(delta) }} Bn$ / %
+                {% if prediction.predicted_total_gex_with_flow is defined %}
+                <span class="small muted ms-2">· with flow {{ '%+.3f'|format(prediction.predicted_total_gex_with_flow) }}</span>
+                {% endif %}
+              </div>
+              <div class="gamma-stat-grid">
+                <div>
+                  <div class="metric-label">Pred. Flip</div>
+                  <div class="metric-value">{{ '%.0f'|format(prediction.predicted_flip) }}</div>
+                </div>
+                <div>
+                  <div class="metric-label">Confidence</div>
+                  <div class="metric-value">{{ '%.0f'|format(prediction.confidence * 100) }}%</div>
+                </div>
+                <div>
+                  <div class="metric-label">Regime Flip</div>
+                  <div class="metric-value">{{ '%.0f'|format(prediction.regime_flip_probability * 100) }}%</div>
+                </div>
+                {% if flow_overlay and flow_overlay.event_count > 0 %}
+                <div>
+                  <div class="metric-label">Flow ΔGEX</div>
+                  <div class="metric-value">{{ '%+.4f'|format(flow_overlay.predicted_flow_delta_gex_bn) }}</div>
+                </div>
+                {% endif %}
+              </div>
+              {% if prediction.neighbors %}
+              <div class="mt-2 pt-2 border-top border-secondary border-opacity-25">
+                <div class="metric-label">Nearest analog</div>
+                <div class="small mono">{{ prediction.neighbors[0].snapshot }} → Δ{{ '%+.3f'|format(prediction.neighbors[0].next_delta_gex) }}</div>
+              </div>
+              {% endif %}
+              {% else %}
+              <div class="gamma-card-title">Future Gamma · Next Snapshot</div>
+              <div class="gamma-hero-value future">—</div>
+              <p class="muted mb-0 small">Need more historical snapshots to forecast the next gamma update.</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {% if viewing_historical %}
+      <div class="alert alert-info py-2 small mb-3" role="alert">
+        Viewing historical snapshot <strong>{{ selected.ts_label }}</strong>. Charts below reflect this point in time. Current &amp; future gamma above use the latest data.
       </div>
       {% endif %}
 
+      <!-- Secondary: charts & tools -->
+      <div class="section-label">Analysis &amp; History</div>
       <section class="row g-3 mb-3">
         <div class="col-12 col-xxl-8">
           <div class="glass rounded-4 p-3 p-lg-4 mb-3">
-            <h2 class="h5">Historical Timeline Navigator</h2>
-            <form method="get" class="row g-2 align-items-end mb-3">
-              <div class="col-md-8">
-                <label for="ts" class="form-label">Snapshot</label>
-                <select id="ts" name="ts" class="form-select bg-dark text-light border-secondary" {% if not timeline_options %}disabled{% endif %}>
-                  {% if timeline_options %}
-                    {% for opt in timeline_options %}
-                      <option value="{{ opt.ts }}" {% if opt.is_selected %}selected{% endif %}>{{ opt.label }}</option>
-                    {% endfor %}
-                  {% else %}
-                    <option selected>No snapshots available</option>
-                  {% endif %}
-                </select>
-              </div>
-              <div class="col-md-4 d-grid">
-                <button class="btn btn-primary" type="submit" {% if not timeline_options %}disabled{% endif %}>Load Snapshot</button>
-              </div>
-            </form>
+            <h2 class="h6 mb-3">GEX Timeline</h2>
             {% if timeline_json %}
-              <div id="timeline" class="chart-box" style="min-height:320px;"></div>
+              <div id="timeline" style="min-height:280px;"></div>
             {% else %}
               <div class="muted">Timeline unavailable.</div>
             {% endif %}
+            <form method="get" class="row g-2 align-items-end mt-3">
+              <div class="col-md-8">
+                <label for="ts" class="form-label small">Historical snapshot</label>
+                <select id="ts" name="ts" class="form-select form-select-sm bg-dark text-light border-secondary">
+                  {% for opt in timeline_options %}
+                    <option value="{{ opt.ts }}" {% if opt.is_selected %}selected{% endif %}>{{ opt.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-4 d-grid">
+                <button class="btn btn-sm btn-primary" type="submit">Load</button>
+              </div>
+            </form>
           </div>
 
           <div class="glass rounded-4 p-3 p-lg-4 mb-3">
-            <h2 class="h5">Gamma Surface Matrix</h2>
+            <h2 class="h6 mb-3">Gamma Surface</h2>
             {% if heatmap_json %}
               <div id="heatmap" class="chart-box"></div>
             {% else %}
@@ -148,7 +318,7 @@
           </div>
 
           <div class="glass rounded-4 p-3 p-lg-4">
-            <h2 class="h5">Surface Orbit (3D)</h2>
+            <h2 class="h6 mb-3">Surface 3D</h2>
             {% if scatter3d_json %}
               <div id="scatter3d" class="chart-box"></div>
             {% else %}
@@ -159,96 +329,44 @@
 
         <div class="col-12 col-xxl-4">
           <div class="glass rounded-4 p-3 p-lg-4 mb-3">
-            <h2 class="h6">Current Outlook Metrics</h2>
-            <div class="small muted">Selected snapshot</div>
-            <div class="mb-2">{{ selected.ts_label }}</div>
-            <div class="mb-2"><span class="pill {{ 'pill-long' if 'LONG' in selected.regime else 'pill-short' }}">{{ selected.regime }}</span></div>
-            <div><span class="metric-label">Total GEX</span><div class="metric-value">{{ '%.3f'|format(selected.total_gex) }} Bn$ / %</div></div>
-            <div><span class="metric-label">Call Wall</span><div class="metric-value">{{ '%.0f'|format(selected.call_wall) if selected.call_wall is not none else 'N/A' }}</div></div>
-            <div><span class="metric-label">Put Wall</span><div class="metric-value">{{ '%.0f'|format(selected.put_wall) if selected.put_wall is not none else 'N/A' }}</div></div>
-            <div><span class="metric-label">Gamma Flip</span><div class="metric-value">{{ '%.2f'|format(selected.gamma_flip) if selected.gamma_flip is not none else 'N/A' }}</div></div>
-            <div><span class="metric-label">Near-term Ratio</span><div class="metric-value">{{ '%.3f'|format(selected.near_term_ratio) }}</div></div>
-          </div>
-
-          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
-            <h2 class="h6">AI Prediction · Next GEX Update</h2>
-            {% if prediction %}
-              <div><span class="metric-label">Predicted Regime</span><div class="metric-value">{{ prediction.predicted_regime }}</div></div>
-              <div><span class="metric-label">Predicted ΔGEX</span><div class="metric-value">{{ '%+.3f'|format(prediction.predicted_delta_gex) }} Bn$ / %</div></div>
-              <div><span class="metric-label">Predicted Total GEX</span><div class="metric-value">{{ '%.3f'|format(prediction.predicted_total_gex) }} Bn$ / %</div></div>
-              {% if prediction.predicted_total_gex_with_flow is defined %}
-              <div><span class="metric-label">With Flow Overlay</span><div class="metric-value">{{ '%.3f'|format(prediction.predicted_total_gex_with_flow) }} Bn$ / %</div></div>
-              {% endif %}
-              <div><span class="metric-label">Predicted Gamma Flip</span><div class="metric-value">{{ '%.2f'|format(prediction.predicted_flip) }}</div></div>
-              <div><span class="metric-label">Regime Flip Prob</span><div class="metric-value">{{ '%.1f'|format(prediction.regime_flip_probability * 100) }}%</div></div>
-              <div><span class="metric-label">Confidence</span><div class="metric-value">{{ '%.1f'|format(prediction.confidence * 100) }}%</div></div>
-
-              <h6 class="mt-3">Nearest analogs</h6>
-              <ul class="small mb-0">
-                {% for n in prediction.neighbors %}
-                  <li class="mono">#{{ n.rank }} {{ n.snapshot }} → {{ n.next_snapshot }} (Δ{{ '%+.3f'|format(n.next_delta_gex) }}, d={{ '%.3f'|format(n.distance) }})</li>
-                {% endfor %}
-              </ul>
-            {% else %}
-              <div class="muted">Not enough historical snapshots for prediction yet.</div>
-            {% endif %}
-          </div>
-
-          {% if flow_overlay %}
-          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
-            <h2 class="h6">Live Flow Overlay</h2>
-            <div><span class="metric-label">Events Processed</span><div class="metric-value">{{ flow_overlay.event_count }}</div></div>
-            <div><span class="metric-label">Flow ΔGEX</span><div class="metric-value">{{ '%+.4f'|format(flow_overlay.predicted_flow_delta_gex_bn) }} Bn$ / %</div></div>
-            {% if flow_overlay.top_signals %}
-            <h6 class="mt-2 small">Top strike signals</h6>
-            <ul class="small mb-0">
-              {% for sig in flow_overlay.top_signals[:5] %}
-                <li>Strike {{ sig.strike }} · {{ sig.direction }} · score {{ '%.2f'|format(sig.score) }}</li>
-              {% endfor %}
-            </ul>
-            {% endif %}
-          </div>
-          {% endif %}
-
-          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
-            <h2 class="h6">Innovative Concept · Regime Simulator</h2>
-            <p class="small muted mb-3">Apply hypothetical shocks to estimate regime drift and structural pressure.</p>
+            <h2 class="h6">Regime Simulator</h2>
+            <p class="small muted mb-3">Hypothetical shocks to current gamma.</p>
             <label class="form-label small">GEX shock (%) <span class="sim-value" id="shockValue">0%</span></label>
             <input id="gexShock" type="range" class="form-range" min="-60" max="60" value="0">
             <label class="form-label small mt-2">Spot drift (%) <span class="sim-value" id="spotShiftValue">0.0%</span></label>
             <input id="spotShift" type="range" class="form-range" min="-5" max="5" step="0.1" value="0">
-
             <div class="row g-2 mt-2">
               <div class="col-6"><div class="metric-label">Projected GEX</div><div id="projTotal" class="sim-value">--</div></div>
               <div class="col-6"><div class="metric-label">Projected Flip</div><div id="projFlip" class="sim-value">--</div></div>
-              <div class="col-6"><div class="metric-label">Pressure Score</div><div id="projPressure" class="sim-value">--</div></div>
-              <div class="col-6"><div class="metric-label">Projected Regime</div><div id="projRegime" class="sim-value">--</div></div>
+              <div class="col-6"><div class="metric-label">Pressure</div><div id="projPressure" class="sim-value">--</div></div>
+              <div class="col-6"><div class="metric-label">Regime</div><div id="projRegime" class="sim-value">--</div></div>
             </div>
           </div>
 
+          {% if flow_overlay and flow_overlay.top_signals %}
           <div class="glass rounded-4 p-3 p-lg-4 mb-3">
-            <h2 class="h6">Similar Setups Memory</h2>
+            <h2 class="h6">Live Flow Signals</h2>
+            <ul class="small mb-0 ps-3">
+              {% for sig in flow_overlay.top_signals[:6] %}
+                <li>Strike {{ sig.strike }} · {{ sig.direction }} · {{ '%.2f'|format(sig.score) }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h6">Similar Setups</h2>
             {% if similar_setups %}
               <div class="table-responsive">
                 <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>Snapshot</th>
-                      <th>Similarity</th>
-                      <th>Outcome</th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>When</th><th>Match</th><th>Next ΔGEX</th></tr></thead>
                   <tbody>
                     {% for row in similar_setups %}
                     <tr>
                       <td class="mono small">{{ row.snapshot }}</td>
-                      <td>{{ '%.1f'|format(row.similarity * 100) }}%</td>
+                      <td>{{ '%.0f'|format(row.similarity * 100) }}%</td>
                       <td class="small">
-                        {% if row.next_snapshot %}
-                          {{ row.next_snapshot }} · {{ row.next_regime }} · Δ{{ '%+.3f'|format(row.next_delta_gex) if row.next_delta_gex is not none else '%.3f'|format(row.next_total_gex) }}
-                        {% else %}
-                          N/A
-                        {% endif %}
+                        {% if row.next_delta_gex is not none %}{{ '%+.3f'|format(row.next_delta_gex) }}{% else %}—{% endif %}
                       </td>
                     </tr>
                     {% endfor %}
@@ -256,7 +374,7 @@
                 </table>
               </div>
             {% else %}
-              <div class="muted">Not enough history to match setups.</div>
+              <div class="muted small">Not enough history.</div>
             {% endif %}
           </div>
 
@@ -264,30 +382,30 @@
             <h2 class="h6">Downloads</h2>
             {% if strike_csv and exp_csv and cum_csv %}
               <ul class="download-list ps-3 mb-0 small">
-                <li><a href="/exports/{{ strike_csv }}">GEX by strike CSV</a></li>
-                <li><a href="/exports/{{ exp_csv }}">GEX by expiration CSV</a></li>
-                <li><a href="/exports/{{ cum_csv }}">Cumulative GEX CSV</a></li>
+                <li><a href="/exports/{{ strike_csv }}">By strike</a></li>
+                <li><a href="/exports/{{ exp_csv }}">By expiration</a></li>
+                <li><a href="/exports/{{ cum_csv }}">Cumulative</a></li>
               </ul>
             {% else %}
-              <div class="muted">No export files are available for this ticker yet.</div>
+              <div class="muted small">No exports available.</div>
             {% endif %}
           </div>
 
           <div class="glass rounded-4 p-3 p-lg-4">
-            <h2 class="h6">Latest Snapshots</h2>
+            <h2 class="h6">Snapshots</h2>
             {% if imgs %}
-              {% for img in imgs[:4] %}
+              {% for img in imgs[:3] %}
                 <div class="mb-2">
                   <img src="/img/{{ img.name }}" class="img-fluid thumb" alt="{{ img.name }}">
-                  <div class="small muted mt-1">{{ img.name }}</div>
                 </div>
               {% endfor %}
             {% else %}
-              <div class="muted">No images available.</div>
+              <div class="muted small">No images.</div>
             {% endif %}
           </div>
         </div>
       </section>
+      {% endif %}
     </main>
 
     <script>
@@ -301,7 +419,6 @@
       renderPlot('heatmap', {{ heatmap_json|tojson }});
       renderPlot('scatter3d', {{ scatter3d_json|tojson }});
 
-      // Regime simulator (client-side concept layer)
       const shockEl = document.getElementById('gexShock');
       const shiftEl = document.getElementById('spotShift');
       const shockValue = document.getElementById('shockValue');
@@ -311,9 +428,9 @@
       const projPressure = document.getElementById('projPressure');
       const projRegime = document.getElementById('projRegime');
 
-      const baseTotal = {{ selected.total_gex|tojson }};
-      const baseFlip = {{ selected.gamma_flip|tojson }};
-      const baseSpread = Math.abs(({{ selected.call_wall|tojson }} || 0) - ({{ selected.put_wall|tojson }} || 0));
+      const baseTotal = {{ current_gamma.total_gex|tojson if has_history else (selected.total_gex|tojson) }};
+      const baseFlip = {{ current_gamma.gamma_flip|tojson if has_history else (selected.gamma_flip|tojson) }};
+      const baseSpread = Math.abs(({{ (current_gamma.call_wall if has_history else selected.call_wall)|tojson }} || 0) - ({{ (current_gamma.put_wall if has_history else selected.put_wall)|tojson }} || 0));
 
       function updateSimulator() {
         if (!shockEl || !shiftEl) return;
