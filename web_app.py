@@ -111,7 +111,6 @@ def _safe_similar_setups(history: list) -> list:
         return []
 
 
-
 @APP.route("/")
 def index():
     tickers = find_available_tickers(EXPORT_DIR)
