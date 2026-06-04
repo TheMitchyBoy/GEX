@@ -198,6 +198,87 @@ def make_positive_strike_chart(strike_series: pd.Series | None, ticker: str, tit
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
+def _top_strikes_by_magnitude(*series: pd.Series | None, top_n: int = 36) -> list[float]:
+    combined = pd.Series(dtype=float)
+    for s in series:
+        if s is None or (isinstance(s, pd.Series) and s.empty):
+            continue
+        combined = combined.add(pd.Series(s, dtype=float), fill_value=0.0)
+    if combined.empty:
+        return []
+    ranked = combined.reindex(combined.abs().sort_values(ascending=False).index).head(top_n)
+    return [float(x) for x in sorted(ranked.index)]
+
+
+def make_prediction_gamma_chart(
+    knn_strike: pd.Series | None,
+    combined_strike: pd.Series | None,
+    flow_strike: pd.Series | None,
+    ticker: str,
+    spot: float | None = None,
+) -> str | None:
+    """Large chart: KNN gamma forecast by strike with option-flow ΔGEX overlay."""
+    knn = pd.Series(knn_strike, dtype=float) if knn_strike is not None else pd.Series(dtype=float)
+    flow = pd.Series(flow_strike, dtype=float) if flow_strike is not None else pd.Series(dtype=float)
+    combined = pd.Series(combined_strike, dtype=float) if combined_strike is not None else knn.add(flow, fill_value=0.0)
+    if combined.empty and knn.empty and flow.empty:
+        return None
+
+    strikes = _top_strikes_by_magnitude(knn, flow, combined)
+    if not strikes:
+        return None
+
+    knn_vals = [float(knn.get(s, 0.0)) for s in strikes]
+    flow_vals = [float(flow.get(s, 0.0)) for s in strikes]
+    combined_vals = [float(combined.get(s, 0.0)) for s in strikes]
+    has_flow = any(abs(v) > 1e-9 for v in flow_vals)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="KNN forecast",
+        x=strikes,
+        y=knn_vals,
+        marker_color=[_GREEN if v >= 0 else _RED for v in knn_vals],
+        marker_line_width=0,
+    ))
+    if has_flow:
+        fig.add_trace(go.Bar(
+            name="Flow ΔGEX",
+            x=strikes,
+            y=flow_vals,
+            marker_color=[_BLUE if v >= 0 else _AMBER for v in flow_vals],
+            marker_line_width=0,
+            opacity=0.85,
+        ))
+    fig.add_trace(go.Scatter(
+        name="Combined forecast",
+        x=strikes,
+        y=combined_vals,
+        mode="lines+markers",
+        line=dict(color="#e2e8f0", width=2),
+        marker=dict(size=6, color="#e2e8f0"),
+    ))
+    if spot is not None and spot > 0:
+        fig.add_vline(
+            x=float(spot),
+            line=dict(color=_AMBER, dash="dash", width=1.5),
+            annotation_text=f"Spot {int(spot)}",
+            annotation_position="top",
+        )
+
+    fig.update_layout(barmode="group")
+    _apply_base(
+        fig,
+        title=f"{ticker} · Predicted Gamma Change (KNN + Option Flow)",
+        height=560,
+        xaxis_title="Strike",
+        yaxis_title="GEX (Bn$ / %)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(l=48, r=24, t=72, b=48),
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
 def make_heatmap(surface_path: Path | None = None, ticker: str = "", surface_df: pd.DataFrame | None = None):
     df = surface_df if surface_df is not None and not surface_df.empty else None
     if df is None and surface_path is not None:

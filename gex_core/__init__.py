@@ -24,7 +24,12 @@ from gex_core.pipeline import (
     fetch_options_payload,
     parse_payload,
 )
-from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
+from gex_core.predict import (
+    apply_flow_to_prediction,
+    load_flow_predictions,
+    predict_next_snapshot,
+    similar_setups,
+)
 
 __all__ = [
     "GammaAnalysis",
@@ -35,6 +40,7 @@ __all__ = [
     "EXPORT_DIR",
     "GexAggregates",
     "GexDecomposition",
+    "apply_flow_to_prediction",
     "aggregate_gex",
     "attach_signed_gex",
     "clean_option_data",

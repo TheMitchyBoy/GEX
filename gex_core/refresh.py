@@ -16,7 +16,7 @@ DEFAULT_TICKERS = [
     for item in os.environ.get("GEX_DEFAULT_TICKERS", "SPX").split(",")
     if item.strip()
 ]
-DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
+DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "1"))
 
 
 def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:

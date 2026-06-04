@@ -57,6 +57,13 @@
         border: 1px solid rgba(255,71,87,.35);
       }
       .mono { font-family: ui-monospace, monospace; }
+      .chart-lg {
+        min-height: 560px;
+        width: 100%;
+      }
+      .chart-lg > div {
+        min-height: 560px;
+      }
     </style>
   </head>
   <body>
@@ -148,6 +155,27 @@
           </div>
         </div>
 
+        <div class="col-12">
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h5 mb-2">Predicted Gamma Change</h2>
+            <p class="small text-secondary mb-2">
+              KNN snapshot forecast with option-flow ΔGEX overlaid by strike.
+              {% if flow_overlay and flow_overlay.event_count > 0 %}
+              Flow feed: {{ flow_overlay.event_count }} events.
+              {% elif prediction and prediction.flow_event_count is defined %}
+              Flow feed: {{ prediction.flow_event_count }} events.
+              {% else %}
+              No option-flow events in feed yet — chart shows KNN forecast only.
+              {% endif %}
+            </p>
+            {% if predicted_strike_chart_json %}
+            <div id="predictedStrike" class="chart-lg"></div>
+            {% else %}
+            <div class="text-secondary">Need at least 4 CSV snapshots to build a gamma change forecast.</div>
+            {% endif %}
+          </div>
+        </div>
+
         <div class="col-12 col-xl-4">
           <div class="glass rounded-4 p-3 mb-3">
             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -193,6 +221,12 @@
             <div class="metric-value mb-2">{{ prediction.predicted_regime }}</div>
             <div class="metric-label">Predicted ΔGEX</div>
             <div class="metric-value mb-2">{{ '%+.3f'|format(prediction.predicted_delta_gex) }} Bn$ / %</div>
+            {% if prediction.base_predicted_delta_gex is defined %}
+            <div class="metric-label">KNN ΔGEX (before flow)</div>
+            <div class="metric-value mb-2 text-secondary">{{ '%+.3f'|format(prediction.base_predicted_delta_gex) }} Bn$ / %</div>
+            <div class="metric-label">Flow ΔGEX</div>
+            <div class="metric-value mb-2">{{ '%+.4f'|format(prediction.flow_delta_gex) }} Bn$ / %</div>
+            {% endif %}
             <div class="metric-label">Confidence</div>
             <div class="metric-value mb-2">{{ '%.1f'|format(prediction.confidence * 100) }}%</div>
             {% if prediction.backtest_sign_accuracy is defined %}
@@ -227,14 +261,19 @@
           </div>
           {% endif %}
 
+          {% if prediction and prediction.flow_top_signals %}
           <div class="glass rounded-4 p-3">
-            <h2 class="h6 mb-2">Predicted Positive GEX</h2>
-            {% if predicted_strike_chart_json %}
-            <div id="predictedStrike"></div>
-            {% else %}
-            <div class="text-secondary">Predicted strike distribution unavailable.</div>
-            {% endif %}
+            <h2 class="h6 mb-2">Top Flow Signals</h2>
+            <ul class="list-unstyled small mono mb-0">
+              {% for sig in prediction.flow_top_signals[:6] %}
+              <li class="mb-2">
+                Strike {{ sig.strike }} · {{ sig.direction }}
+                · score {{ '%.2f'|format(sig.score) }}
+              </li>
+              {% endfor %}
+            </ul>
           </div>
+          {% endif %}
         </div>
       </section>
     </main>

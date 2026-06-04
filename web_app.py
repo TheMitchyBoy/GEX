@@ -17,12 +17,18 @@ from gex_core.charts import (
     make_cumulative_gex_chart,
     make_gex_profile_chart,
     make_positive_strike_chart,
+    make_prediction_gamma_chart,
     make_timeline_chart,
     safe_float,
 )
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import build_history, get_latest_ts, list_tickers, list_timestamps, ts_label
-from gex_core.predict import predict_next_snapshot, similar_setups
+from gex_core.predict import (
+    apply_flow_to_prediction,
+    load_flow_predictions,
+    predict_next_snapshot,
+    similar_setups,
+)
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_ticker, refresh_tickers
 
 APP = Flask(__name__)
@@ -95,6 +101,7 @@ def get_uw_data(ticker: str) -> dict | None:
 
 
 IMG_DIR = Path("img")
+FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
 REFRESH_TICKERS = DEFAULT_TICKERS
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
@@ -207,6 +214,7 @@ def ticker_page(ticker):
             timeline_chart_json=None,
             cumulative_chart_json=None,
             similar_setups=[],
+            flow_overlay=None,
             data_source="Unusual Whales (live)" if uw_entry else "No data",
             spot_distance_to_flip=None,
             ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
@@ -240,10 +248,18 @@ def ticker_page(ticker):
         )
 
     prediction = None
+    flow_overlay = None
     try:
         prediction = predict_next_snapshot(history)
     except Exception:
         logger.exception("Prediction failed for %s", ticker)
+
+    spot_for_flow = csv_spot or safe_float(selected.get("spot"), 4800.0)
+    try:
+        flow_overlay = load_flow_predictions(FLOW_FEED_PATH, spot=float(spot_for_flow))
+        prediction = apply_flow_to_prediction(prediction, flow_overlay)
+    except Exception:
+        logger.exception("Flow overlay failed for %s", ticker)
 
     try:
         backtest = backtest_delta_sign_accuracy(ticker)
@@ -260,13 +276,26 @@ def ticker_page(ticker):
         "Current Position Focus (Positive GEX)",
     )
     predicted_strike_chart_json = None
-    if prediction and prediction.get("predicted_strike") is not None:
-        predicted_strike_chart_json = make_positive_strike_chart(
-            prediction.get("predicted_strike"),
-            ticker,
-            "Predicted Positive GEX by Strike",
-        )
-        prediction = {k: v for k, v in prediction.items() if k != "predicted_strike"}
+    knn_strike = None
+    flow_strike = None
+    combined_strike = None
+    if prediction:
+        knn_strike = prediction.get("knn_strike") or prediction.get("predicted_strike")
+        flow_strike = prediction.get("flow_strike")
+        combined_strike = prediction.get("predicted_strike")
+        if knn_strike is not None or combined_strike is not None:
+            predicted_strike_chart_json = make_prediction_gamma_chart(
+                knn_strike=knn_strike,
+                combined_strike=combined_strike,
+                flow_strike=flow_strike,
+                ticker=ticker,
+                spot=csv_spot,
+            )
+        prediction = {
+            k: v
+            for k, v in prediction.items()
+            if k not in {"predicted_strike", "knn_strike", "flow_strike"}
+        }
 
     latest_raw = get_latest_ts(ticker)
     csv_source = selected.get("data_source") or "unusual_whales"
@@ -298,6 +327,7 @@ def ticker_page(ticker):
             selected.get("cumulative"), ticker, gamma_flip=selected.get("gamma_flip"),
         ),
         similar_setups=_safe_similar_setups(history),
+        flow_overlay=flow_overlay,
         data_source=data_source,
         spot_distance_to_flip=spot_dist,
         ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
