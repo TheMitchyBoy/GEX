@@ -174,20 +174,41 @@
             <h2 class="h6">AI Prediction · Next GEX Update</h2>
             {% if prediction %}
               <div><span class="metric-label">Predicted Regime</span><div class="metric-value">{{ prediction.predicted_regime }}</div></div>
+              <div><span class="metric-label">Predicted ΔGEX</span><div class="metric-value">{{ '%+.3f'|format(prediction.predicted_delta_gex) }} Bn$ / %</div></div>
               <div><span class="metric-label">Predicted Total GEX</span><div class="metric-value">{{ '%.3f'|format(prediction.predicted_total_gex) }} Bn$ / %</div></div>
+              {% if prediction.predicted_total_gex_with_flow is defined %}
+              <div><span class="metric-label">With Flow Overlay</span><div class="metric-value">{{ '%.3f'|format(prediction.predicted_total_gex_with_flow) }} Bn$ / %</div></div>
+              {% endif %}
               <div><span class="metric-label">Predicted Gamma Flip</span><div class="metric-value">{{ '%.2f'|format(prediction.predicted_flip) }}</div></div>
+              <div><span class="metric-label">Regime Flip Prob</span><div class="metric-value">{{ '%.1f'|format(prediction.regime_flip_probability * 100) }}%</div></div>
               <div><span class="metric-label">Confidence</span><div class="metric-value">{{ '%.1f'|format(prediction.confidence * 100) }}%</div></div>
 
               <h6 class="mt-3">Nearest analogs</h6>
               <ul class="small mb-0">
                 {% for n in prediction.neighbors %}
-                  <li class="mono">#{{ n.rank }} {{ n.snapshot }} → {{ n.next_snapshot }} ({{ '%.3f'|format(n.next_total_gex) }}, d={{ '%.3f'|format(n.distance) }})</li>
+                  <li class="mono">#{{ n.rank }} {{ n.snapshot }} → {{ n.next_snapshot }} (Δ{{ '%+.3f'|format(n.next_delta_gex) }}, d={{ '%.3f'|format(n.distance) }})</li>
                 {% endfor %}
               </ul>
             {% else %}
               <div class="muted">Not enough historical snapshots for prediction yet.</div>
             {% endif %}
           </div>
+
+          {% if flow_overlay %}
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h6">Live Flow Overlay</h2>
+            <div><span class="metric-label">Events Processed</span><div class="metric-value">{{ flow_overlay.event_count }}</div></div>
+            <div><span class="metric-label">Flow ΔGEX</span><div class="metric-value">{{ '%+.4f'|format(flow_overlay.predicted_flow_delta_gex_bn) }} Bn$ / %</div></div>
+            {% if flow_overlay.top_signals %}
+            <h6 class="mt-2 small">Top strike signals</h6>
+            <ul class="small mb-0">
+              {% for sig in flow_overlay.top_signals[:5] %}
+                <li>Strike {{ sig.strike }} · {{ sig.direction }} · score {{ '%.2f'|format(sig.score) }}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+          </div>
+          {% endif %}
 
           <div class="glass rounded-4 p-3 p-lg-4 mb-3">
             <h2 class="h6">Innovative Concept · Regime Simulator</h2>
@@ -224,7 +245,7 @@
                       <td>{{ '%.1f'|format(row.similarity * 100) }}%</td>
                       <td class="small">
                         {% if row.next_snapshot %}
-                          {{ row.next_snapshot }} · {{ row.next_regime }} · {{ '%.3f'|format(row.next_total_gex) }}
+                          {{ row.next_snapshot }} · {{ row.next_regime }} · Δ{{ '%+.3f'|format(row.next_delta_gex) if row.next_delta_gex is not none else '%.3f'|format(row.next_total_gex) }}
                         {% else %}
                           N/A
                         {% endif %}
