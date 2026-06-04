@@ -1,0 +1,24 @@
+{
+  "ticker": "SPY",
+  "data_source": "unusual_whales",
+  "source": "Unusual Whales API",
+  "generated_at_utc": "2026-06-04T03:22:29.106050Z",
+  "spot": 753.96,
+  "spot_price": 753.96,
+  "total_gex_bn_per_pct": -485.71386809999996,
+  "net_gamma_regime": "SHORT gamma",
+  "call_wall": {
+    "strike": 760.0,
+    "gex_bn_per_pct": 167.17710019999998
+  },
+  "put_wall": {
+    "strike": 740.0,
+    "gex_bn_per_pct": -161.11684200000002
+  },
+  "gamma_flip": {
+    "flip_strike": NaN,
+    "confidence": "low",
+    "message": "ok",
+    "local_slope": NaN
+  }
+}
