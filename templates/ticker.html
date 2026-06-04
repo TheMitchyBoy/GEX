@@ -459,6 +459,7 @@
         window.setTimeout(() => {
           const url = new URL(window.location.href);
           url.searchParams.delete("force_refresh");
+          url.searchParams.delete("ts");
           window.location.href = url.toString();
         }, autoRefreshMinutes * 60 * 1000);
       }

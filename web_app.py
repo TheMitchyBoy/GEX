@@ -323,7 +323,7 @@ def ticker_page(ticker):
     uw_agg = uw_entry["agg"] if uw_entry else None
     uw_fetched_at = uw_entry["fetched_at"] if uw_entry else None
 
-    requested_ts = request.args.get("ts")
+    requested_ts = None if force_refresh else request.args.get("ts")
     selected = _select_snapshot(history, requested_ts)
     timestamps = list_timestamps(ticker)
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
