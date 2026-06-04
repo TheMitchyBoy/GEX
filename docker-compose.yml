@@ -6,7 +6,7 @@ services:
     environment:
       - UW_API_KEY=${UW_API_KEY:-}
       - GEX_DEFAULT_TICKERS=SPX
-      - GEX_REFRESH_INTERVAL_MINUTES=10
+      - GEX_REFRESH_INTERVAL_MINUTES=1
       - GEX_DISABLE_SCHEDULER=0
     volumes:
       - ./data:/app/data

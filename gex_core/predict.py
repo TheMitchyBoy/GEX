@@ -329,12 +329,54 @@ def load_flow_predictions(feed_path: Path, spot: float, top_n: int = 10) -> dict
                 except (ValueError, KeyError):
                     continue
 
-    total_flow_gex = sum(agg.gex_by_strike.values()) / 1e9
+    flow_by_strike_bn = {
+        float(strike): float(gex) / 1e9 for strike, gex in agg.gex_by_strike.items()
+    }
+    total_flow_gex = sum(flow_by_strike_bn.values())
     top_signals = agg.top_signals(top_n=top_n)
     return {
         "event_count": len(events),
         "predicted_flow_delta_gex_bn": total_flow_gex,
+        "flow_by_strike_bn": flow_by_strike_bn,
         "top_signals": [
             {"strike": s, **sig} for s, sig in top_signals
         ],
     }
+
+
+def apply_flow_to_prediction(
+    prediction: dict[str, Any] | None,
+    flow: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Blend option-flow ΔGEX into KNN forecast totals and per-strike gamma profile."""
+    if not prediction:
+        return prediction
+    if not flow or flow.get("event_count", 0) <= 0:
+        return prediction
+
+    out = dict(prediction)
+    flow_delta = float(flow.get("predicted_flow_delta_gex_bn", 0.0))
+    out["base_predicted_delta_gex"] = out["predicted_delta_gex"]
+    out["flow_delta_gex"] = flow_delta
+    out["predicted_delta_gex"] = out["predicted_delta_gex"] + flow_delta
+    out["predicted_total_gex"] = out["predicted_total_gex"] + flow_delta
+    out["predicted_regime"] = "LONG gamma" if out["predicted_total_gex"] >= 0 else "SHORT gamma"
+    out["flow_event_count"] = flow["event_count"]
+    out["flow_top_signals"] = flow.get("top_signals", [])
+
+    knn_strike = out.get("predicted_strike")
+    if knn_strike is not None and not isinstance(knn_strike, pd.Series):
+        knn_strike = pd.Series(knn_strike, dtype=float)
+    elif knn_strike is None:
+        knn_strike = pd.Series(dtype=float)
+
+    flow_strike = pd.Series(flow.get("flow_by_strike_bn", {}), dtype=float)
+    if not flow_strike.empty:
+        combined = knn_strike.add(flow_strike, fill_value=0.0)
+        out["predicted_strike"] = combined if not combined.empty else None
+        out["flow_strike"] = flow_strike
+        out["knn_strike"] = knn_strike if not knn_strike.empty else None
+    else:
+        out["flow_strike"] = flow_strike
+
+    return out
