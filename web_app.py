@@ -221,13 +221,12 @@ def ticker_page(ticker):
     selected = _select_snapshot(history, requested_ts)
     timestamps = list_timestamps(ticker)
 
-    # Primary charts: always from CSV export (CBOE-based historical snapshots).
-    csv_spot = safe_float(selected.get("spot"), None) or None
+    csv_spot = safe_float(selected.get("spot"), None) or (uw_spot if uw_spot else None)
     profile_json = make_gex_profile_chart(
         selected.get("strike"),
         ticker,
         spot=csv_spot,
-        title="Market Maker Position (CSV export)",
+        title="Market Maker Position (UW CSV)",
     )
     current_profile_series = selected.get("strike")
 
@@ -237,7 +236,7 @@ def ticker_page(ticker):
             uw_agg.gex_by_strike,
             ticker,
             spot=uw_spot,
-            title="Live overlay · Unusual Whales",
+            title="Live · Unusual Whales (latest API)",
         )
 
     prediction = None
@@ -270,10 +269,10 @@ def ticker_page(ticker):
         prediction = {k: v for k, v in prediction.items() if k != "predicted_strike"}
 
     latest_raw = get_latest_ts(ticker)
-    csv_source = selected.get("data_source") or "cboe"
-    data_source = f"CSV export ({csv_source}) · {selected['ts_label']}"
+    csv_source = selected.get("data_source") or "unusual_whales"
+    data_source = f"Unusual Whales CSV · {selected['ts_label']} ({csv_source})"
     if uw_agg is not None:
-        data_source += " · UW live overlay available"
+        data_source += " · live API"
     spot_dist = None
     if selected.get("spot") and selected.get("gamma_flip"):
         spot_dist = abs(float(selected["spot"]) - float(selected["gamma_flip"]))
@@ -309,7 +308,7 @@ def ticker_page(ticker):
 def bootstrap_ticker_history(ticker):
     ticker = ticker.upper()
     try:
-        ok = refresh_ticker(ticker, force=True, force_cboe=True)
+        ok = refresh_ticker(ticker, force=True)
     except Exception:
         logger.exception("Manual GEX refresh failed for %s", ticker)
         return redirect(url_for("ticker_page", ticker=ticker, bootstrap="error"))

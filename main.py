@@ -279,6 +279,7 @@ def _run_uw(
             "data_source": "unusual_whales",
             "source": "Unusual Whales API",
             "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+            "spot": float(spot_price),
             "spot_price": float(spot_price),
             "total_gex_bn_per_pct": float(total_gex_bn),
             "net_gamma_regime": regime,
@@ -352,143 +353,23 @@ def run(
     """
     
     print_banner(ticker)
+    print(color_text("Fetching data from Unusual Whales...", ANSI_DIM))
 
-    from gex_core.data_source import SOURCE_UW, fetch_gex_data
+    from gex_core.data_source import fetch_gex_data
 
-    csv_use_cboe = os.environ.get("GEX_CSV_USE_CBOE", "1").lower() in {"1", "true", "yes"}
-    if export_csv and csv_use_cboe and not use_uw:
-        force_cboe = True
-    prefer_uw = not force_cboe and (use_uw or bool(os.environ.get("UW_API_KEY")))
-    if refresh and not prefer_uw:
-        print(color_text("Refreshing data from CBOE...", ANSI_DIM))
-    elif prefer_uw:
-        print(color_text("Fetching data (Unusual Whales primary, CBOE fallback)...", ANSI_DIM))
-
-    fetched = fetch_gex_data(
-        ticker,
-        prefer_uw=prefer_uw,
-        uw_api_key=uw_api_key,
-        refresh=refresh,
-        cache_ttl_minutes=cache_ttl_minutes,
-        max_dte=max_dte,
+    fetched = fetch_gex_data(ticker, uw_api_key=uw_api_key)
+    return _run_uw(
+        ticker=ticker,
+        show_plots=show_plots,
+        save_plots=save_plots,
+        outdir=outdir,
+        top_n=top_n,
         strike_window_pct=strike_window_pct,
-        gcs_source=gcs_source,
-        spot_override=spot_override,
-        force_cboe=force_cboe,
+        export_csv=export_csv,
+        export_dir=export_dir,
+        uw_api_key=uw_api_key,
+        fetched=fetched,
     )
-
-    if fetched.source == SOURCE_UW:
-        return _run_uw(
-            ticker=ticker,
-            show_plots=show_plots,
-            save_plots=save_plots,
-            outdir=outdir,
-            top_n=top_n,
-            strike_window_pct=strike_window_pct,
-            export_csv=export_csv,
-            export_dir=export_dir,
-            uw_api_key=uw_api_key,
-            fetched=fetched,
-        )
-
-    spot_price = fetched.spot
-    option_data = fetched.option_data
-    quality = fetched.data_quality
-    agg = fetched.aggregates
-    print(
-        f"{color_text('Spot (CBOE)', ANSI_YELLOW)}: {spot_price:.2f}   "
-        f"{color_text('As of', ANSI_DIM)}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-
-    total_gex_bn = agg.total_gex_bn
-    compute_total_gex(spot_price, option_data, total_gex_bn=total_gex_bn)
-    compute_total_charm(option_data)
-    print_regime_summary(option_data, gex_by_strike=agg.gex_by_strike)
-    print_key_gex_levels(option_data, top_n=top_n, gex_by_strike=agg.gex_by_strike)
-    print_key_charm_levels(option_data, top_n=top_n)
-    print_gamma_position_signal(ticker, spot_price, option_data, gamma_threshold=5000)
-    print_future_gex_forecast(spot_price, option_data)
-
-    gex_by_strike = agg.gex_by_strike
-    cumulative_gex = agg.cumulative_gex
-    gex_by_expiration = agg.gex_by_expiration
-    surface_data = agg.surface_data
-
-    gamma_flip = print_gamma_flip_estimate(cumulative_gex)
-    gamma_flip_strike = gamma_flip.get("flip_strike") if isinstance(gamma_flip, dict) else None
-
-    if show_plots or save_plots:
-        plot_gex_profile(
-            ticker=ticker,
-            gex_by_strike=gex_by_strike,
-            show_plots=show_plots,
-            save_plots=save_plots,
-            outdir=outdir,
-            spot=spot_price,
-            window_pct=strike_window_pct if strike_window_pct >= 0.05 else 0.10,
-        )
-        plot_gex_by_strike(
-            ticker=ticker,
-            spot=spot_price,
-            gex_by_strike=gex_by_strike,
-            show_plots=show_plots,
-            save_plots=save_plots,
-            outdir=outdir,
-            top_n=top_n,
-            strike_window_pct=strike_window_pct,
-            cumulative_gex=cumulative_gex,
-            gamma_flip=gamma_flip_strike,
-        )
-        plot_cumulative_gex(
-            ticker=ticker,
-            cumulative_gex=cumulative_gex,
-            show_plots=show_plots,
-            save_plots=save_plots,
-            outdir=outdir,
-            spot=spot_price,
-            gamma_flip=gamma_flip_strike,
-        )
-        plot_gex_by_expiration(
-            ticker=ticker,
-            gex_by_expiration=gex_by_expiration,
-            show_plots=show_plots,
-            save_plots=save_plots,
-            outdir=outdir,
-        )
-        plot_gex_surface(
-            ticker=ticker,
-            surface_data=surface_data,
-            show_plots=show_plots,
-            save_plots=save_plots,
-            outdir=outdir,
-        )
-    
-    # Step 7: Export all computed metrics to CSV for further analysis
-    if export_csv:
-        summary = build_gamma_summary(
-            ticker=ticker,
-            spot=spot_price,
-            data=option_data,
-            gex_by_strike=gex_by_strike,
-            gex_by_expiration=gex_by_expiration,
-            cumulative_gex=cumulative_gex,
-            total_gex_bn=total_gex_bn,
-            gamma_flip=gamma_flip,
-            top_n=top_n,
-        )
-        summary["data_quality"] = quality.to_dict() if quality else {}
-        summary["data_source"] = fetched.source
-        summary["spot"] = float(spot_price)
-        summary["spot_price"] = float(spot_price)
-        export_analytics_csv(
-            ticker=ticker,
-            gex_by_strike=gex_by_strike,
-            cumulative_gex=cumulative_gex,
-            gex_by_expiration=gex_by_expiration,
-            surface_data=surface_data,
-            summary=summary,
-            export_dir=export_dir,
-        )
 
 
 # ============================================================================
@@ -522,27 +403,6 @@ def is_cache_fresh(cache_file, cache_ttl_minutes):
     max_age = timedelta(minutes=cache_ttl_minutes)
     modified_at = datetime.fromtimestamp(cache_file.stat().st_mtime)
     return datetime.now() - modified_at <= max_age
-
-
-def scrape_data(
-    ticker,
-    refresh=False,
-    cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUTES,
-    gcs_source=None,
-    spot_override=None,
-):
-    """Fetch cleaned options data from CBOE or GCS (see ``gex_core.cboe_loader``)."""
-    from gex_core.cboe_loader import scrape_data as _scrape
-
-    spot_price, option_data, quality = _scrape(
-        ticker,
-        refresh=refresh,
-        cache_ttl_minutes=cache_ttl_minutes,
-        gcs_source=gcs_source,
-        spot_override=spot_override,
-    )
-    print(color_text(quality.summary_line(), ANSI_DIM))
-    return spot_price, option_data, quality
 
 
 # ============================================================================
@@ -580,7 +440,7 @@ def compute_total_gex(spot, data, total_gex_bn=None):
         Total notional GEX: $-38.1193 Bn
     """
     if data is None:
-        raise ValueError("compute_total_gex() received no option data. Verify that scrape_data() returned a valid DataFrame.")
+        raise ValueError("compute_total_gex() received no option data.")
     if not isinstance(data, pd.DataFrame):
         raise TypeError("compute_total_gex() requires a pandas DataFrame for option data.")
     if data.empty:
@@ -1493,7 +1353,7 @@ def export_analytics_csv(
         json.dump(summary, f, indent=2)
 
     if summary is not None and "data_source" not in summary:
-        summary["data_source"] = "cboe"
+        summary["data_source"] = "unusual_whales"
 
     print(f"Saved CSV exports to: {export_dir}")
     return timestamp
@@ -1602,52 +1462,12 @@ def parse_args():
         help=f"Directory where CSV exports are saved (default: {DEFAULT_EXPORT_DIR}).",
     )
 
-    # Unusual Whales data source
-    parser.add_argument(
-        "--uw",
-        action="store_true",
-        help=(
-            "Use the Unusual Whales API instead of CBOE. "
-            "Requires UW_API_KEY environment variable (or --uw-key). "
-            "Fetches verified trade-level GEX from /api/stock/{ticker}/greek-exposure/strike."
-        ),
-    )
     parser.add_argument(
         "--uw-key",
         type=str,
         default=None,
         metavar="KEY",
-        help="Unusual Whales API key (overrides UW_API_KEY env var).",
-    )
-    parser.add_argument(
-        "--force-cboe",
-        action="store_true",
-        help="Skip Unusual Whales and use CBOE only (full expiration/surface export).",
-    )
-
-    # GCS data source
-    parser.add_argument(
-        "--gcs-source",
-        type=str,
-        default=None,
-        metavar="URL",
-        help=(
-            "GCS URL of an options CSV to use instead of the CBOE API. "
-            "Formats: gs://bucket/object  or  "
-            "https://storage.googleapis.com/bucket/object. "
-            "Requires GOOGLE_APPLICATION_CREDENTIALS or Application Default Credentials. "
-            "Example: --gcs-source gs://options_data_gex_analysis/option-trades-2026-06-03.csv"
-        ),
-    )
-    parser.add_argument(
-        "--spot",
-        type=float,
-        default=None,
-        metavar="PRICE",
-        help=(
-            "Explicit underlying spot price. Required when using --gcs-source and "
-            "the CSV does not contain an 'underlying_price' column."
-        ),
+        help="Unusual Whales API key (overrides UW_API_KEY env var). Required for all runs.",
     )
 
     return parser.parse_args()
@@ -1677,9 +1497,5 @@ if __name__ == "__main__":
         max_dte=max(0, args.max_dte),
         export_csv=not args.no_export_csv,
         export_dir=args.export_dir,
-        gcs_source=args.gcs_source,
-        spot_override=args.spot,
-        use_uw=args.uw,
         uw_api_key=args.uw_key,
-        force_cboe=getattr(args, "force_cboe", False),
     )

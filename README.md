@@ -1,6 +1,6 @@
 # Gamma Exposure Tracker (GEX)
 
-A Python tool to analyze dealer gamma exposure (GEX) in equity options markets. This script scrapes real-time options data from the CBOE website, calculates aggregate gamma exposure across all dealers, and visualizes gamma dynamics across strikes and expirations.
+A Python tool to analyze dealer gamma exposure (GEX) in equity options markets. GEX is loaded from the **Unusual Whales** API and saved as timestamped CSV exports for dashboards, history, and models.
 
 ## Table of Contents
 
@@ -240,7 +240,7 @@ Run the Flask dashboard:
 python web_app.py
 ```
 
-**Data sources:** Unusual Whales is the primary source when `UW_API_KEY` is set; CBOE is the automatic fallback (and provides full expiration/surface exports). Historical snapshots live in `data/exports/` as timestamped CSV/JSON files—no SQLite database.
+**Data source:** Unusual Whales only (`UW_API_KEY` required). Each run or scheduled refresh writes strike/cumulative GEX to `data/exports/` as timestamped CSV + JSON summary files.
 
 Configuration (environment variables):
 
@@ -259,8 +259,8 @@ See [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md) and [config/spx.env.example](co
 Manual CSV refresh:
 
 ```bash
+export UW_API_KEY=your-key
 python scripts/gex_refresh.py --force
-python scripts/gex_refresh.py --cboe --force   # full CBOE surface export
 ```
 
 Docker:
@@ -481,35 +481,15 @@ The tool generates three types of visualizations:
 
 ## Data Source
 
-### Unusual Whales (primary)
+### Unusual Whales
 
-When `UW_API_KEY` is set, GEX by strike is loaded from the Unusual Whales API (`/greek-exposure/strike`). If the request fails, the pipeline falls back to CBOE automatically.
+GEX by strike is loaded from the Unusual Whales API (`/api/stock/{ticker}/greek-exposure/strike`). Snapshots are written to `data/exports/` as:
 
-### CBOE API (backup)
+- `{TICKER}_gex_by_strike_{timestamp}.csv`
+- `{TICKER}_cumulative_gex_{timestamp}.csv`
+- `{TICKER}_summary_{timestamp}.json`
 
-Data can be fetched from the **Chicago Board Options Exchange (CBOE)** delayed quotes API:
-
-```
-https://cdn.cboe.com/api/global/delayed_quotes/options/{TICKER}.json
-```
-
-**Data Included:**
-- Current underlying price (delayed by ~15 minutes)
-- All active options contracts for the ticker
-- Option Greeks: delta, gamma, theta, vega, rho
-- Open interest and volume
-- Option prices (bid/ask)
-
-**Caching:**
-- Data is cached locally (default: 15 minutes) to minimize API calls
-- Use `--refresh` flag to force fresh data
-- Cache files stored in `data/` directory
-
-### Delay & Freshness
-
-- **CBOE data**: ~15 minute delay (market data rules)
-- **Cache validity**: 15 minutes by default (configurable)
-- Total data age: Up to 30 minutes old in normal operation
+Set `UW_API_KEY` in your environment (or Cursor secrets) before running the CLI, refresh script, or web dashboard.
 
 ---
 

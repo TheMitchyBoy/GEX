@@ -19,7 +19,7 @@ Authentication
 --------------
 Set the environment variable before running:
 
-    export UW_API_KEY=7990f0cd-11ff-4ea4-b8fd-5fbddc6f0297
+    export UW_API_KEY=your-key-here
 
 Or pass ``api_key`` explicitly to :func:`fetch_uw_gex`.
 
