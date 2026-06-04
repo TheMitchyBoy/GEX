@@ -276,6 +276,47 @@ def make_timeline_chart(history, ticker):
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
+def _positive_gamma_view(strike_series: pd.Series | None, top_n: int = 40) -> pd.Series:
+    if strike_series is None:
+        return pd.Series(dtype=float)
+    strike = pd.Series(strike_series, dtype=float)
+    strike = strike[strike > 0]
+    if strike.empty:
+        return strike
+    # Keep the most relevant positive strikes, then order by strike for readability.
+    return strike.sort_values(ascending=False).head(top_n).sort_index()
+
+
+def make_positive_strike_chart(strike_series: pd.Series | None, ticker: str, title: str):
+    strike = _positive_gamma_view(strike_series)
+    if strike.empty:
+        return None
+
+    fig = go.Figure(
+        data=go.Bar(
+            x=[float(x) for x in strike.index],
+            y=strike.values,
+            marker=dict(
+                color=strike.values,
+                colorscale=[[0.0, "#34d399"], [1.0, "#22c55e"]],
+                line=dict(color="#86efac", width=1),
+                showscale=False,
+            ),
+            hovertemplate="Strike %{x:.0f}<br>Positive GEX %{y:.3f} Bn$ / %<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title=f"{ticker} {title}",
+        template="plotly_dark",
+        height=320,
+        margin=dict(l=20, r=20, t=45, b=20),
+        xaxis_title="Strike",
+        yaxis_title="Positive GEX (Bn$ / %)",
+    )
+    fig.update_yaxes(rangemode="tozero")
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
 def _load_surface_df(surface_path: Path | None = None, surface_df: pd.DataFrame | None = None):
     if surface_df is not None and not surface_df.empty:
         return surface_df
@@ -426,6 +467,10 @@ def predict_next_snapshot(history):
     pred_flip = float(np.sum(weights * flip_targets))
 
     pred_ratio = float(np.sum([weights[j] * train[i]["target_near_term_ratio"] for j, i in enumerate(nn_idx)]))
+    predicted_strike = pd.Series(dtype=float)
+    for j, i in enumerate(nn_idx):
+        next_strike = history[i + 1]["strike"].astype(float)
+        predicted_strike = predicted_strike.add(next_strike * float(weights[j]), fill_value=0.0)
 
     avg_dist = float(nn_dist.mean())
     confidence = max(0.0, min(1.0, 1.0 / (1.0 + avg_dist)))
@@ -448,6 +493,7 @@ def predict_next_snapshot(history):
         "predicted_regime": "LONG gamma" if pred_total >= 0 else "SHORT gamma",
         "predicted_flip": pred_flip,
         "predicted_near_term_ratio": pred_ratio,
+        "predicted_strike": predicted_strike,
         "confidence": confidence,
         "neighbors": neighbors,
     }
@@ -575,6 +621,8 @@ def ticker_page(ticker):
             bootstrap_status=bootstrap_status,
             latest_ts=None,
             refresh_minutes=REFRESH_MINUTES,
+            current_strike_chart_json=None,
+            predicted_strike_chart_json=None,
         )
 
     requested_ts = request.args.get("ts")
@@ -594,6 +642,19 @@ def ticker_page(ticker):
     timeline_json = make_timeline_chart(history, ticker)
 
     prediction = predict_next_snapshot(history)
+    current_strike_chart_json = make_positive_strike_chart(
+        selected.get("strike"),
+        ticker,
+        "Current Positive GEX by Strike",
+    )
+    predicted_strike_chart_json = None
+    if prediction and prediction.get("predicted_strike") is not None:
+        predicted_strike_chart_json = make_positive_strike_chart(
+            prediction.get("predicted_strike"),
+            ticker,
+            "Predicted Positive GEX by Strike",
+        )
+        prediction = {k: v for k, v in prediction.items() if k != "predicted_strike"}
     similar = similar_setups(history, top_n=6)
 
     timeline_options = [
@@ -623,6 +684,8 @@ def ticker_page(ticker):
         refresh_minutes=REFRESH_MINUTES,
         has_history=True,
         bootstrap_status=bootstrap_status,
+        current_strike_chart_json=current_strike_chart_json,
+        predicted_strike_chart_json=predicted_strike_chart_json,
     )
 
 
