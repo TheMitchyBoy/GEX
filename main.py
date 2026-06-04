@@ -212,6 +212,15 @@ def run(
     gamma_flip_strike = gamma_flip.get("flip_strike") if isinstance(gamma_flip, dict) else None
 
     if show_plots or save_plots:
+        plot_gex_profile(
+            ticker=ticker,
+            gex_by_strike=gex_by_strike,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+            spot=spot_price,
+            window_pct=strike_window_pct if strike_window_pct >= 0.05 else 0.10,
+        )
         plot_gex_by_strike(
             ticker=ticker,
             spot=spot_price,
@@ -849,8 +858,8 @@ def plot_gex_by_strike(
     selected = gex_by_strike.loc[limit_criteria]
 
     fig, ax1 = plt.subplots(figsize=(14, 7))
-    colors = np.where(selected.values >= 0, "#38E07A", "#FE53BB")
-    bars = ax1.bar(selected.index, selected.values, color=colors, alpha=0.85, edgecolor="none", zorder=3)
+    colors = np.where(selected.values >= 0, "#00d97e", "#ff4757")
+    bars = ax1.bar(selected.index, selected.values, color=colors, alpha=0.88, edgecolor="none", zorder=3)
 
     # Spot price guide line
     ax1.axvline(x=spot, color="#F8D56B", linestyle="--", linewidth=1.5, label=f"Spot {spot:.0f}", zorder=5)
@@ -939,7 +948,7 @@ def plot_gex_by_expiration(ticker, gex_by_expiration, show_plots, save_plots, ou
     plt, _ = _matplotlib()
     fig, ax = plt.subplots(figsize=(14, 7))
 
-    colors = np.where(gex_by_expiration.values >= 0, "#38E07A", "#FE53BB")
+    colors = np.where(gex_by_expiration.values >= 0, "#00d97e", "#ff4757")
     ax.bar(
         gex_by_expiration.index,
         gex_by_expiration.values,
@@ -961,6 +970,82 @@ def plot_gex_by_expiration(ticker, gex_by_expiration, show_plots, save_plots, ou
     finalize_plot(
         fig,
         build_output_path(outdir, ticker, "gex_by_expiration", "png"),
+        show_plots,
+        save_plots,
+    )
+
+
+def plot_gex_profile(
+    ticker,
+    gex_by_strike,
+    show_plots,
+    save_plots,
+    outdir,
+    spot=None,
+    window_pct=0.10,
+    max_bars=60,
+):
+    """
+    Periscope-style horizontal bar profile of GEX by strike.
+
+    Strikes run on the Y-axis (highest at top); bars extend right for
+    positive gamma (green) or left for negative gamma (red).  An optional
+    horizontal amber line marks the current spot price.
+
+    Args:
+        ticker (str): Ticker symbol used in title and filename.
+        gex_by_strike (Series): GEX aggregated by strike (Bn$/%).
+        show_plots (bool): Display in a window.
+        save_plots (bool): Save to disk as PNG.
+        outdir (Path/str): Directory for saved plots.
+        spot (float | None): Current spot price for an optional guide line.
+        window_pct (float): Fraction of spot price to use as strike window.
+        max_bars (int): Max number of strikes to render.
+    """
+    plt, _ = _matplotlib()
+
+    if spot is not None and spot > 0:
+        lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
+        window = gex_by_strike.loc[(gex_by_strike.index >= lo) & (gex_by_strike.index <= hi)]
+        if len(window) < 5:
+            window = gex_by_strike
+    else:
+        window = gex_by_strike
+
+    window = window.sort_index(ascending=True)
+    if len(window) > max_bars:
+        keep = window.abs().sort_values(ascending=False).head(max_bars).index
+        window = window.loc[keep].sort_index(ascending=True)
+
+    y_labels = [str(int(s)) for s in window.index]
+    x_vals = window.values.astype(float)
+    colors = ["#00d97e" if v >= 0 else "#ff4757" for v in x_vals]
+
+    fig, ax = plt.subplots(figsize=(9, max(6, len(window) * 0.22)))
+    ax.barh(y_labels, x_vals, color=colors, edgecolor="none", height=0.7)
+    ax.axvline(x=0, color="rgba(255,255,255,0.25)", linewidth=0.8)
+
+    if spot is not None and spot > 0:
+        spot_label = str(int(spot))
+        if spot_label in y_labels:
+            idx = y_labels.index(spot_label)
+            ax.axhline(y=idx, color="#f59e0b", linestyle="--", linewidth=1.2, label=f"Spot {int(spot)}")
+            ax.legend(fontsize=8, loc="lower right")
+
+    ax.set_facecolor("#07090f")
+    fig.patch.set_facecolor("#07090f")
+    ax.grid(axis="x", color="rgba(255,255,255,0.05)", linewidth=0.6)
+    ax.tick_params(colors="#6e7681", labelsize=9)
+    ax.set_xlabel("GEX (Bn$ / %)", color="#c9d1d9", fontsize=10)
+    ax.set_ylabel("Strike", color="#c9d1d9", fontsize=10)
+    ax.set_title(f"{ticker} Dealer Gamma Profile", color="#c9d1d9", fontsize=12, fontweight="bold")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    fig.tight_layout()
+    finalize_plot(
+        fig,
+        build_output_path(outdir, ticker, "gex_profile", "png"),
         show_plots,
         save_plots,
     )
@@ -1000,8 +1085,8 @@ def plot_cumulative_gex(
     x = cumulative_gex.index.to_numpy(dtype=float)
     y = cumulative_gex.values.astype(float)
 
-    ax.fill_between(x, y, 0, where=(y >= 0), color="#38E07A", alpha=0.22, label="Long gamma zone")
-    ax.fill_between(x, y, 0, where=(y < 0), color="#FE53BB", alpha=0.22, label="Short gamma zone")
+    ax.fill_between(x, y, 0, where=(y >= 0), color="#00d97e", alpha=0.20, label="Long gamma zone")
+    ax.fill_between(x, y, 0, where=(y < 0), color="#ff4757", alpha=0.20, label="Short gamma zone")
     ax.plot(x, y, color="#60A5FA", linewidth=2.5, zorder=4)
     ax.axhline(y=0, color="#94a3b8", linestyle="--", linewidth=0.9)
 

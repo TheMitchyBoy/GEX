@@ -249,33 +249,33 @@ def make_timeline_chart(history, ticker):
     fig.add_trace(go.Scatter(
         x=labels, y=pos,
         fill="tozeroy",
-        fillcolor="rgba(34,197,94,0.13)",
-        line=dict(color="#22c55e", width=1),
+        fillcolor="rgba(0,217,126,0.10)",
+        line=dict(color=_GREEN, width=1),
         name="Positive GEX",
         hovertemplate="%{y:.3f} Bn$<extra>+GEX</extra>",
     ))
     fig.add_trace(go.Scatter(
         x=labels, y=neg,
         fill="tozeroy",
-        fillcolor="rgba(239,68,68,0.13)",
-        line=dict(color="#ef4444", width=1),
+        fillcolor="rgba(255,71,87,0.10)",
+        line=dict(color=_RED, width=1),
         name="Negative GEX",
         hovertemplate="%{y:.3f} Bn$<extra>-GEX</extra>",
     ))
-    marker_colors = ["#22c55e" if t >= 0 else "#ef4444" for t in totals]
+    marker_colors = [_GREEN if t >= 0 else _RED for t in totals]
     fig.add_trace(go.Scatter(
         x=labels,
         y=totals,
         mode="lines+markers",
-        line=dict(color="#4dabf7", width=2.5),
-        marker=dict(size=7, color=marker_colors, line=dict(color="#ffffff", width=1)),
+        line=dict(color=_BLUE, width=2.5),
+        marker=dict(size=7, color=marker_colors, line=dict(color=_CHART_BG, width=1)),
         name="Total GEX",
         hovertemplate="%{y:.3f} Bn$<extra>Net GEX</extra>",
     ))
-    fig.add_hline(y=0, line_dash="dash", line_color="#adb5bd", line_width=1)
-    fig.update_layout(
-        title=f"{ticker} Total GEX Timeline",
-        template="plotly_dark",
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)", line_width=1)
+    _apply_base(
+        fig,
+        title=f"{ticker} · GEX Timeline",
         height=340,
         margin=dict(l=20, r=20, t=45, b=20),
         xaxis_title="Snapshot",
@@ -299,49 +299,46 @@ def make_cumulative_gex_chart(cumulative, ticker, gamma_flip=None):
         return None
 
     fig = go.Figure()
-    # Positive fill
     fig.add_trace(go.Scatter(
         x=x, y=[max(v, 0) for v in y],
         fill="tozeroy",
-        fillcolor="rgba(34,197,94,0.15)",
+        fillcolor="rgba(0,217,126,0.12)",
         line=dict(width=0),
         showlegend=False,
         hoverinfo="skip",
     ))
-    # Negative fill
     fig.add_trace(go.Scatter(
         x=x, y=[min(v, 0) for v in y],
         fill="tozeroy",
-        fillcolor="rgba(239,68,68,0.15)",
+        fillcolor="rgba(255,71,87,0.12)",
         line=dict(width=0),
         showlegend=False,
         hoverinfo="skip",
     ))
-    # Cumulative line
     fig.add_trace(go.Scatter(
         x=x, y=y,
         mode="lines",
-        line=dict(color="#60a5fa", width=2.5),
+        line=dict(color=_BLUE, width=2.5),
         name="Cumulative GEX",
-        hovertemplate="Strike %{x:.0f}<br>Cum. GEX %{y:.3f} Bn$<extra></extra>",
+        hovertemplate="Strike %{x:.0f}<br>%{y:.3f} Bn$<extra></extra>",
     ))
-    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.35)", line_width=1)
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)", line_width=1)
     if gamma_flip is not None:
         try:
             fig.add_vline(
                 x=float(gamma_flip),
                 line_dash="dot",
-                line_color="#f59e0b",
+                line_color=_AMBER,
                 line_width=2,
                 annotation_text=f"Flip ~{float(gamma_flip):.0f}",
-                annotation_font_color="#f59e0b",
+                annotation_font_color=_AMBER,
                 annotation_position="top right",
             )
         except Exception:
             pass
-    fig.update_layout(
-        title=f"{ticker} Cumulative GEX by Strike",
-        template="plotly_dark",
+    _apply_base(
+        fig,
+        title=f"{ticker} · Cumulative GEX",
         height=300,
         margin=dict(l=20, r=20, t=45, b=20),
         xaxis_title="Strike",
@@ -365,29 +362,29 @@ def make_gex_breakdown_chart(history, ticker):
     fig.add_trace(go.Bar(
         name="Positive GEX",
         x=labels, y=pos,
-        marker_color="rgba(34,197,94,0.75)",
+        marker_color="rgba(0,217,126,0.72)",
         marker_line_width=0,
         hovertemplate="%{x}<br>+GEX: %{y:.3f} Bn$<extra></extra>",
     ))
     fig.add_trace(go.Bar(
         name="Negative GEX",
         x=labels, y=neg,
-        marker_color="rgba(239,68,68,0.75)",
+        marker_color="rgba(255,71,87,0.72)",
         marker_line_width=0,
         hovertemplate="%{x}<br>-GEX: %{y:.3f} Bn$<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
         x=labels, y=totals,
         mode="lines+markers",
-        line=dict(color="#60a5fa", width=2),
-        marker=dict(size=6),
+        line=dict(color=_BLUE, width=2),
+        marker=dict(size=6, color=_BLUE),
         name="Net GEX",
         hovertemplate="%{x}<br>Net: %{y:.3f} Bn$<extra></extra>",
     ))
-    fig.update_layout(
+    _apply_base(
+        fig,
         barmode="relative",
-        title=f"{ticker} GEX Composition Over Time",
-        template="plotly_dark",
+        title=f"{ticker} · GEX Composition",
         height=320,
         margin=dict(l=20, r=20, t=45, b=20),
         xaxis_title="Snapshot",
@@ -409,33 +406,130 @@ def _positive_gamma_view(strike_series: pd.Series | None, top_n: int = 40) -> pd
     return strike.sort_values(ascending=False).head(top_n).sort_index()
 
 
+_CHART_BG = "#07090f"
+_GREEN = "#00d97e"
+_RED = "#ff4757"
+_BLUE = "#4dabf7"
+_AMBER = "#f59e0b"
+
+_BASE_LAYOUT = dict(
+    paper_bgcolor=_CHART_BG,
+    plot_bgcolor=_CHART_BG,
+    font=dict(color="#c9d1d9", family="ui-monospace, monospace, sans-serif", size=11),
+    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.15)"),
+    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.15)"),
+)
+
+
+def _apply_base(fig: go.Figure, **extra) -> go.Figure:
+    layout = dict(_BASE_LAYOUT)
+    layout.update(extra)
+    fig.update_layout(**layout)
+    return fig
+
+
+def make_gex_profile_chart(
+    strike_series: pd.Series | None,
+    ticker: str,
+    spot: float | None = None,
+    title: str = "GEX Profile",
+    window_pct: float = 0.10,
+    max_bars: int = 60,
+) -> str | None:
+    """
+    Periscope-style horizontal bar chart of GEX by strike.
+
+    Strikes run on the Y-axis (highest at top); bars extend right (green)
+    for positive gamma and left (red) for negative gamma.  An optional
+    horizontal guide line marks the current spot price.
+    """
+    if strike_series is None:
+        return None
+    strike = pd.Series(strike_series, dtype=float)
+    if strike.empty:
+        return None
+
+    if spot is not None and spot > 0:
+        lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
+        window = strike.loc[(strike.index >= lo) & (strike.index <= hi)]
+        if len(window) < 5:
+            window = strike
+    else:
+        window = strike
+
+    window = window.sort_index(ascending=True)
+    if len(window) > max_bars:
+        keep = window.abs().sort_values(ascending=False).head(max_bars).index
+        window = window.loc[keep].sort_index(ascending=True)
+
+    y_labels = [f"{int(s)}" for s in window.index]
+    x_values = window.values.tolist()
+    colors = [_GREEN if v >= 0 else _RED for v in x_values]
+
+    fig = go.Figure(go.Bar(
+        x=x_values,
+        y=y_labels,
+        orientation="h",
+        marker_color=colors,
+        marker_line_width=0,
+        hovertemplate="Strike %{y}<br>GEX %{x:.3f} Bn$<extra></extra>",
+    ))
+
+    # Zero line
+    fig.add_vline(x=0, line_color="rgba(255,255,255,0.25)", line_width=1)
+
+    # Spot guide
+    if spot is not None and spot > 0:
+        spot_label = f"{int(spot)}"
+        if spot_label in y_labels:
+            fig.add_hline(
+                y=spot_label,
+                line_color=_AMBER,
+                line_dash="dash",
+                line_width=1.5,
+                annotation_text=f"Spot {int(spot)}",
+                annotation_font_color=_AMBER,
+                annotation_position="right",
+            )
+
+    _apply_base(
+        fig,
+        title=f"{ticker} · {title}",
+        height=max(420, len(window) * 14),
+        margin=dict(l=65, r=20, t=45, b=20),
+        xaxis_title="GEX (Bn$ / %)",
+        yaxis=dict(
+            gridcolor="rgba(255,255,255,0.04)",
+            tickfont=dict(family="ui-monospace, monospace", size=10),
+        ),
+        bargap=0.18,
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
 def make_positive_strike_chart(strike_series: pd.Series | None, ticker: str, title: str):
     strike = _positive_gamma_view(strike_series)
     if strike.empty:
         return None
 
-    fig = go.Figure(
-        data=go.Bar(
-            x=[float(x) for x in strike.index],
-            y=strike.values,
-            marker=dict(
-                color=strike.values,
-                colorscale=[[0.0, "#34d399"], [1.0, "#22c55e"]],
-                line=dict(color="#86efac", width=1),
-                showscale=False,
-            ),
-            hovertemplate="Strike %{x:.0f}<br>Positive GEX %{y:.3f} Bn$ / %<extra></extra>",
-        )
-    )
-    fig.update_layout(
-        title=f"{ticker} {title}",
-        template="plotly_dark",
-        height=320,
+    x_vals = [float(x) for x in strike.index]
+    y_vals = strike.values.tolist()
+    fig = go.Figure(go.Bar(
+        x=x_vals,
+        y=y_vals,
+        marker_color=_GREEN,
+        marker_line_width=0,
+        hovertemplate="Strike %{x:.0f}<br>GEX %{y:.3f} Bn$<extra></extra>",
+    ))
+    _apply_base(
+        fig,
+        title=f"{ticker} · {title}",
+        height=300,
         margin=dict(l=20, r=20, t=45, b=20),
         xaxis_title="Strike",
         yaxis_title="Positive GEX (Bn$ / %)",
+        yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
     )
-    fig.update_yaxes(rangemode="tozero")
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
@@ -466,12 +560,13 @@ def make_heatmap(surface_path: Path | None = None, ticker: str = "", surface_df:
             z=pivot.values,
             x=[float(c) for c in pivot.columns],
             y=[d.strftime("%Y-%m-%d") for d in pd.to_datetime(pivot.index)],
-            colorscale="RdYlBu_r",
+            colorscale=[[0, _RED], [0.5, "#07090f"], [1, _GREEN]],
+            hovertemplate="Strike %{x:.0f}<br>Expiry %{y}<br>GEX %{z:.2f} M$<extra></extra>",
         )
     )
-    fig.update_layout(
-        title=f"{ticker} GEX Surface (selected snapshot)",
-        template="plotly_dark",
+    _apply_base(
+        fig,
+        title=f"{ticker} · GEX Surface Heatmap",
         height=500,
         margin=dict(l=20, r=20, t=45, b=20),
     )
@@ -495,18 +590,25 @@ def make_surface_scatter(
     if df.empty:
         return None
 
+    gex_vals = df["GEX"].astype(float)
     fig = go.Figure(
         data=go.Scatter3d(
             x=df["strike"],
             y=df["expiration"].dt.strftime("%Y-%m-%d"),
-            z=df["GEX"],
+            z=gex_vals,
             mode="markers",
-            marker=dict(size=4, color=df["GEX"], colorscale="Viridis", showscale=True),
+            marker=dict(
+                size=4,
+                color=gex_vals,
+                colorscale=[[0, _RED], [0.5, "#1e2030"], [1, _GREEN]],
+                showscale=True,
+                colorbar=dict(tickfont=dict(color="#c9d1d9")),
+            ),
         )
     )
-    fig.update_layout(
-        title=f"{ticker} 3D Surface (selected snapshot)",
-        template="plotly_dark",
+    _apply_base(
+        fig,
+        title=f"{ticker} · GEX Surface 3D",
         height=500,
         margin=dict(l=20, r=20, t=45, b=20),
     )
@@ -562,6 +664,7 @@ def ticker_page(ticker):
             timeline_json=None,
             cumulative_gex_json=None,
             breakdown_json=None,
+            profile_json=None,
             timeline_options=[],
             selected=selected,
             prediction=None,
@@ -599,6 +702,12 @@ def ticker_page(ticker):
         gamma_flip=selected.get("gamma_flip"),
     )
     breakdown_json = make_gex_breakdown_chart(history, ticker)
+    profile_json = make_gex_profile_chart(
+        selected.get("strike"),
+        ticker,
+        spot=safe_float(selected.get("spot"), None) or None,
+        title="Dealer Gamma Profile",
+    )
 
     prediction = predict_next_snapshot(history)
     current_strike_chart_json = make_positive_strike_chart(
@@ -648,6 +757,7 @@ def ticker_page(ticker):
         timeline_json=timeline_json,
         cumulative_gex_json=cumulative_gex_json,
         breakdown_json=breakdown_json,
+        profile_json=profile_json,
         timeline_options=timeline_options,
         selected=selected,
         prediction=prediction,
