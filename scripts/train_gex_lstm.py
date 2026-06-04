@@ -1,223 +1,125 @@
-"""Train an LSTM model on historical GEX exports to predict next-day direction.
+"""Train an LSTM to predict next-snapshot ΔGEX from sequential GEX features.
 
 Usage:
     python scripts/train_gex_lstm.py --ticker SPX --seq-len 8
 
-Notes:
-- Requires `data/exports` CSV snapshots and internet access for price labels via yfinance.
-- Saves model to `models/{ticker}_gex_lstm/` and scaler/features to `models/{ticker}_gex_lstm_meta.joblib`.
+Saves model to models/{ticker}_gex_lstm/ and meta to models/{ticker}_gex_lstm/meta.joblib
 """
-import argparse
-from pathlib import Path
-import re
-import pandas as pd
-import numpy as np
-import sys
-try:
-    import yfinance as yf
-except ModuleNotFoundError:
-    print("Missing dependency 'yfinance'. Install with: pip install -r requirements.txt")
-    sys.exit(1)
-from datetime import datetime, timedelta
-import joblib
+from __future__ import annotations
 
-# Keras / TensorFlow
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+import argparse
+import sys
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-EXPORT_DIR = Path("data/exports")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import tensorflow as tf
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Dense, Dropout, LSTM
+from tensorflow.keras.models import Sequential
+
+from gex_core.exports import find_exports_for_ticker, parse_timestamp
+from gex_core.features import compute_features_from_exports
+
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(exist_ok=True)
 
-TIMESTAMP_RE = re.compile(r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$")
 
-
-def find_exports_for_ticker(ticker: str):
-    files = list(EXPORT_DIR.glob(f"{ticker}_*_*_*.csv"))
-    records = {}
-    for f in files:
-        m = TIMESTAMP_RE.match(f.name)
-        if not m:
-            continue
-        ts = m.group("ts")
-        kind = m.group("kind")
-        records.setdefault(ts, {})[kind] = f
-    # Keep entries that have at least gex_by_strike
-    filtered = {ts: info for ts, info in records.items() if "gex_by_strike" in info}
-    return filtered
-
-
-def parse_timestamp(ts_str: str):
-    return datetime.strptime(ts_str, "%Y-%m-%d_%H%M%S")
-
-
-def compute_features_from_exports(info):
-    features = {}
-    # gex by strike
-    if "gex_by_strike" in info:
-        df = pd.read_csv(info["gex_by_strike"], index_col=0)
-        vals = df.iloc[:, 0].astype(float)
-        features["total_gex_bn"] = vals.sum()
-        features["pos_gex_bn"] = vals[vals > 0].sum()
-        features["neg_gex_bn"] = vals[vals < 0].sum()
-        features["gex_mean_bn"] = vals.mean()
-        features["gex_std_bn"] = vals.std()
-    else:
-        # default zeros
-        features.update({k: 0.0 for k in ["total_gex_bn","pos_gex_bn","neg_gex_bn","gex_mean_bn","gex_std_bn"]})
-
-    # expiration
-    if "gex_by_expiration" in info:
-        df = pd.read_csv(info["gex_by_expiration"], index_col=0)
-        vals = df.iloc[:, 0].astype(float)
-        features["term_total_gex_bn"] = vals.sum()
-        features["near_term_gex_bn"] = vals.head(3).sum() if len(vals) > 0 else 0.0
-    else:
-        features.update({"term_total_gex_bn": 0.0, "near_term_gex_bn": 0.0})
-
-    # surface
-    if "gex_surface" in info:
-        try:
-            df = pd.read_csv(info["gex_surface"], parse_dates=["expiration"]) if "expiration" in pd.read_csv(info["gex_surface"], nrows=1).columns else pd.read_csv(info["gex_surface"]) 
-            if not df.empty and "GEX" in df.columns:
-                g = df["GEX"].astype(float)
-                features["surface_mean_m"] = g.mean()
-                features["surface_std_m"] = g.std()
-            else:
-                features["surface_mean_m"] = 0.0
-                features["surface_std_m"] = 0.0
-        except Exception:
-            features["surface_mean_m"] = 0.0
-            features["surface_std_m"] = 0.0
-    else:
-        features["surface_mean_m"] = 0.0
-        features["surface_std_m"] = 0.0
-
-    return features
-
-
-def fetch_price_on_datetime(ticker, dt: datetime):
-    yf_symbol = ticker
-    if ticker.upper() == "SPX":
-        yf_symbol = "^SPX"
-    start = (dt - timedelta(days=2)).date().isoformat()
-    end = (dt + timedelta(days=3)).date().isoformat()
-    hist = yf.Ticker(yf_symbol).history(start=start, end=end, auto_adjust=False)
-    if hist.empty:
-        return None
-    hist.index = pd.to_datetime(hist.index)
-    mask = hist.index <= pd.to_datetime(dt)
-    if mask.any():
-        row = hist.loc[mask].iloc[-1]
-        return float(row["Close"])
-    else:
-        return float(hist.iloc[0]["Close"])
-
-
-def build_feature_timeseries(ticker: str):
+def build_feature_timeseries(ticker: str) -> pd.DataFrame:
     exports = find_exports_for_ticker(ticker)
+    timestamps = sorted(ts for ts, k in exports.items() if "gex_by_strike" in k)
     rows = []
-    for ts, info in exports.items():
-        ts_dt = parse_timestamp(ts)
-        features = compute_features_from_exports(info)
-        price = fetch_price_on_datetime(ticker, ts_dt)
-        if price is None:
-            continue
-        price_next = fetch_price_on_datetime(ticker, ts_dt + timedelta(days=1))
-        if price_next is None:
-            continue
-        ret = (price_next - price) / price
-        label = 1 if ret > 0 else 0
-        row = {"ts": ts_dt, "price": price, "price_next": price_next, "ret": ret, "label": label}
-        row.update(features)
+    prev_feats = None
+    for ts in timestamps:
+        info = exports[ts]
+        feats = compute_features_from_exports(info, prev_features=prev_feats)
+        prev_feats = feats
+        row = {"ts": parse_timestamp(ts)}
+        row.update(feats)
         rows.append(row)
+
     if not rows:
         return pd.DataFrame()
-    df = pd.DataFrame(rows)
-    df = df.sort_values(by="ts").reset_index(drop=True)
+
+    df = pd.DataFrame(rows).sort_values("ts").reset_index(drop=True)
+    df["target_delta_gex"] = df["total_gex_bn"].shift(-1) - df["total_gex_bn"]
+    df = df.dropna(subset=["target_delta_gex"])
     df.set_index("ts", inplace=True)
     return df
 
 
-def create_sequences(df: pd.DataFrame, seq_len=8):
-    feature_cols = [c for c in df.columns if c not in ["price", "price_next", "ret", "label"]]
-    X = []
-    y = []
+def create_sequences(df: pd.DataFrame, seq_len: int = 8):
+    exclude = {"target_delta_gex", "spot"}
+    feature_cols = [c for c in df.columns if c not in exclude and df[c].dtype in [np.float64, np.int64, float, int]]
+    X, y = [], []
     for i in range(len(df) - seq_len):
         seq = df.iloc[i : i + seq_len][feature_cols].values
-        label = df.iloc[i + seq_len]["label"]
+        label = df.iloc[i + seq_len]["target_delta_gex"]
         X.append(seq)
         y.append(label)
-    X = np.array(X)
-    y = np.array(y)
-    return X, y, feature_cols
+    return np.array(X), np.array(y), feature_cols
 
 
-def train_lstm(ticker: str, seq_len=8, epochs=50, batch_size=16):
-    print(f"Building feature timeline for {ticker}...")
+def train_lstm(ticker: str, seq_len: int = 8, epochs: int = 50, batch_size: int = 16):
+    print(f"Building ΔGEX sequence dataset for {ticker}...")
     df = build_feature_timeseries(ticker)
     if df.empty:
-        print("No data available to train. Ensure exports and internet access.")
+        print("No data available.")
         return
 
     X, y, feature_cols = create_sequences(df, seq_len=seq_len)
     if X.size == 0:
-        print("Not enough sequential snapshots to build sequences. Need more exports.")
+        print(f"Need more snapshots (seq_len={seq_len}).")
         return
 
-    # Chronological train/val split
-    split = int(0.8 * len(X))
+    split = max(int(0.8 * len(X)), 1)
     X_train, X_test = X[:split], X[split:]
     y_train, y_test = y[:split], y[split:]
 
-    # Flatten scaler fit on features
     n_features = X.shape[2]
     scaler = StandardScaler()
-    X_train_flat = X_train.reshape(-1, n_features)
-    X_test_flat = X_test.reshape(-1, n_features)
-    scaler.fit(X_train_flat)
-    X_train_scaled = scaler.transform(X_train_flat).reshape(X_train.shape)
-    X_test_scaled = scaler.transform(X_test_flat).reshape(X_test.shape)
+    X_train_scaled = scaler.fit_transform(X_train.reshape(-1, n_features)).reshape(X_train.shape)
+    X_test_scaled = scaler.transform(X_test.reshape(-1, n_features)).reshape(X_test.shape) if len(X_test) else X_test
 
-    # Build LSTM model
     tf.random.set_seed(42)
-    model = Sequential()
-    model.add(LSTM(64, input_shape=(seq_len, n_features), return_sequences=False))
-    model.add(Dropout(0.2))
-    model.add(Dense(32, activation="relu"))
-    model.add(Dropout(0.2))
-    model.add(Dense(1, activation="sigmoid"))
-
-    model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+    model = Sequential([
+        LSTM(64, input_shape=(seq_len, n_features), return_sequences=False),
+        Dropout(0.2),
+        Dense(32, activation="relu"),
+        Dropout(0.2),
+        Dense(1),
+    ])
+    model.compile(optimizer="adam", loss="mse", metrics=["mae"])
 
     early = EarlyStopping(monitor="val_loss", patience=6, restore_best_weights=True)
-
-    history = model.fit(
-        X_train_scaled,
-        y_train,
-        validation_data=(X_test_scaled, y_test),
+    val_data = (X_test_scaled, y_test) if len(X_test) else None
+    model.fit(
+        X_train_scaled, y_train,
+        validation_data=val_data,
         epochs=epochs,
         batch_size=batch_size,
         callbacks=[early],
         verbose=2,
     )
 
-    # Evaluate
-    loss, acc = model.evaluate(X_test_scaled, y_test, verbose=0)
-    print(f"Test accuracy: {acc:.4f}, loss: {loss:.4f}")
+    if len(X_test):
+        preds = model.predict(X_test_scaled, verbose=0).flatten()
+        mae = float(np.mean(np.abs(preds - y_test)))
+        sign_acc = float(np.mean(np.sign(preds) == np.sign(y_test)))
+        print(f"Test MAE: {mae:.4f} Bn$ / %, sign accuracy: {sign_acc:.3f}")
 
-    # Save model and metadata
-    model_dir = MODELS_DIR / f"{ticker}_gex_lstm"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    model.save(str(model_dir))
-
-    meta = {"features": feature_cols, "seq_len": seq_len}
-    joblib.dump({"scaler": scaler, "meta": meta}, model_dir / "meta.joblib")
-
-    print(f"Saved LSTM model to {model_dir}")
+    model_path = MODELS_DIR / f"{ticker}_gex_lstm.keras"
+    model.save(str(model_path))
+    joblib.dump(
+        {"scaler": scaler, "meta": {"features": feature_cols, "seq_len": seq_len, "target": "delta_gex"}},
+        MODELS_DIR / f"{ticker}_gex_lstm_meta.joblib",
+    )
+    print(f"Saved LSTM model to {model_path}")
 
 
 if __name__ == "__main__":

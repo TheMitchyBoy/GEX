@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 data/gex.db
 data/.gex_scheduler.lock
+models/
 .venv/
 venv/

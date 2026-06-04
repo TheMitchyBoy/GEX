@@ -7,16 +7,20 @@ This script:
 - Tests a naive signal: sign(change in total_gex) predicting next-day direction
 - Reports accuracy and a simple PnL assuming daily rebalancing
 
+For ΔGEX prediction backtesting, see scripts/backtest_gex_prediction.py
+
 Usage:
     python scripts/backtest_features.py --ticker SPX
 """
 import argparse
 from pathlib import Path
-import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import sys
 
 try:
     import yfinance as yf
@@ -24,43 +28,8 @@ except ModuleNotFoundError:
     print("Missing dependency 'yfinance'. Install with: pip install -r requirements.txt")
     sys.exit(1)
 
-EXPORT_DIR = Path("data/exports")
-
-TIMESTAMP_RE = re.compile(r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$")
-
-
-def find_exports_for_ticker(ticker: str):
-    files = list(EXPORT_DIR.glob(f"{ticker}_*_*_*.csv"))
-    records = {}
-    for f in files:
-        m = TIMESTAMP_RE.match(f.name)
-        if not m:
-            continue
-        ts = m.group("ts")
-        kind = m.group("kind")
-        records.setdefault(ts, {})[kind] = f
-    return records
-
-
-def parse_ts(ts: str):
-    return datetime.strptime(ts, "%Y-%m-%d_%H%M%S")
-
-
-def compute_gamma_flip(cumulative_csv_path: Path):
-    try:
-        s = pd.read_csv(cumulative_csv_path, index_col=0, squeeze=True)
-    except Exception:
-        s = pd.read_csv(cumulative_csv_path, index_col=0).iloc[:, 0]
-    s = s.sort_index()
-    cum = s.cumsum() if s.name is None else s
-    # find zero crossing
-    signs = np.sign(cum.values)
-    change_points = np.where(np.diff(signs) != 0)[0]
-    if len(change_points) == 0:
-        return None
-    idx = change_points[0]
-    x0 = cum.index[idx]
-    return float(x0)
+from gex_core.exports import find_exports_for_ticker, load_strike_series, load_expiration_series, parse_timestamp
+from gex_core.features import estimate_gamma_flip
 
 
 def fetch_close_on_date(ticker: str, dt: datetime):
@@ -84,30 +53,22 @@ def build_feature_table(ticker: str):
         # require gex_by_strike to compute total
         if "gex_by_strike" not in info:
             continue
-        ts_dt = parse_ts(ts)
-        # total gex
-        gex = pd.read_csv(info["gex_by_strike"], index_col=0).iloc[:, 0].astype(float)
-        total_gex = gex.sum()
-        # near_term ratio
-        term_total = None
+        ts_dt = parse_timestamp(ts)
+        gex = load_strike_series(info["gex_by_strike"])
+        total_gex = float(gex.sum())
         if "gex_by_expiration" in info:
-            gexp = pd.read_csv(info["gex_by_expiration"], index_col=0).iloc[:, 0].astype(float)
-            term_total = gexp.sum()
-            near_term = gexp.head(3).sum() if len(gexp) > 0 else 0.0
+            gexp = load_expiration_series(info["gex_by_expiration"])
+            term_total = float(gexp.sum())
+            near_term = float(gexp.head(3).sum()) if len(gexp) else 0.0
             near_term_ratio = near_term / term_total if term_total != 0 else 0.0
         else:
             near_term_ratio = 0.0
 
-        # gamma flip if cumulative available
         gamma_flip = None
         if "cumulative_gex" in info:
             try:
-                cum = pd.read_csv(info["cumulative_gex"], index_col=0).iloc[:, 0].astype(float)
-                # find zero crossing
-                signs = np.sign(cum.values)
-                change_points = np.where(np.diff(signs) != 0)[0]
-                if len(change_points) > 0:
-                    gamma_flip = float(cum.index[change_points[0]])
+                cum = load_strike_series(info["cumulative_gex"])
+                gamma_flip = estimate_gamma_flip(cum)
             except Exception:
                 gamma_flip = None
 
