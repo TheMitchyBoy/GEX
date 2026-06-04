@@ -169,11 +169,141 @@ def render_gex_timeline(history: list[dict]):
         return
     st.subheader("GEX Timeline")
     labels = [h["ts_label"] for h in history]
-    totals = [h["total_gex"] for h in history]
+    totals = [float(h.get("total_gex", 0) or 0) for h in history]
+    pos = [float(h.get("pos_gex", 0) or 0) for h in history]
+    neg = [float(h.get("neg_gex", 0) or 0) for h in history]
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=labels, y=totals, mode="lines+markers", name="Total GEX"))
-    fig.add_hline(y=0, line_dash="dash")
-    fig.update_layout(height=320, xaxis_title="Snapshot", yaxis_title="GEX (Bn$ / %)")
+    fig.add_trace(go.Scatter(
+        x=labels, y=pos,
+        fill="tozeroy",
+        fillcolor="rgba(34,197,94,0.13)",
+        line=dict(color="#22c55e", width=1),
+        name="Positive GEX",
+        hovertemplate="%{y:.3f} Bn$<extra>+GEX</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=labels, y=neg,
+        fill="tozeroy",
+        fillcolor="rgba(239,68,68,0.13)",
+        line=dict(color="#ef4444", width=1),
+        name="Negative GEX",
+        hovertemplate="%{y:.3f} Bn$<extra>-GEX</extra>",
+    ))
+    marker_colors = ["#22c55e" if t >= 0 else "#ef4444" for t in totals]
+    fig.add_trace(go.Scatter(
+        x=labels, y=totals,
+        mode="lines+markers",
+        line=dict(color="#60a5fa", width=2.5),
+        marker=dict(size=7, color=marker_colors),
+        name="Total GEX",
+        hovertemplate="%{y:.3f} Bn$<extra>Net GEX</extra>",
+    ))
+    fig.add_hline(y=0, line_dash="dash", line_color="#adb5bd", line_width=1)
+    fig.update_layout(
+        height=340,
+        xaxis_title="Snapshot",
+        yaxis_title="GEX (Bn$ / %)",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_cumulative_gex(cumulative: pd.Series, gamma_flip=None):
+    """Area chart of cumulative GEX with gamma-flip annotation."""
+    if cumulative is None or cumulative.empty:
+        st.info("No cumulative GEX data available.")
+        return
+    x = [float(v) for v in cumulative.index]
+    y = cumulative.astype(float).tolist()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x, y=[max(v, 0) for v in y],
+        fill="tozeroy",
+        fillcolor="rgba(34,197,94,0.15)",
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=[min(v, 0) for v in y],
+        fill="tozeroy",
+        fillcolor="rgba(239,68,68,0.15)",
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=y,
+        mode="lines",
+        line=dict(color="#60a5fa", width=2.5),
+        name="Cumulative GEX",
+        hovertemplate="Strike %{x:.0f}<br>%{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.35)", line_width=1)
+    if gamma_flip is not None:
+        try:
+            fig.add_vline(
+                x=float(gamma_flip),
+                line_dash="dot",
+                line_color="#f59e0b",
+                line_width=2,
+                annotation_text=f"Flip ~{float(gamma_flip):.0f}",
+                annotation_font_color="#f59e0b",
+                annotation_position="top right",
+            )
+        except Exception:
+            pass
+    fig.update_layout(
+        height=300,
+        xaxis_title="Strike",
+        yaxis_title="Cumulative GEX (Bn$ / %)",
+        hovermode="x unified",
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_gex_breakdown(history: list[dict]):
+    """Stacked-relative bar chart showing positive/negative GEX composition over time."""
+    if len(history) < 2:
+        return
+    labels = [h["ts_label"] for h in history]
+    pos = [float(h.get("pos_gex", 0) or 0) for h in history]
+    neg = [float(h.get("neg_gex", 0) or 0) for h in history]
+    totals = [float(h.get("total_gex", 0) or 0) for h in history]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Positive GEX", x=labels, y=pos,
+        marker_color="rgba(34,197,94,0.75)",
+        marker_line_width=0,
+        hovertemplate="%{x}<br>+GEX: %{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        name="Negative GEX", x=labels, y=neg,
+        marker_color="rgba(239,68,68,0.75)",
+        marker_line_width=0,
+        hovertemplate="%{x}<br>-GEX: %{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=labels, y=totals,
+        mode="lines+markers",
+        line=dict(color="#60a5fa", width=2),
+        marker=dict(size=6),
+        name="Net GEX",
+        hovertemplate="%{x}<br>Net: %{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.update_layout(
+        barmode="relative",
+        height=320,
+        xaxis_title="Snapshot",
+        yaxis_title="GEX (Bn$ / %)",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -197,7 +327,24 @@ def main():
 
     if show_predictions and history:
         render_predictions(ticker, history)
-        render_gex_timeline(history)
+
+    if history:
+        tab_timeline, tab_breakdown, tab_cumulative = st.tabs(
+            ["GEX Timeline", "GEX Composition", "Cumulative GEX"]
+        )
+        with tab_timeline:
+            render_gex_timeline(history)
+        with tab_breakdown:
+            if len(history) >= 2:
+                render_gex_breakdown(history)
+            else:
+                st.info("Need at least 2 snapshots for composition chart.")
+        with tab_cumulative:
+            latest = history[-1]
+            render_cumulative_gex(
+                latest.get("cumulative", pd.Series(dtype=float)),
+                gamma_flip=latest.get("gamma_flip"),
+            )
 
     col1, col2 = st.columns([1, 2])
 
@@ -267,15 +414,25 @@ def main():
                 )
             else:
                 y_label = "Positive GEX (Bn$ / %)" if positive_gamma_focus else "GEX (Bn$ / %)"
-                fig = px.bar(
-                    strike_chart,
-                    x="strike",
-                    y="gex",
-                    labels={"strike": "Strike", "gex": y_label},
-                    color="gex" if positive_gamma_focus else None,
-                    color_continuous_scale=["#34d399", "#22c55e"] if positive_gamma_focus else None,
+                bar_colors = (
+                    ["#22c55e"] * len(strike_chart)
+                    if positive_gamma_focus
+                    else ["#22c55e" if v >= 0 else "#ef4444" for v in strike_chart["gex"]]
                 )
-                fig.update_layout(title="Positive gamma strike focus" if positive_gamma_focus else "GEX by strike")
+                fig = go.Figure(go.Bar(
+                    x=strike_chart["strike"],
+                    y=strike_chart["gex"],
+                    marker_color=bar_colors,
+                    marker_line_width=0,
+                    hovertemplate="Strike %{x:.0f}<br>GEX %{y:.3f} Bn$<extra></extra>",
+                ))
+                fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
+                fig.update_layout(
+                    title="Positive gamma strike focus" if positive_gamma_focus else "GEX by strike",
+                    xaxis_title="Strike",
+                    yaxis_title=y_label,
+                    height=340,
+                )
                 st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No gex_by_strike CSV found in data/exports for this ticker.")
@@ -283,7 +440,21 @@ def main():
         if exp_path:
             st.subheader("GEX by expiration")
             df_exp = pd.read_csv(str(exp_path), index_col=0)
-            fig2 = px.bar(df_exp, x=df_exp.index, y=df_exp.iloc[:, 0])
+            exp_vals = pd.to_numeric(df_exp.iloc[:, 0], errors="coerce").fillna(0.0)
+            exp_colors = ["#22c55e" if v >= 0 else "#ef4444" for v in exp_vals]
+            fig2 = go.Figure(go.Bar(
+                x=df_exp.index,
+                y=exp_vals,
+                marker_color=exp_colors,
+                marker_line_width=0,
+                hovertemplate="Expiry %{x}<br>GEX %{y:.3f} Bn$<extra></extra>",
+            ))
+            fig2.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
+            fig2.update_layout(
+                xaxis_title="Expiration",
+                yaxis_title="GEX (Bn$ / %)",
+                height=320,
+            )
             st.plotly_chart(fig2, use_container_width=True)
 
 

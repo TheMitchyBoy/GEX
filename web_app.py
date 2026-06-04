@@ -240,25 +240,160 @@ def build_history(ticker: str):
 def make_timeline_chart(history, ticker):
     if not history:
         return None
+    labels = [row["ts_label"] for row in history]
+    totals = [safe_float(row.get("total_gex"), 0.0) for row in history]
+    pos = [safe_float(row.get("pos_gex"), 0.0) for row in history]
+    neg = [safe_float(row.get("neg_gex"), 0.0) for row in history]
+
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=[row["ts_label"] for row in history],
-            y=[row["total_gex"] for row in history],
-            mode="lines+markers",
-            line=dict(color="#4dabf7", width=2),
-            marker=dict(size=7),
-            name="Total GEX",
-        )
-    )
-    fig.add_hline(y=0, line_dash="dash", line_color="#adb5bd")
+    fig.add_trace(go.Scatter(
+        x=labels, y=pos,
+        fill="tozeroy",
+        fillcolor="rgba(34,197,94,0.13)",
+        line=dict(color="#22c55e", width=1),
+        name="Positive GEX",
+        hovertemplate="%{y:.3f} Bn$<extra>+GEX</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=labels, y=neg,
+        fill="tozeroy",
+        fillcolor="rgba(239,68,68,0.13)",
+        line=dict(color="#ef4444", width=1),
+        name="Negative GEX",
+        hovertemplate="%{y:.3f} Bn$<extra>-GEX</extra>",
+    ))
+    marker_colors = ["#22c55e" if t >= 0 else "#ef4444" for t in totals]
+    fig.add_trace(go.Scatter(
+        x=labels,
+        y=totals,
+        mode="lines+markers",
+        line=dict(color="#4dabf7", width=2.5),
+        marker=dict(size=7, color=marker_colors, line=dict(color="#ffffff", width=1)),
+        name="Total GEX",
+        hovertemplate="%{y:.3f} Bn$<extra>Net GEX</extra>",
+    ))
+    fig.add_hline(y=0, line_dash="dash", line_color="#adb5bd", line_width=1)
     fig.update_layout(
         title=f"{ticker} Total GEX Timeline",
+        template="plotly_dark",
+        height=340,
+        margin=dict(l=20, r=20, t=45, b=20),
+        xaxis_title="Snapshot",
+        yaxis_title="GEX (Bn$ / %)",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_cumulative_gex_chart(cumulative, ticker, gamma_flip=None):
+    """Area chart of cumulative GEX by strike with optional flip annotation."""
+    if cumulative is None or (hasattr(cumulative, "empty") and cumulative.empty):
+        return None
+    try:
+        x = [float(v) for v in cumulative.index]
+        y = [float(v) for v in cumulative]
+    except Exception:
+        return None
+    if not x:
+        return None
+
+    fig = go.Figure()
+    # Positive fill
+    fig.add_trace(go.Scatter(
+        x=x, y=[max(v, 0) for v in y],
+        fill="tozeroy",
+        fillcolor="rgba(34,197,94,0.15)",
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    # Negative fill
+    fig.add_trace(go.Scatter(
+        x=x, y=[min(v, 0) for v in y],
+        fill="tozeroy",
+        fillcolor="rgba(239,68,68,0.15)",
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    # Cumulative line
+    fig.add_trace(go.Scatter(
+        x=x, y=y,
+        mode="lines",
+        line=dict(color="#60a5fa", width=2.5),
+        name="Cumulative GEX",
+        hovertemplate="Strike %{x:.0f}<br>Cum. GEX %{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.35)", line_width=1)
+    if gamma_flip is not None:
+        try:
+            fig.add_vline(
+                x=float(gamma_flip),
+                line_dash="dot",
+                line_color="#f59e0b",
+                line_width=2,
+                annotation_text=f"Flip ~{float(gamma_flip):.0f}",
+                annotation_font_color="#f59e0b",
+                annotation_position="top right",
+            )
+        except Exception:
+            pass
+    fig.update_layout(
+        title=f"{ticker} Cumulative GEX by Strike",
+        template="plotly_dark",
+        height=300,
+        margin=dict(l=20, r=20, t=45, b=20),
+        xaxis_title="Strike",
+        yaxis_title="Cumulative GEX (Bn$ / %)",
+        hovermode="x unified",
+        showlegend=False,
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_gex_breakdown_chart(history, ticker):
+    """Stacked-relative bar chart showing positive / negative GEX composition over snapshots."""
+    if not history or len(history) < 2:
+        return None
+    labels = [row["ts_label"] for row in history]
+    pos = [safe_float(row.get("pos_gex"), 0.0) for row in history]
+    neg = [safe_float(row.get("neg_gex"), 0.0) for row in history]
+    totals = [safe_float(row.get("total_gex"), 0.0) for row in history]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Positive GEX",
+        x=labels, y=pos,
+        marker_color="rgba(34,197,94,0.75)",
+        marker_line_width=0,
+        hovertemplate="%{x}<br>+GEX: %{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        name="Negative GEX",
+        x=labels, y=neg,
+        marker_color="rgba(239,68,68,0.75)",
+        marker_line_width=0,
+        hovertemplate="%{x}<br>-GEX: %{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=labels, y=totals,
+        mode="lines+markers",
+        line=dict(color="#60a5fa", width=2),
+        marker=dict(size=6),
+        name="Net GEX",
+        hovertemplate="%{x}<br>Net: %{y:.3f} Bn$<extra></extra>",
+    ))
+    fig.update_layout(
+        barmode="relative",
+        title=f"{ticker} GEX Composition Over Time",
         template="plotly_dark",
         height=320,
         margin=dict(l=20, r=20, t=45, b=20),
         xaxis_title="Snapshot",
         yaxis_title="GEX (Bn$ / %)",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
@@ -425,6 +560,8 @@ def ticker_page(ticker):
             heatmap_json=None,
             scatter3d_json=None,
             timeline_json=None,
+            cumulative_gex_json=None,
+            breakdown_json=None,
             timeline_options=[],
             selected=selected,
             prediction=None,
@@ -456,6 +593,12 @@ def ticker_page(ticker):
         surface_df=selected.get("surface_df"),
     )
     timeline_json = make_timeline_chart(history, ticker)
+    cumulative_gex_json = make_cumulative_gex_chart(
+        selected.get("cumulative"),
+        ticker,
+        gamma_flip=selected.get("gamma_flip"),
+    )
+    breakdown_json = make_gex_breakdown_chart(history, ticker)
 
     prediction = predict_next_snapshot(history)
     current_strike_chart_json = make_positive_strike_chart(
@@ -503,6 +646,8 @@ def ticker_page(ticker):
         heatmap_json=heatmap_json,
         scatter3d_json=scatter3d_json,
         timeline_json=timeline_json,
+        cumulative_gex_json=cumulative_gex_json,
+        breakdown_json=breakdown_json,
         timeline_options=timeline_options,
         selected=selected,
         prediction=prediction,

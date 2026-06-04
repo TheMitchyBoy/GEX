@@ -208,6 +208,9 @@ def run(
     gex_by_expiration = agg.gex_by_expiration
     surface_data = agg.surface_data
 
+    gamma_flip = print_gamma_flip_estimate(cumulative_gex)
+    gamma_flip_strike = gamma_flip.get("flip_strike") if isinstance(gamma_flip, dict) else None
+
     if show_plots or save_plots:
         plot_gex_by_strike(
             ticker=ticker,
@@ -218,6 +221,17 @@ def run(
             outdir=outdir,
             top_n=top_n,
             strike_window_pct=strike_window_pct,
+            cumulative_gex=cumulative_gex,
+            gamma_flip=gamma_flip_strike,
+        )
+        plot_cumulative_gex(
+            ticker=ticker,
+            cumulative_gex=cumulative_gex,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+            spot=spot_price,
+            gamma_flip=gamma_flip_strike,
         )
         plot_gex_by_expiration(
             ticker=ticker,
@@ -233,8 +247,6 @@ def run(
             save_plots=save_plots,
             outdir=outdir,
         )
-
-    gamma_flip = print_gamma_flip_estimate(cumulative_gex)
     
     # Step 7: Export all computed metrics to CSV for further analysis
     if export_csv:
@@ -806,81 +818,91 @@ def plot_gex_by_strike(
     outdir,
     top_n=5,
     strike_window_pct=0.15,
+    cumulative_gex=None,
+    gamma_flip=None,
 ):
     """
     Visualize pre-aggregated gamma exposure distribution across strike prices.
-    
-    This function creates two key outputs:
-    1. Bar chart of GEX by strike (within configurable window around spot price)
-    2. Cumulative GEX curve (useful for identifying gamma flip levels)
-    
-    The strike window limits the chart to a focused range around the current price
-    to avoid over-plotting very distant out-of-the-money options.
-    
-    The top_n parameter highlights the most significant gamma levels with labels.
-    
+
+    Renders a bar chart of GEX per strike (green = long, pink = short) with:
+    - A spot-price vertical guide line
+    - An optional secondary axis showing the cumulative GEX curve
+    - An optional gamma-flip annotation when the cumulative curve crosses zero
+
     Args:
         ticker (str): Stock ticker symbol (for labeling)
         spot (float): Current spot price
-        data (DataFrame): Options data with 'strike' and 'GEX' columns
+        gex_by_strike (Series): Pre-aggregated GEX indexed by strike (Bn$/%)
         show_plots (bool): Display chart in window
         save_plots (bool): Save chart to disk
         outdir (Path/str): Output directory for plots
         top_n (int): Number of top strikes to label on chart
         strike_window_pct (float): Percentage window around spot (e.g., 0.15 = ±15%)
-    
-    Returns:
-        tuple: (gex_by_strike: Series, cumulative_gex: Series)
-               - gex_by_strike: GEX indexed by strike
-               - cumulative_gex: Cumulative GEX sorted by strike
-    
-    Example:
-        >>> gex_by_strike, cumulative = compute_gex_by_strike(
-        ...     "SPX", 4800, options_df, True, True, "img", top_n=3, strike_window_pct=0.20
-        ... )
-        >>> print(f"Strike range: {gex_by_strike.index.min()} to {gex_by_strike.index.max()}")
+        cumulative_gex (Series | None): Cumulative GEX series to overlay on secondary axis
+        gamma_flip (float | None): Estimated gamma flip strike for annotation
     """
-    
     plt, _ = _matplotlib()
 
-    # Filter to a window around the current spot price
-    # This focuses the visualization on relevant price levels
     lower = spot * (1 - strike_window_pct)
     upper = spot * (1 + strike_window_pct)
     limit_criteria = (gex_by_strike.index > lower) & (gex_by_strike.index < upper)
     selected = gex_by_strike.loc[limit_criteria]
 
-    # Step 3: Create bar chart with color-coding
-    # Green bars = positive GEX (long gamma)
-    # Pink bars = negative GEX (short gamma)
-    fig, ax = plt.subplots(figsize=(14, 7))
+    fig, ax1 = plt.subplots(figsize=(14, 7))
     colors = np.where(selected.values >= 0, "#38E07A", "#FE53BB")
-    bars = ax.bar(selected.index, selected.values, color=colors, alpha=0.85, edgecolor="none")
-    
-    # Styling
-    ax.set_facecolor("#0F172A")
-    ax.grid(color="#334155", linestyle="-", alpha=0.25)
-    ax.tick_params(axis="x", rotation=45)
-    ax.tick_params(axis="y")
-    ax.set_xlabel("Strike", fontweight="heavy")
-    ax.set_ylabel("Gamma Exposure (Bn$ / %)", fontweight="heavy")
-    ax.set_title(f"{ticker} GEX by strike", fontweight="heavy")
-    for spine in ax.spines.values():
+    bars = ax1.bar(selected.index, selected.values, color=colors, alpha=0.85, edgecolor="none", zorder=3)
+
+    # Spot price guide line
+    ax1.axvline(x=spot, color="#F8D56B", linestyle="--", linewidth=1.5, label=f"Spot {spot:.0f}", zorder=5)
+
+    # Gamma flip annotation
+    if gamma_flip is not None:
+        ax1.axvline(x=gamma_flip, color="#F97316", linestyle=":", linewidth=1.5, label=f"Flip ~{gamma_flip:.0f}", zorder=5)
+        try:
+            ax1.annotate(
+                f"Flip ~{gamma_flip:.0f}",
+                xy=(gamma_flip, ax1.get_ylim()[1] * 0.85),
+                xytext=(8, 0),
+                textcoords="offset points",
+                color="#F97316",
+                fontsize=8,
+                ha="left",
+            )
+        except Exception:
+            pass
+
+    # Cumulative GEX on secondary y-axis
+    if cumulative_gex is not None and not cumulative_gex.empty:
+        cum_window = cumulative_gex.loc[(cumulative_gex.index >= lower) & (cumulative_gex.index <= upper)]
+        if not cum_window.empty:
+            ax2 = ax1.twinx()
+            ax2.plot(cum_window.index, cum_window.values, color="#60A5FA", linewidth=2.5, alpha=0.9, label="Cumulative GEX", zorder=4)
+            ax2.axhline(y=0, color="#60A5FA", linestyle=":", linewidth=0.8, alpha=0.4)
+            ax2.set_ylabel("Cumulative GEX (Bn$ / %)", color="#60A5FA", fontweight="heavy")
+            ax2.tick_params(axis="y", colors="#60A5FA")
+            for spine in ax2.spines.values():
+                spine.set_visible(False)
+            ax2.legend(loc="upper right", fontsize=9)
+
+    # Primary axis styling
+    ax1.set_facecolor("#0F172A")
+    ax1.grid(color="#334155", linestyle="-", alpha=0.25, zorder=0)
+    ax1.tick_params(axis="x", rotation=45)
+    ax1.set_xlabel("Strike", fontweight="heavy")
+    ax1.set_ylabel("Gamma Exposure (Bn$ / %)", fontweight="heavy")
+    ax1.set_title(f"{ticker} GEX by Strike", fontweight="heavy")
+    ax1.legend(loc="upper left", fontsize=9)
+    for spine in ax1.spines.values():
         spine.set_visible(False)
-    
-    # Step 4: Label the top_n most significant gamma levels
+
+    # Label top_n most significant strikes
     if not selected.empty:
-        # Find top strikes by absolute GEX magnitude
         labels_to_annotate = selected.abs().sort_values(ascending=False).head(top_n)
         selected_index_values = selected.index.to_numpy()
-        
         for strike in labels_to_annotate.index:
-            # Find the bar corresponding to this strike
             bar_idx = int(np.where(selected_index_values == strike)[0][0])
             bar = bars[bar_idx]
-            
-            # Place label above (positive GEX) or below (negative GEX) the bar
-            ax.annotate(
+            ax1.annotate(
                 f"{int(strike)}",
                 xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
                 xytext=(0, 3 if bar.get_height() >= 0 else -12),
@@ -889,8 +911,7 @@ def plot_gex_by_strike(
                 va="bottom" if bar.get_height() >= 0 else "top",
                 fontsize=8,
             )
-    
-    # Step 5: Save/display the plot
+
     finalize_plot(
         fig,
         build_output_path(outdir, ticker, "gex_by_strike", "png"),
@@ -914,32 +935,103 @@ def compute_gex_by_strike(
 # ============================================================================
 
 def plot_gex_by_expiration(ticker, gex_by_expiration, show_plots, save_plots, outdir):
-    """Visualize pre-aggregated GEX by expiration."""
+    """Visualize pre-aggregated GEX by expiration with signed color coding."""
     plt, _ = _matplotlib()
     fig, ax = plt.subplots(figsize=(14, 7))
+
+    colors = np.where(gex_by_expiration.values >= 0, "#38E07A", "#FE53BB")
     ax.bar(
         gex_by_expiration.index,
         gex_by_expiration.values,
-        color="#82C7FF",
-        alpha=0.8,
+        color=colors,
+        alpha=0.82,
         edgecolor="none",
     )
-    
-    # Styling
+    ax.axhline(y=0, color="#94a3b8", linestyle="--", linewidth=0.8)
+
     ax.set_facecolor("#0F172A")
     ax.grid(color="#334155", linestyle="-", alpha=0.25)
     ax.tick_params(axis="x", rotation=45)
-    ax.tick_params(axis="y")
     ax.set_xlabel("Expiration date", fontweight="heavy")
     ax.set_ylabel("Gamma Exposure (Bn$ / %)", fontweight="heavy")
-    ax.set_title(f"{ticker} GEX by expiration", fontweight="heavy")
+    ax.set_title(f"{ticker} GEX by Expiration", fontweight="heavy")
     for spine in ax.spines.values():
         spine.set_visible(False)
-    
-    # Step 4: Save/display the plot
+
     finalize_plot(
         fig,
         build_output_path(outdir, ticker, "gex_by_expiration", "png"),
+        show_plots,
+        save_plots,
+    )
+
+
+def plot_cumulative_gex(
+    ticker,
+    cumulative_gex,
+    show_plots,
+    save_plots,
+    outdir,
+    spot=None,
+    gamma_flip=None,
+):
+    """
+    Dedicated cumulative-GEX area chart.
+
+    Shows the running sum of GEX across strikes so the gamma-flip level
+    (zero-crossing) is immediately visible. Green fill = long-gamma zone,
+    pink fill = short-gamma zone.
+
+    Args:
+        ticker (str): Ticker symbol used in title and filename.
+        cumulative_gex (Series): Cumulative GEX indexed by strike (Bn$/%).
+        show_plots (bool): Display chart in a window.
+        save_plots (bool): Save chart to disk as PNG.
+        outdir (Path/str): Directory for saved plots.
+        spot (float | None): Current spot price for a vertical guide line.
+        gamma_flip (float | None): Estimated flip strike for an annotation.
+    """
+    if cumulative_gex is None or cumulative_gex.empty:
+        return
+
+    plt, _ = _matplotlib()
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    x = cumulative_gex.index.to_numpy(dtype=float)
+    y = cumulative_gex.values.astype(float)
+
+    ax.fill_between(x, y, 0, where=(y >= 0), color="#38E07A", alpha=0.22, label="Long gamma zone")
+    ax.fill_between(x, y, 0, where=(y < 0), color="#FE53BB", alpha=0.22, label="Short gamma zone")
+    ax.plot(x, y, color="#60A5FA", linewidth=2.5, zorder=4)
+    ax.axhline(y=0, color="#94a3b8", linestyle="--", linewidth=0.9)
+
+    if spot is not None:
+        ax.axvline(x=spot, color="#F8D56B", linestyle="--", linewidth=1.5, label=f"Spot {spot:.0f}", zorder=5)
+
+    if gamma_flip is not None:
+        ax.axvline(x=gamma_flip, color="#F97316", linestyle=":", linewidth=1.5, label=f"Flip ~{gamma_flip:.0f}", zorder=5)
+        ax.annotate(
+            f"Flip ~{gamma_flip:.0f}",
+            xy=(gamma_flip, 0),
+            xytext=(10, 18),
+            textcoords="offset points",
+            color="#F97316",
+            fontsize=9,
+            arrowprops=dict(arrowstyle="->", color="#F97316", lw=1.2),
+        )
+
+    ax.set_facecolor("#0F172A")
+    ax.grid(color="#334155", linestyle="-", alpha=0.25)
+    ax.set_xlabel("Strike", fontweight="heavy")
+    ax.set_ylabel("Cumulative GEX (Bn$ / %)", fontweight="heavy")
+    ax.set_title(f"{ticker} Cumulative GEX", fontweight="heavy")
+    ax.legend(fontsize=9)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    finalize_plot(
+        fig,
+        build_output_path(outdir, ticker, "cumulative_gex", "png"),
         show_plots,
         save_plots,
     )
