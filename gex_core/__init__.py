@@ -1,6 +1,19 @@
-"""GEX analytics: data quality, fetch, and aggregation."""
+"""GEX analytics: data quality, fetch, aggregation, features, and prediction."""
 
 from gex_core.data_quality import DataQualityConfig, DataQualityReport, clean_option_data
+from gex_core.decompose import GexDecomposition, decompose_gex, decompose_from_snapshots
+from gex_core.exports import (
+    EXPORT_DIR,
+    find_exports_for_ticker,
+    load_strike_series,
+    parse_timestamp,
+)
+from gex_core.features import (
+    compute_features_from_exports,
+    enrich_snapshot_metrics,
+    estimate_gamma_flip,
+    extract_surface_vector,
+)
 from gex_core.pipeline import (
     GexAggregates,
     aggregate_gex,
@@ -8,14 +21,29 @@ from gex_core.pipeline import (
     fetch_options_payload,
     parse_payload,
 )
+from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
 
 __all__ = [
     "DataQualityConfig",
     "DataQualityReport",
+    "EXPORT_DIR",
     "GexAggregates",
+    "GexDecomposition",
     "aggregate_gex",
     "attach_signed_gex",
     "clean_option_data",
+    "compute_features_from_exports",
+    "decompose_from_snapshots",
+    "decompose_gex",
+    "enrich_snapshot_metrics",
+    "estimate_gamma_flip",
+    "extract_surface_vector",
     "fetch_options_payload",
+    "find_exports_for_ticker",
+    "load_flow_predictions",
+    "load_strike_series",
     "parse_payload",
+    "parse_timestamp",
+    "predict_next_snapshot",
+    "similar_setups",
 ]

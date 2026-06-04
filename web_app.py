@@ -15,6 +15,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
 from plotly.utils import PlotlyJSONEncoder
 
+from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip
+from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
 from gex_db.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_tickers
 from gex_db.store import (
     get_latest_ts,
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
+FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
 REFRESH_TICKERS = DEFAULT_TICKERS
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
@@ -82,29 +85,8 @@ def collect_snapshot_files(ticker: str):
     return dict(sorted(filtered.items(), key=lambda item: item[0]))
 
 
-def estimate_gamma_flip(cumulative: pd.Series):
-    if cumulative.empty:
-        return None
-
-    values = cumulative.astype(float).values
-    idx = pd.to_numeric(cumulative.index, errors="coerce").to_numpy(dtype=float)
-    valid = ~np.isnan(idx)
-    if int(np.sum(valid)) < 2:
-        return None
-
-    x = idx[valid]
-    y = values[valid]
-    signs = np.sign(y)
-
-    for i in range(len(signs) - 1):
-        if signs[i] == signs[i + 1]:
-            continue
-        x0, x1 = float(x[i]), float(x[i + 1])
-        y0, y1 = float(y[i]), float(y[i + 1])
-        if y1 == y0:
-            return x0
-        return x0 - y0 * (x1 - x0) / (y1 - y0)
-    return None
+def estimate_gamma_flip_local(cumulative: pd.Series):
+    return estimate_gamma_flip(cumulative)
 
 
 def load_snapshot_metrics_from_row(row: dict):
@@ -122,7 +104,7 @@ def load_snapshot_metrics_from_row(row: dict):
 
     call_wall = float(strike.idxmax()) if len(strike) else None
     put_wall = float(strike.idxmin()) if len(strike) else None
-    gamma_flip = estimate_gamma_flip(cumulative)
+    gamma_flip = estimate_gamma_flip_local(cumulative)
 
     near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
     term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
@@ -132,7 +114,7 @@ def load_snapshot_metrics_from_row(row: dict):
     if not surface_df.empty and "GEX" in surface_df.columns:
         surface_peak = float(pd.to_numeric(surface_df["GEX"], errors="coerce").abs().max())
 
-    return {
+    metrics = {
         "ts": ts,
         "ts_label": ts_label(ts),
         "strike": strike,
@@ -155,6 +137,7 @@ def load_snapshot_metrics_from_row(row: dict):
         "surface_peak": surface_peak,
         "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
     }
+    return enrich_snapshot_metrics(metrics)
 
 
 def load_snapshot_metrics(ts: str, files: dict):
@@ -180,7 +163,7 @@ def load_snapshot_metrics(ts: str, files: dict):
 
     call_wall = float(strike.idxmax()) if len(strike) else None
     put_wall = float(strike.idxmin()) if len(strike) else None
-    gamma_flip = estimate_gamma_flip(cumulative)
+    gamma_flip = estimate_gamma_flip_local(cumulative)
 
     near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
     term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
@@ -193,9 +176,10 @@ def load_snapshot_metrics(ts: str, files: dict):
         if "GEX" in surface_df.columns and not surface_df.empty:
             surface_peak = float(pd.to_numeric(surface_df["GEX"], errors="coerce").abs().max())
 
-    return {
+    metrics = {
         "ts": ts,
         "ts_label": ts_label(ts),
+        "ticker": None,
         "strike": strike,
         "exp_df": exp_df,
         "cumulative": cumulative,
@@ -216,6 +200,7 @@ def load_snapshot_metrics(ts: str, files: dict):
         "surface_peak": surface_peak,
         "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
     }
+    return enrich_snapshot_metrics(metrics)
 
 
 def load_snapshot_metrics_from_db(ticker: str, ts: str):
@@ -235,6 +220,7 @@ def build_history(ticker: str):
             try:
                 metrics = load_snapshot_metrics_from_row(row)
                 if metrics:
+                    metrics["ticker"] = ticker
                     snapshots.append(metrics)
             except Exception:
                 continue
@@ -242,7 +228,9 @@ def build_history(ticker: str):
         snapshot_files = collect_snapshot_files(ticker)
         for ts, files in snapshot_files.items():
             try:
-                snapshots.append(load_snapshot_metrics(ts, files))
+                metrics = load_snapshot_metrics(ts, files)
+                metrics["ticker"] = ticker
+                snapshots.append(metrics)
             except Exception:
                 continue
 
@@ -350,173 +338,6 @@ def make_surface_scatter(
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def prepare_training_rows(history):
-    rows = []
-    for i in range(len(history) - 1):
-        cur = history[i]
-        nxt = history[i + 1]
-        rows.append(
-            {
-                "ts": cur["ts"],
-                "features": np.array(
-                    [
-                        cur["total_gex"],
-                        cur["pos_gex"],
-                        cur["neg_gex"],
-                        cur["gex_std"],
-                        cur["near_term_ratio"],
-                        cur["surface_peak"],
-                        safe_float(cur["call_wall"], 0.0),
-                        safe_float(cur["put_wall"], 0.0),
-                        safe_float(cur["gamma_flip"], 0.0),
-                    ],
-                    dtype=float,
-                ),
-                "target_total_gex": nxt["total_gex"],
-                "target_flip": nxt["gamma_flip"],
-                "target_near_term_ratio": nxt["near_term_ratio"],
-                "next_ts": nxt["ts"],
-            }
-        )
-    return rows
-
-
-def predict_next_snapshot(history):
-    if len(history) < 4:
-        return None
-
-    current = history[-1]
-    train = prepare_training_rows(history)
-    if len(train) < 3:
-        return None
-
-    x_train = np.vstack([row["features"] for row in train])
-    x_now = np.array(
-        [
-            current["total_gex"],
-            current["pos_gex"],
-            current["neg_gex"],
-            current["gex_std"],
-            current["near_term_ratio"],
-            current["surface_peak"],
-            safe_float(current["call_wall"], 0.0),
-            safe_float(current["put_wall"], 0.0),
-            safe_float(current["gamma_flip"], 0.0),
-        ],
-        dtype=float,
-    )
-
-    mean = x_train.mean(axis=0)
-    std = x_train.std(axis=0)
-    std = np.where(std == 0, 1.0, std)
-
-    z_train = (x_train - mean) / std
-    z_now = (x_now - mean) / std
-
-    distances = np.linalg.norm(z_train - z_now, axis=1)
-    k = min(4, len(distances))
-    nn_idx = np.argsort(distances)[:k]
-    nn_dist = distances[nn_idx]
-    weights = 1.0 / (nn_dist + 1e-6)
-    weights = weights / weights.sum()
-
-    pred_total = float(np.sum([weights[j] * train[i]["target_total_gex"] for j, i in enumerate(nn_idx)]))
-
-    flip_targets = np.array([safe_float(train[i]["target_flip"], safe_float(current["gamma_flip"], 0.0)) for i in nn_idx], dtype=float)
-    pred_flip = float(np.sum(weights * flip_targets))
-
-    pred_ratio = float(np.sum([weights[j] * train[i]["target_near_term_ratio"] for j, i in enumerate(nn_idx)]))
-
-    avg_dist = float(nn_dist.mean())
-    confidence = max(0.0, min(1.0, 1.0 / (1.0 + avg_dist)))
-
-    neighbors = []
-    for rank, (i, d) in enumerate(zip(nn_idx, nn_dist), start=1):
-        src = next(row for row in history if row["ts"] == train[i]["ts"])
-        neighbors.append(
-            {
-                "rank": rank,
-                "snapshot": src["ts_label"],
-                "distance": float(d),
-                "next_snapshot": ts_label(train[i]["next_ts"]),
-                "next_total_gex": float(train[i]["target_total_gex"]),
-            }
-        )
-
-    return {
-        "predicted_total_gex": pred_total,
-        "predicted_regime": "LONG gamma" if pred_total >= 0 else "SHORT gamma",
-        "predicted_flip": pred_flip,
-        "predicted_near_term_ratio": pred_ratio,
-        "confidence": confidence,
-        "neighbors": neighbors,
-    }
-
-
-def similar_setups(history, top_n=5):
-    if len(history) < 3:
-        return []
-
-    current = history[-1]
-    rows = []
-    for i in range(len(history) - 1):
-        row = history[i]
-        feat = np.array(
-            [
-                row["total_gex"],
-                row["gex_std"],
-                row["near_term_ratio"],
-                safe_float(row["gamma_flip"], 0.0),
-                safe_float(row["call_wall"], 0.0),
-                safe_float(row["put_wall"], 0.0),
-            ],
-            dtype=float,
-        )
-        rows.append((i, row, feat))
-
-    current_feat = np.array(
-        [
-            current["total_gex"],
-            current["gex_std"],
-            current["near_term_ratio"],
-            safe_float(current["gamma_flip"], 0.0),
-            safe_float(current["call_wall"], 0.0),
-            safe_float(current["put_wall"], 0.0),
-        ],
-        dtype=float,
-    )
-
-    matrix = np.vstack([feat for _, _, feat in rows])
-    mean = matrix.mean(axis=0)
-    std = matrix.std(axis=0)
-    std = np.where(std == 0, 1.0, std)
-
-    z_matrix = (matrix - mean) / std
-    z_current = (current_feat - mean) / std
-    distances = np.linalg.norm(z_matrix - z_current, axis=1)
-
-    idx_sorted = np.argsort(distances)[: min(top_n, len(distances))]
-    results = []
-    for idx in idx_sorted:
-        hist_idx, snap, _ = rows[idx]
-        next_snap = history[hist_idx + 1] if hist_idx + 1 < len(history) else None
-        sim_score = 1.0 / (1.0 + float(distances[idx]))
-        results.append(
-            {
-                "snapshot": snap["ts_label"],
-                "distance": float(distances[idx]),
-                "similarity": sim_score,
-                "regime": snap["regime"],
-                "total_gex": snap["total_gex"],
-                "next_snapshot": next_snap["ts_label"] if next_snap else None,
-                "next_total_gex": next_snap["total_gex"] if next_snap else None,
-                "next_regime": next_snap["regime"] if next_snap else None,
-                "ts": snap["ts"],
-            }
-        )
-    return results
-
-
 @APP.route("/")
 def index():
     tickers = find_available_tickers(EXPORT_DIR)
@@ -568,6 +389,7 @@ def ticker_page(ticker):
             selected=selected,
             prediction=None,
             similar_setups=[],
+            flow_overlay=None,
             strike_csv=None,
             exp_csv=None,
             cum_csv=None,
@@ -596,6 +418,20 @@ def ticker_page(ticker):
     prediction = predict_next_snapshot(history)
     similar = similar_setups(history, top_n=6)
 
+    flow_overlay = None
+    if history:
+        spot = safe_float(history[-1].get("spot"), 4800.0)
+        try:
+            flow_overlay = load_flow_predictions(FLOW_FEED_PATH, spot=spot)
+            if prediction and flow_overlay:
+                flow_delta = flow_overlay.get("predicted_flow_delta_gex_bn", 0.0)
+                prediction["predicted_flow_delta_gex"] = flow_delta
+                prediction["predicted_total_gex_with_flow"] = (
+                    prediction["predicted_total_gex"] + flow_delta
+                )
+        except Exception:
+            logger.debug("Flow overlay unavailable", exc_info=True)
+
     timeline_options = [
         {
             "ts": row["ts"],
@@ -616,6 +452,7 @@ def ticker_page(ticker):
         selected=selected,
         prediction=prediction,
         similar_setups=similar,
+        flow_overlay=flow_overlay,
         strike_csv=selected["strike_path"].name if selected.get("strike_path") else None,
         exp_csv=selected["exp_path"].name if selected.get("exp_path") else None,
         cum_csv=selected["cum_path"].name if selected.get("cum_path") else None,
