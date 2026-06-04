@@ -240,13 +240,13 @@ Run the Flask dashboard:
 python web_app.py
 ```
 
-GEX snapshots are stored in a SQLite database (`data/gex.db` by default) and refreshed automatically every 10 minutes from CBOE. On startup, any existing CSV files in `data/exports/` are imported into the database so historical timelines are available immediately.
+**Data sources:** Unusual Whales is the primary source when `UW_API_KEY` is set; CBOE is the automatic fallback (and provides full expiration/surface exports). Historical snapshots live in `data/exports/` as timestamped CSV/JSON files—no SQLite database.
 
 Configuration (environment variables):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEX_DB_PATH` | `data/gex.db` | SQLite database path |
+| `UW_API_KEY` | (unset) | Unusual Whales API key (primary source) |
 | `GEX_DEFAULT_TICKERS` | `SPX` | Tickers refreshed on a schedule |
 | `GEX_REFRESH_INTERVAL_MINUTES` | `10` | Auto-refresh interval |
 | `GEX_DISABLE_SCHEDULER` | (unset) | Set to `1` to disable background refresh |
@@ -254,12 +254,19 @@ Configuration (environment variables):
 | `GEX_MIN_OPEN_INTEREST` | `1` | Minimum open interest per contract |
 | `GEX_MAX_STRIKE_DISTANCE_PCT` | `0.35` | Max strike distance from spot |
 
-See [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md) for all filter settings.
+See [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md) and [config/spx.env.example](config/spx.env.example) for stricter SPX filter presets.
 
-Manual database refresh:
+Manual CSV refresh:
 
 ```bash
-python scripts/gex_db_refresh.py --import-csv --force
+python scripts/gex_refresh.py --force
+python scripts/gex_refresh.py --cboe --force   # full CBOE surface export
+```
+
+Docker:
+
+```bash
+docker compose up web
 ```
 
 ## Live Option Flow Signal
@@ -474,9 +481,13 @@ The tool generates three types of visualizations:
 
 ## Data Source
 
-### CBOE API
+### Unusual Whales (primary)
 
-Data is fetched from the **Chicago Board Options Exchange (CBOE)** delayed quotes API:
+When `UW_API_KEY` is set, GEX by strike is loaded from the Unusual Whales API (`/greek-exposure/strike`). If the request fails, the pipeline falls back to CBOE automatically.
+
+### CBOE API (backup)
+
+Data can be fetched from the **Chicago Board Options Exchange (CBOE)** delayed quotes API:
 
 ```
 https://cdn.cboe.com/api/global/delayed_quotes/options/{TICKER}.json
@@ -523,49 +534,18 @@ This tool is for educational and informational purposes. Gamma exposure analysis
 
 ---
 
-## Coming Soon
-Ideas for the GEX project
-1) Improve the analytics pipeline
-Add a backtest engine for model signals using historical exports and next-day returns.
-Create feature engineering for LSTM/XGBoost:
-gamma-flip strike
-term-structure ratios (near-term vs long-term GEX)
-momentum of strike-level GEX
-rolling open interest / flow imbalance
-2) Make the dashboards more actionable
-Add model inference into streamlit_app.py and web_app.py:
-show next-day up/down probability
-surface-based strike signal heatmap
-live option-flow signal overlay
-Add real-time alerts when a strike score crosses a threshold.
-3) Improve live flow handling
-Build a live websocket/custom API adapter for option flow providers.
-Add gamma estimation when flow events miss gamma:
-match symbols to cached data/{ticker}.json
-compute using option pricing with IV / expiry / strike
-Add persistence for the live aggregator (Redis or local state file).
-4) Automation & production
-Extend daily_exports.yml to:
-also commit img snapshots
-version exports/models with timestamps
-retrain models automatically when enough new data exists
-Add a Dockerfile + docker-compose for the dashboard + scheduler.
-5) UX and developer polish
-Add a small README “Developer quick start” section with:
-run dashboards
-run live ingest
-train models
-Add unit tests for:
-clean_option_data (gex_core.data_quality)
-live event parsing
-model feature generation
-Add linting / formatting configs for consistency.
-6) New data sources / signals
-Import order flow or trade prints to predict gamma strike movement.
-Add greeks beyond gamma in signal scoring, e.g. vega/charm.
-Add volatility surface tracking as a companion to GEX.
-If you want, I can pick the top 3 and implement them next.
+## Developer Quick Start
 
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+export UW_API_KEY=your-key          # optional; enables UW primary source
+python main.py --ticker SPX --no-show
+python web_app.py                   # Flask dashboard
+streamlit run streamlit_app.py
+python scripts/gex_refresh.py --force
+python scripts/backtest_gex_prediction.py --ticker SPX
+pytest
+```
 
 ---
 

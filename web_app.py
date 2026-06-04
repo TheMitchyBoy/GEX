@@ -1,34 +1,29 @@
 from __future__ import annotations
 
 import atexit
-import json
 import logging
 import os
-import re
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
-import plotly.graph_objects as go
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
-from plotly.utils import PlotlyJSONEncoder
 
-from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip
-from gex_core.predict import predict_next_snapshot
-from gex_db.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_tickers
-from gex_db.store import (
-    get_latest_ts,
-    get_snapshot,
-    import_csv_exports,
-    init_db,
-    list_snapshots,
-    list_tickers,
-    list_timestamps,
-    parse_ts,
+from gex_core.backtest_metrics import backtest_delta_sign_accuracy
+from gex_core.charts import (
+    make_ai_insights_chart,
+    make_cumulative_gex_chart,
+    make_gex_profile_chart,
+    make_positive_strike_chart,
+    make_timeline_chart,
+    safe_float,
 )
+from gex_core.exports import EXPORT_DIR
+from gex_core.history import build_history, get_latest_ts, list_tickers, ts_label
+from gex_core.predict import predict_next_snapshot, similar_setups
+from gex_core.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_ticker, refresh_tickers
 
 APP = Flask(__name__)
 app = APP
@@ -99,630 +94,14 @@ def get_uw_data(ticker: str) -> dict | None:
     return refresh_uw_data(ticker)
 
 
-def make_ai_insights_chart(analysis) -> str | None:
-    """Render a visual signal scorecard as a Plotly figure (JSON)."""
-    if analysis is None:
-        return None
-    try:
-        signals = analysis.signals
-        labels = [s.label for s in signals]
-        values = [s.value for s in signals]
-        colors = {
-            "bullish": _GREEN,
-            "bearish": _RED,
-            "caution": _AMBER,
-            "neutral": "#94a3b8",
-        }
-        bar_colors = [colors.get(s.sentiment, "#94a3b8") for s in signals]
-
-        fig = go.Figure(go.Table(
-            columnwidth=[140, 120, 380],
-            header=dict(
-                values=["<b>Signal</b>", "<b>Value</b>", "<b>Interpretation</b>"],
-                fill_color=_CHART_BG,
-                font=dict(color="#c9d1d9", family="ui-monospace, monospace", size=11),
-                line_color="rgba(255,255,255,0.1)",
-                align="left",
-            ),
-            cells=dict(
-                values=[labels, values, [s.detail for s in signals]],
-                fill_color=[
-                    [_CHART_BG] * len(signals),
-                    bar_colors,
-                    [_CHART_BG] * len(signals),
-                ],
-                font=dict(color="#c9d1d9", family="ui-monospace, monospace", size=10),
-                line_color="rgba(255,255,255,0.06)",
-                align="left",
-                height=30,
-            ),
-        ))
-        _apply_base(fig, height=max(260, len(signals) * 34 + 60),
-                    margin=dict(l=0, r=0, t=10, b=0))
-        return json.dumps(fig, cls=PlotlyJSONEncoder)
-    except Exception:
-        return None
-
-EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
 REFRESH_TICKERS = DEFAULT_TICKERS
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
-CSV_RE = re.compile(
-    r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"
-)
-
-
-def ts_label(ts: str) -> str:
-    return parse_ts(ts).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def safe_float(value, default=0.0):
-    try:
-        return float(value)
-    except Exception:
-        return float(default)
-
 
 def find_available_tickers(export_dir: Path | None = None):
-    export_dir = export_dir or EXPORT_DIR
-    export_dir.mkdir(parents=True, exist_ok=True)
-    tickers = set(list_tickers())
-    for file in export_dir.glob("*.csv"):
-        match = CSV_RE.match(file.name)
-        if match:
-            tickers.add(match.group("ticker"))
-    return sorted(tickers)
+    return list_tickers(export_dir)
 
-
-def collect_snapshot_files(ticker: str):
-    snapshots = {}
-    for file in EXPORT_DIR.glob(f"{ticker}_*.csv"):
-        match = CSV_RE.match(file.name)
-        if not match:
-            continue
-        ts = match.group("ts")
-        kind = match.group("kind")
-        snapshots.setdefault(ts, {})[kind] = file
-
-    # only keep snapshots with minimum data needed
-    filtered = {
-        ts: files
-        for ts, files in snapshots.items()
-        if "gex_by_strike" in files and "gex_by_expiration" in files and "cumulative_gex" in files
-    }
-    return dict(sorted(filtered.items(), key=lambda item: item[0]))
-
-
-def estimate_gamma_flip_local(cumulative: pd.Series):
-    return estimate_gamma_flip(cumulative)
-
-
-def load_snapshot_metrics_from_row(row: dict):
-    strike = row["strike"]
-    ts = row["ts"]
-    expiration = row["expiration"]
-    cumulative = row["cumulative"]
-    surface_df = row["surface_df"]
-
-    exp_vals = pd.to_numeric(expiration, errors="coerce").fillna(0.0)
-    total_gex = float(strike.sum())
-    pos_gex = float(strike[strike > 0].sum())
-    neg_gex = float(strike[strike < 0].sum())
-    gex_std = float(strike.std()) if len(strike) > 1 else 0.0
-
-    call_wall = float(strike.idxmax()) if len(strike) else None
-    put_wall = float(strike.idxmin()) if len(strike) else None
-    gamma_flip = estimate_gamma_flip_local(cumulative)
-
-    near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
-    term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
-    near_term_ratio = near_term / term_total if term_total else 0.0
-
-    surface_peak = 0.0
-    if not surface_df.empty and "GEX" in surface_df.columns:
-        surface_peak = float(pd.to_numeric(surface_df["GEX"], errors="coerce").abs().max())
-
-    metrics = {
-        "ts": ts,
-        "ts_label": ts_label(ts),
-        "strike": strike,
-        "exp_df": expiration.reset_index(),
-        "cumulative": cumulative,
-        "surface_df": surface_df,
-        "surface_path": None,
-        "strike_path": None,
-        "exp_path": None,
-        "cum_path": None,
-        "total_gex": total_gex,
-        "pos_gex": pos_gex,
-        "neg_gex": neg_gex,
-        "gex_std": gex_std,
-        "abs_mean": float(strike.abs().mean()) if len(strike) else 0.0,
-        "call_wall": call_wall,
-        "put_wall": put_wall,
-        "gamma_flip": gamma_flip,
-        "near_term_ratio": near_term_ratio,
-        "surface_peak": surface_peak,
-        "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
-    }
-    return enrich_snapshot_metrics(metrics)
-
-
-def load_snapshot_metrics(ts: str, files: dict):
-    strike_df = pd.read_csv(files["gex_by_strike"])
-    exp_df = pd.read_csv(files["gex_by_expiration"])
-    cum_df = pd.read_csv(files["cumulative_gex"])
-
-    strike = pd.Series(
-        pd.to_numeric(strike_df.iloc[:, 1], errors="coerce").fillna(0.0).values,
-        index=pd.to_numeric(strike_df.iloc[:, 0], errors="coerce").fillna(0.0).values,
-    )
-    exp_vals = pd.to_numeric(exp_df.iloc[:, 1], errors="coerce").fillna(0.0)
-    cumulative = pd.Series(
-        pd.to_numeric(cum_df.iloc[:, 1], errors="coerce").fillna(0.0).values,
-        index=pd.to_numeric(cum_df.iloc[:, 0], errors="coerce").fillna(0.0).values,
-    )
-
-    total_gex = float(strike.sum())
-    pos_gex = float(strike[strike > 0].sum())
-    neg_gex = float(strike[strike < 0].sum())
-    gex_std = float(strike.std()) if len(strike) > 1 else 0.0
-    abs_mean = float(strike.abs().mean()) if len(strike) else 0.0
-
-    call_wall = float(strike.idxmax()) if len(strike) else None
-    put_wall = float(strike.idxmin()) if len(strike) else None
-    gamma_flip = estimate_gamma_flip_local(cumulative)
-
-    near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
-    term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
-    near_term_ratio = near_term / term_total if term_total else 0.0
-
-    surface_peak = 0.0
-    surface_df = pd.DataFrame()
-    if "gex_surface" in files:
-        surface_df = pd.read_csv(files["gex_surface"])
-        if "GEX" in surface_df.columns and not surface_df.empty:
-            surface_peak = float(pd.to_numeric(surface_df["GEX"], errors="coerce").abs().max())
-
-    metrics = {
-        "ts": ts,
-        "ts_label": ts_label(ts),
-        "ticker": None,
-        "strike": strike,
-        "exp_df": exp_df,
-        "cumulative": cumulative,
-        "surface_df": surface_df,
-        "surface_path": files.get("gex_surface"),
-        "strike_path": files["gex_by_strike"],
-        "exp_path": files["gex_by_expiration"],
-        "cum_path": files["cumulative_gex"],
-        "total_gex": total_gex,
-        "pos_gex": pos_gex,
-        "neg_gex": neg_gex,
-        "gex_std": gex_std,
-        "abs_mean": abs_mean,
-        "call_wall": call_wall,
-        "put_wall": put_wall,
-        "gamma_flip": gamma_flip,
-        "near_term_ratio": near_term_ratio,
-        "surface_peak": surface_peak,
-        "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
-    }
-    return enrich_snapshot_metrics(metrics)
-
-
-def load_snapshot_metrics_from_db(ticker: str, ts: str):
-    row = get_snapshot(ticker, ts)
-    if row is None:
-        return None
-    return load_snapshot_metrics_from_row(row)
-
-
-def build_history(ticker: str):
-    ticker = ticker.upper()
-    snapshots = []
-
-    db_rows = list_snapshots(ticker)
-    if db_rows:
-        for row in db_rows:
-            try:
-                metrics = load_snapshot_metrics_from_row(row)
-                if metrics:
-                    metrics["ticker"] = ticker
-                    snapshots.append(metrics)
-            except Exception:
-                continue
-    else:
-        snapshot_files = collect_snapshot_files(ticker)
-        for ts, files in snapshot_files.items():
-            try:
-                metrics = load_snapshot_metrics(ts, files)
-                metrics["ticker"] = ticker
-                snapshots.append(metrics)
-            except Exception:
-                continue
-
-    snapshots.sort(key=lambda row: row["ts"])
-    return snapshots
-
-
-def make_timeline_chart(history, ticker):
-    if not history:
-        return None
-    labels = [row["ts_label"] for row in history]
-    totals = [safe_float(row.get("total_gex"), 0.0) for row in history]
-    pos = [safe_float(row.get("pos_gex"), 0.0) for row in history]
-    neg = [safe_float(row.get("neg_gex"), 0.0) for row in history]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=labels, y=pos,
-        fill="tozeroy",
-        fillcolor="rgba(0,217,126,0.10)",
-        line=dict(color=_GREEN, width=1),
-        name="Positive GEX",
-        hovertemplate="%{y:.3f} Bn$<extra>+GEX</extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=labels, y=neg,
-        fill="tozeroy",
-        fillcolor="rgba(255,71,87,0.10)",
-        line=dict(color=_RED, width=1),
-        name="Negative GEX",
-        hovertemplate="%{y:.3f} Bn$<extra>-GEX</extra>",
-    ))
-    marker_colors = [_GREEN if t >= 0 else _RED for t in totals]
-    fig.add_trace(go.Scatter(
-        x=labels,
-        y=totals,
-        mode="lines+markers",
-        line=dict(color=_BLUE, width=2.5),
-        marker=dict(size=7, color=marker_colors, line=dict(color=_CHART_BG, width=1)),
-        name="Total GEX",
-        hovertemplate="%{y:.3f} Bn$<extra>Net GEX</extra>",
-    ))
-    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)", line_width=1)
-    _apply_base(
-        fig,
-        title=f"{ticker} · GEX Timeline",
-        height=340,
-        margin=dict(l=20, r=20, t=45, b=20),
-        xaxis_title="Snapshot",
-        yaxis_title="GEX (Bn$ / %)",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
-
-
-def make_cumulative_gex_chart(cumulative, ticker, gamma_flip=None):
-    """Area chart of cumulative GEX by strike with optional flip annotation."""
-    if cumulative is None or (hasattr(cumulative, "empty") and cumulative.empty):
-        return None
-    try:
-        x = [float(v) for v in cumulative.index]
-        y = [float(v) for v in cumulative]
-    except Exception:
-        return None
-    if not x:
-        return None
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x, y=[max(v, 0) for v in y],
-        fill="tozeroy",
-        fillcolor="rgba(0,217,126,0.12)",
-        line=dict(width=0),
-        showlegend=False,
-        hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=x, y=[min(v, 0) for v in y],
-        fill="tozeroy",
-        fillcolor="rgba(255,71,87,0.12)",
-        line=dict(width=0),
-        showlegend=False,
-        hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=x, y=y,
-        mode="lines",
-        line=dict(color=_BLUE, width=2.5),
-        name="Cumulative GEX",
-        hovertemplate="Strike %{x:.0f}<br>%{y:.3f} Bn$<extra></extra>",
-    ))
-    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)", line_width=1)
-    if gamma_flip is not None:
-        try:
-            fig.add_vline(
-                x=float(gamma_flip),
-                line_dash="dot",
-                line_color=_AMBER,
-                line_width=2,
-                annotation_text=f"Flip ~{float(gamma_flip):.0f}",
-                annotation_font_color=_AMBER,
-                annotation_position="top right",
-            )
-        except Exception:
-            pass
-    _apply_base(
-        fig,
-        title=f"{ticker} · Cumulative GEX",
-        height=300,
-        margin=dict(l=20, r=20, t=45, b=20),
-        xaxis_title="Strike",
-        yaxis_title="Cumulative GEX (Bn$ / %)",
-        hovermode="x unified",
-        showlegend=False,
-    )
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
-
-
-def make_gex_breakdown_chart(history, ticker):
-    """Stacked-relative bar chart showing positive / negative GEX composition over snapshots."""
-    if not history or len(history) < 2:
-        return None
-    labels = [row["ts_label"] for row in history]
-    pos = [safe_float(row.get("pos_gex"), 0.0) for row in history]
-    neg = [safe_float(row.get("neg_gex"), 0.0) for row in history]
-    totals = [safe_float(row.get("total_gex"), 0.0) for row in history]
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name="Positive GEX",
-        x=labels, y=pos,
-        marker_color="rgba(0,217,126,0.72)",
-        marker_line_width=0,
-        hovertemplate="%{x}<br>+GEX: %{y:.3f} Bn$<extra></extra>",
-    ))
-    fig.add_trace(go.Bar(
-        name="Negative GEX",
-        x=labels, y=neg,
-        marker_color="rgba(255,71,87,0.72)",
-        marker_line_width=0,
-        hovertemplate="%{x}<br>-GEX: %{y:.3f} Bn$<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=labels, y=totals,
-        mode="lines+markers",
-        line=dict(color=_BLUE, width=2),
-        marker=dict(size=6, color=_BLUE),
-        name="Net GEX",
-        hovertemplate="%{x}<br>Net: %{y:.3f} Bn$<extra></extra>",
-    ))
-    _apply_base(
-        fig,
-        barmode="relative",
-        title=f"{ticker} · GEX Composition",
-        height=320,
-        margin=dict(l=20, r=20, t=45, b=20),
-        xaxis_title="Snapshot",
-        yaxis_title="GEX (Bn$ / %)",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
-
-
-def _positive_gamma_view(strike_series: pd.Series | None, top_n: int = 40) -> pd.Series:
-    if strike_series is None:
-        return pd.Series(dtype=float)
-    strike = pd.Series(strike_series, dtype=float)
-    strike = strike[strike > 0]
-    if strike.empty:
-        return strike
-    # Keep the most relevant positive strikes, then order by strike for readability.
-    return strike.sort_values(ascending=False).head(top_n).sort_index()
-
-
-_CHART_BG = "#07090f"
-_GREEN = "#00d97e"
-_RED = "#ff4757"
-_BLUE = "#4dabf7"
-_AMBER = "#f59e0b"
-
-_BASE_LAYOUT = dict(
-    paper_bgcolor=_CHART_BG,
-    plot_bgcolor=_CHART_BG,
-    font=dict(color="#c9d1d9", family="ui-monospace, monospace, sans-serif", size=11),
-    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.15)"),
-    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.15)"),
-)
-
-
-def _apply_base(fig: go.Figure, **extra) -> go.Figure:
-    layout = dict(_BASE_LAYOUT)
-    layout.update(extra)
-    fig.update_layout(**layout)
-    return fig
-
-
-def make_gex_profile_chart(
-    strike_series: pd.Series | None,
-    ticker: str,
-    spot: float | None = None,
-    title: str = "GEX Profile",
-    window_pct: float = 0.10,
-    max_bars: int = 60,
-) -> str | None:
-    """
-    Periscope-style horizontal bar chart of GEX by strike.
-
-    Strikes run on the Y-axis (highest at top); bars extend right (green)
-    for positive gamma and left (red) for negative gamma.  An optional
-    horizontal guide line marks the current spot price.
-    """
-    if strike_series is None:
-        return None
-    strike = pd.Series(strike_series, dtype=float)
-    if strike.empty:
-        return None
-
-    if spot is not None and spot > 0:
-        lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
-        window = strike.loc[(strike.index >= lo) & (strike.index <= hi)]
-        if len(window) < 5:
-            window = strike
-    else:
-        window = strike
-
-    window = window.sort_index(ascending=True)
-    if len(window) > max_bars:
-        keep = window.abs().sort_values(ascending=False).head(max_bars).index
-        window = window.loc[keep].sort_index(ascending=True)
-
-    y_labels = [f"{int(s)}" for s in window.index]
-    x_values = window.values.tolist()
-    colors = [_GREEN if v >= 0 else _RED for v in x_values]
-
-    fig = go.Figure(go.Bar(
-        x=x_values,
-        y=y_labels,
-        orientation="h",
-        marker_color=colors,
-        marker_line_width=0,
-        hovertemplate="Strike %{y}<br>GEX %{x:.3f} Bn$<extra></extra>",
-    ))
-
-    # Zero line
-    fig.add_vline(x=0, line_color="rgba(255,255,255,0.25)", line_width=1)
-
-    # Spot guide
-    if spot is not None and spot > 0:
-        spot_label = f"{int(spot)}"
-        if spot_label in y_labels:
-            fig.add_hline(
-                y=spot_label,
-                line_color=_AMBER,
-                line_dash="dash",
-                line_width=1.5,
-                annotation_text=f"Spot {int(spot)}",
-                annotation_font_color=_AMBER,
-                annotation_position="right",
-            )
-
-    _apply_base(
-        fig,
-        title=f"{ticker} · {title}",
-        height=max(420, len(window) * 14),
-        margin=dict(l=65, r=20, t=45, b=20),
-        xaxis_title="GEX (Bn$ / %)",
-        yaxis=dict(
-            gridcolor="rgba(255,255,255,0.04)",
-            tickfont=dict(family="ui-monospace, monospace", size=10),
-        ),
-        bargap=0.18,
-    )
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
-
-
-def make_positive_strike_chart(strike_series: pd.Series | None, ticker: str, title: str):
-    strike = _positive_gamma_view(strike_series)
-    if strike.empty:
-        return None
-
-    x_vals = [float(x) for x in strike.index]
-    y_vals = strike.values.tolist()
-    fig = go.Figure(go.Bar(
-        x=x_vals,
-        y=y_vals,
-        marker_color=_GREEN,
-        marker_line_width=0,
-        hovertemplate="Strike %{x:.0f}<br>GEX %{y:.3f} Bn$<extra></extra>",
-    ))
-    _apply_base(
-        fig,
-        title=f"{ticker} · {title}",
-        height=300,
-        margin=dict(l=20, r=20, t=45, b=20),
-        xaxis_title="Strike",
-        yaxis_title="Positive GEX (Bn$ / %)",
-        yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
-    )
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
-
-
-def _load_surface_df(surface_path: Path | None = None, surface_df: pd.DataFrame | None = None):
-    if surface_df is not None and not surface_df.empty:
-        return surface_df
-    if surface_path is None:
-        return None
-    return pd.read_csv(surface_path)
-
-
-def make_heatmap(surface_path: Path | None = None, ticker: str = "", surface_df: pd.DataFrame | None = None):
-    df = _load_surface_df(surface_path, surface_df)
-    if df is None:
-        return None
-    if df.empty or not {"expiration", "strike", "GEX"}.issubset(df.columns):
-        return None
-    df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
-    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
-    df["GEX"] = pd.to_numeric(df["GEX"], errors="coerce")
-    df = df.dropna(subset=["expiration", "strike", "GEX"])
-    if df.empty:
-        return None
-
-    pivot = df.pivot_table(index="expiration", columns="strike", values="GEX", aggfunc="sum").fillna(0).sort_index()
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=pivot.values,
-            x=[float(c) for c in pivot.columns],
-            y=[d.strftime("%Y-%m-%d") for d in pd.to_datetime(pivot.index)],
-            colorscale=[[0, _RED], [0.5, "#07090f"], [1, _GREEN]],
-            hovertemplate="Strike %{x:.0f}<br>Expiry %{y}<br>GEX %{z:.2f} M$<extra></extra>",
-        )
-    )
-    _apply_base(
-        fig,
-        title=f"{ticker} · GEX Surface Heatmap",
-        height=500,
-        margin=dict(l=20, r=20, t=45, b=20),
-    )
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
-
-
-def make_surface_scatter(
-    surface_path: Path | None = None,
-    ticker: str = "",
-    surface_df: pd.DataFrame | None = None,
-):
-    df = _load_surface_df(surface_path, surface_df)
-    if df is None:
-        return None
-    if df.empty or not {"expiration", "strike", "GEX"}.issubset(df.columns):
-        return None
-    df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
-    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
-    df["GEX"] = pd.to_numeric(df["GEX"], errors="coerce")
-    df = df.dropna(subset=["expiration", "strike", "GEX"])
-    if df.empty:
-        return None
-
-    gex_vals = df["GEX"].astype(float)
-    fig = go.Figure(
-        data=go.Scatter3d(
-            x=df["strike"],
-            y=df["expiration"].dt.strftime("%Y-%m-%d"),
-            z=gex_vals,
-            mode="markers",
-            marker=dict(
-                size=4,
-                color=gex_vals,
-                colorscale=[[0, _RED], [0.5, "#1e2030"], [1, _GREEN]],
-                showscale=True,
-                colorbar=dict(tickfont=dict(color="#c9d1d9")),
-            ),
-        )
-    )
-    _apply_base(
-        fig,
-        title=f"{ticker} · GEX Surface 3D",
-        height=500,
-        margin=dict(l=20, r=20, t=45, b=20),
-    )
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
 @APP.route("/")
@@ -801,6 +180,12 @@ def ticker_page(ticker):
             current_strike_chart_json=current_strike_chart_json,
             predicted_strike_chart_json=None,
             uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
+            timeline_chart_json=None,
+            cumulative_chart_json=None,
+            similar_setups=[],
+            data_source="Unusual Whales (live)" if uw_entry else "No data",
+            spot_distance_to_flip=None,
+            ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
         )
 
     uw_entry = get_uw_data(ticker)
@@ -833,6 +218,12 @@ def ticker_page(ticker):
         current_profile_series = selected.get("strike")
 
     prediction = predict_next_snapshot(history)
+    backtest = backtest_delta_sign_accuracy(ticker)
+    if prediction and backtest.get("accuracy") is not None:
+        prediction = dict(prediction)
+        prediction["backtest_sign_accuracy"] = backtest["accuracy"]
+        prediction["backtest_n"] = backtest["n"]
+
     current_strike_chart_json = make_positive_strike_chart(
         current_profile_series,
         ticker,
@@ -847,6 +238,12 @@ def ticker_page(ticker):
         )
         prediction = {k: v for k, v in prediction.items() if k != "predicted_strike"}
 
+    latest_raw = get_latest_ts(ticker)
+    data_source = "Unusual Whales (live)" if uw_agg is not None else selected.get("data_source") or "CSV history"
+    spot_dist = None
+    if selected.get("spot") and selected.get("gamma_flip"):
+        spot_dist = abs(float(selected["spot"]) - float(selected["gamma_flip"]))
+
     return render_template(
         "ticker.html",
         ticker=ticker,
@@ -854,12 +251,20 @@ def ticker_page(ticker):
         uw_fetched_at=uw_fetched_at,
         selected=selected,
         prediction=prediction,
-        latest_ts=ts_label(get_latest_ts(ticker)) if get_latest_ts(ticker) else None,
+        latest_ts=ts_label(latest_raw) if latest_raw else None,
         refresh_minutes=REFRESH_MINUTES,
         has_history=True,
         bootstrap_status=bootstrap_status,
         current_strike_chart_json=current_strike_chart_json,
         predicted_strike_chart_json=predicted_strike_chart_json,
+        timeline_chart_json=make_timeline_chart(history, ticker),
+        cumulative_chart_json=make_cumulative_gex_chart(
+            selected.get("cumulative"), ticker, gamma_flip=selected.get("gamma_flip"),
+        ),
+        similar_setups=similar_setups(history, top_n=5),
+        data_source=data_source,
+        spot_distance_to_flip=spot_dist,
+        ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
     )
 
 
@@ -867,8 +272,6 @@ def ticker_page(ticker):
 def bootstrap_ticker_history(ticker):
     ticker = ticker.upper()
     try:
-        from gex_db.refresh import refresh_ticker
-
         ok = refresh_ticker(ticker, force=True)
     except Exception:
         logger.exception("Manual GEX refresh failed for %s", ticker)
@@ -924,10 +327,7 @@ def _acquire_scheduler_lock() -> bool:
 
 def start_background_refresh():
     global _scheduler
-    init_db()
-    imported = import_csv_exports(EXPORT_DIR)
-    if imported:
-        logger.info("Imported %s historical CSV snapshots into database", imported)
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
     if os.environ.get("GEX_DISABLE_SCHEDULER", "").lower() in {"1", "true", "yes"}:
         return
@@ -952,8 +352,7 @@ def start_background_refresh():
     _scheduler.start()
     atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
 
-    # Seed empty databases without blocking the gunicorn worker boot sequence.
-    if any(not list_timestamps(ticker) for ticker in REFRESH_TICKERS):
+    if any(get_latest_ts(ticker) is None for ticker in REFRESH_TICKERS):
         _scheduler.add_job(
             _scheduled_refresh,
             trigger="date",

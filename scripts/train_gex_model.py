@@ -106,6 +106,19 @@ def train_model(ticker: str):
     joblib.dump({"model": reg, "features": list(X_all.columns), "target": "delta_gex"}, model_path)
     print(f"Saved model to {model_path}")
 
+    from gex_core.models_manifest import write_manifest
+
+    write_manifest(
+        ticker,
+        model_type=model_choice,
+        metrics={
+            "test_mae": float(mean_absolute_error(y_test, preds)),
+            "test_r2": float(r2_score(y_test, preds)),
+            "sign_accuracy": float(sign_acc),
+            "n_train": int(len(X_train)),
+        },
+    )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

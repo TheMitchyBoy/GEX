@@ -33,6 +33,15 @@ def main(feed: str, spot: float = None, top_n: int = 5, delay: float = 0.5):
 
     # Use enhanced aggregator for better signals
     agg = EnhancedGEXAggregator(spot=spot)
+    try:
+        from live.state import restore_gex_aggregator, save_aggregator_state
+
+        restore_gex_aggregator(agg)
+    except ImportError:
+        from state import restore_gex_aggregator, save_aggregator_state
+
+        restore_gex_aggregator(agg)
+
     for evt in read_jsonl(path):
         # inject spot if provided
         if spot is not None and "spot" not in evt:
@@ -51,6 +60,12 @@ def main(feed: str, spot: float = None, top_n: int = 5, delay: float = 0.5):
             print(f"  strike {s}: score={g['score']:.3f}, dir={g['direction']}, recent_gex={g['recent_gex']:,.2f}")
         print("---")
         time.sleep(delay)
+
+    try:
+        save_aggregator_state(agg)
+        print(f"Saved aggregator state to data/live_flow_state.json")
+    except Exception as e:
+        print("Could not save state:", e)
 
 
 if __name__ == "__main__":

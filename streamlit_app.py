@@ -17,6 +17,7 @@ import streamlit as st
 
 from gex_core.exports import find_exports_for_ticker, load_strike_series, parse_timestamp
 from gex_core.features import compute_features_from_exports, enrich_snapshot_metrics
+from gex_core.history import build_history as build_history_from_exports
 from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
 
 EXPORT_DIR = Path("data/exports")
@@ -46,43 +47,6 @@ def load_surface_csv(path: Path):
     if "expiration" in df.columns:
         df["expiration"] = pd.to_datetime(df["expiration"])
     return df
-
-
-def build_history_from_exports(ticker: str) -> list[dict]:
-    exports = find_exports_for_ticker(ticker)
-    timestamps = sorted(ts for ts, k in exports.items() if "gex_by_strike" in k)
-    history = []
-    prev_feats = None
-    for ts in timestamps:
-        info = exports[ts]
-        feats = compute_features_from_exports(info, prev_features=prev_feats)
-        prev_feats = feats
-        strike = load_strike_series(info["gex_by_strike"])
-        cumulative = (
-            load_strike_series(info["cumulative_gex"])
-            if "cumulative_gex" in info
-            else pd.Series(dtype=float)
-        )
-        row = {
-            "ts": ts,
-            "ts_label": parse_timestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
-            "ticker": ticker,
-            "strike": strike,
-            "cumulative": cumulative,
-            "total_gex": feats["total_gex_bn"],
-            "pos_gex": feats["pos_gex_bn"],
-            "neg_gex": feats["neg_gex_bn"],
-            "gex_std": feats["gex_std_bn"],
-            "near_term_ratio": feats["near_term_ratio"],
-            "surface_peak": feats.get("surface_peak", 0.0),
-            "call_wall": feats.get("call_wall"),
-            "put_wall": feats.get("put_wall"),
-            "gamma_flip": feats.get("gamma_flip"),
-            "regime": "LONG gamma" if feats["total_gex_bn"] >= 0 else "SHORT gamma",
-            "abs_mean": abs(strike).mean() if len(strike) else 0.0,
-        }
-        history.append(enrich_snapshot_metrics(row))
-    return history
 
 
 _ST_BG = "#07090f"

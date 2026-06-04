@@ -64,7 +64,7 @@
       <section class="glass rounded-4 p-3 mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
           <h1 class="h4 mb-1">{{ ticker }} · Market Maker Position</h1>
-          <div class="small text-secondary">Standard market maker exposure + next update forecast</div>
+          <div class="small text-secondary">Data: <span class="mono">{{ data_source }}</span></div>
         </div>
         <div class="d-flex align-items-center gap-2">
           {% if latest_ts %}
@@ -96,7 +96,7 @@
         <div class="col-12 col-xl-8">
           <div class="glass rounded-4 p-3 mb-3">
             <h2 class="h5 mb-2">Market Maker Position</h2>
-            <p class="small text-secondary mb-2">Dealer gamma positioning by strike (green long gamma, red short gamma).</p>
+            <p class="small text-secondary mb-2">Dealer gamma by strike (green long, red short).</p>
             {% if profile_json %}
             <div id="profileChart"></div>
             {% else %}
@@ -104,8 +104,22 @@
             {% endif %}
           </div>
 
+          {% if timeline_chart_json %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h5 mb-2">GEX Timeline</h2>
+            <div id="timelineChart"></div>
+          </div>
+          {% endif %}
+
+          {% if cumulative_chart_json %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h5 mb-2">Cumulative GEX</h2>
+            <div id="cumulativeChart"></div>
+          </div>
+          {% endif %}
+
           <div class="glass rounded-4 p-3">
-            <h2 class="h5 mb-2">Current Position Focus (Positive GEX)</h2>
+            <h2 class="h5 mb-2">Positive GEX Focus</h2>
             {% if current_strike_chart_json %}
             <div id="currentStrike"></div>
             {% else %}
@@ -140,38 +154,65 @@
                 <div class="metric-label">Put Wall</div>
                 <div class="metric-value text-danger">{{ '%.0f'|format(selected.put_wall) if selected.put_wall is not none else 'N/A' }}</div>
               </div>
+              {% if spot_distance_to_flip is not none %}
+              <div class="col-12">
+                <div class="metric-label">Spot → Flip Distance</div>
+                <div class="metric-value">{{ '%.0f'|format(spot_distance_to_flip) }} pts</div>
+              </div>
+              {% endif %}
             </div>
             {% if uw_fetched_at %}
-            <div class="small text-secondary mt-2 mono">Live UW data · {{ uw_fetched_at }}</div>
+            <div class="small text-secondary mt-2 mono">Live UW · {{ uw_fetched_at }}</div>
             {% endif %}
           </div>
 
           <div class="glass rounded-4 p-3 mb-3">
-            <h2 class="h6">Forecast · Next Position Update</h2>
+            <h2 class="h6">Forecast · Next Update</h2>
             {% if prediction %}
             <div class="metric-label">Predicted Regime</div>
             <div class="metric-value mb-2">{{ prediction.predicted_regime }}</div>
             <div class="metric-label">Predicted ΔGEX</div>
             <div class="metric-value mb-2">{{ '%+.3f'|format(prediction.predicted_delta_gex) }} Bn$ / %</div>
-            <div class="metric-label">Predicted Total GEX</div>
-            <div class="metric-value mb-2">{{ '%.3f'|format(prediction.predicted_total_gex) }} Bn$ / %</div>
-            <div class="metric-label">Predicted Gamma Flip</div>
-            <div class="metric-value mb-2">{{ '%.2f'|format(prediction.predicted_flip) }}</div>
-            <div class="metric-label">Regime Flip Probability</div>
-            <div class="metric-value mb-2">{{ '%.1f'|format(prediction.regime_flip_probability * 100) }}%</div>
             <div class="metric-label">Confidence</div>
-            <div class="metric-value">{{ '%.1f'|format(prediction.confidence * 100) }}%</div>
+            <div class="metric-value mb-2">{{ '%.1f'|format(prediction.confidence * 100) }}%</div>
+            {% if prediction.backtest_sign_accuracy is defined %}
+            <div class="metric-label">Backtest ΔGEX Sign (n={{ prediction.backtest_n }})</div>
+            <div class="metric-value mb-2">{{ '%.1f'|format(prediction.backtest_sign_accuracy * 100) }}%</div>
+            {% endif %}
+            <div class="metric-label">Regime Flip Probability</div>
+            <div class="metric-value">{{ '%.1f'|format(prediction.regime_flip_probability * 100) }}%</div>
             {% else %}
-            <div class="text-secondary">Need at least 4 snapshots to forecast the next update.</div>
+            <div class="text-secondary">Need at least 4 CSV snapshots to forecast.</div>
             {% endif %}
           </div>
 
+          {% if similar_setups %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h6 mb-2">Similar Historical Setups</h2>
+            <ul class="list-unstyled small mono mb-0">
+              {% for row in similar_setups %}
+              <li class="mb-2">
+                <span class="text-secondary">{{ row.snapshot }}</span><br>
+                Next: {{ row.next_snapshot }} · ΔGEX {{ '%+.3f'|format(row.next_delta_gex) }}
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+
+          {% if ai_insights_json %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h6 mb-2">Dealer Gamma Signals</h2>
+            <div id="aiInsights"></div>
+          </div>
+          {% endif %}
+
           <div class="glass rounded-4 p-3">
-            <h2 class="h6 mb-2">Predicted Position Focus (Positive GEX)</h2>
+            <h2 class="h6 mb-2">Predicted Positive GEX</h2>
             {% if predicted_strike_chart_json %}
             <div id="predictedStrike"></div>
             {% else %}
-            <div class="text-secondary">Predicted strike distribution unavailable yet.</div>
+            <div class="text-secondary">Predicted strike distribution unavailable.</div>
             {% endif %}
           </div>
         </div>
@@ -188,6 +229,9 @@
       renderPlot("profileChart", {{ profile_json|tojson }});
       renderPlot("currentStrike", {{ current_strike_chart_json|tojson }});
       renderPlot("predictedStrike", {{ predicted_strike_chart_json|tojson }});
+      renderPlot("timelineChart", {{ timeline_chart_json|tojson }});
+      renderPlot("cumulativeChart", {{ cumulative_chart_json|tojson }});
+      renderPlot("aiInsights", {{ ai_insights_json|tojson }});
     </script>
   </body>
 </html>
