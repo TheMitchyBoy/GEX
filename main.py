@@ -355,6 +355,9 @@ def run(
 
     from gex_core.data_source import SOURCE_UW, fetch_gex_data
 
+    csv_use_cboe = os.environ.get("GEX_CSV_USE_CBOE", "1").lower() in {"1", "true", "yes"}
+    if export_csv and csv_use_cboe and not use_uw:
+        force_cboe = True
     prefer_uw = not force_cboe and (use_uw or bool(os.environ.get("UW_API_KEY")))
     if refresh and not prefer_uw:
         print(color_text("Refreshing data from CBOE...", ANSI_DIM))
@@ -475,6 +478,8 @@ def run(
         )
         summary["data_quality"] = quality.to_dict() if quality else {}
         summary["data_source"] = fetched.source
+        summary["spot"] = float(spot_price)
+        summary["spot_price"] = float(spot_price)
         export_analytics_csv(
             ticker=ticker,
             gex_by_strike=gex_by_strike,

@@ -17,6 +17,8 @@ DEFAULT_TICKERS = [
     if item.strip()
 ]
 DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
+# CSV exports use CBOE by default so files match historical full-chain snapshots.
+DEFAULT_CSV_FORCE_CBOE = os.environ.get("GEX_CSV_USE_CBOE", "1").lower() in {"1", "true", "yes"}
 
 
 def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:
@@ -28,7 +30,7 @@ def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:
     return age > timedelta(minutes=max_age)
 
 
-def refresh_ticker(ticker: str, force: bool = False, force_cboe: bool = False) -> bool:
+def refresh_ticker(ticker: str, force: bool = False, force_cboe: bool | None = None) -> bool:
     """Run GEX export for ticker. Returns True when a new CSV snapshot was written."""
     ticker = ticker.upper()
     if not force and not is_snapshot_stale(ticker):
@@ -36,6 +38,7 @@ def refresh_ticker(ticker: str, force: bool = False, force_cboe: bool = False) -
         return False
 
     before = get_latest_ts(ticker)
+    use_cboe = DEFAULT_CSV_FORCE_CBOE if force_cboe is None else force_cboe
 
     from main import run
 
@@ -47,7 +50,7 @@ def refresh_ticker(ticker: str, force: bool = False, force_cboe: bool = False) -
             save_plots=False,
             export_csv=True,
             export_dir="data/exports",
-            force_cboe=force_cboe,
+            force_cboe=use_cboe,
         )
     except Exception:
         logger.exception("GEX refresh failed for %s", ticker)
@@ -64,7 +67,7 @@ def refresh_ticker(ticker: str, force: bool = False, force_cboe: bool = False) -
 def refresh_tickers(
     tickers: list[str] | None = None,
     force: bool = False,
-    force_cboe: bool = False,
+    force_cboe: bool | None = None,
 ) -> dict[str, bool]:
     symbols = tickers or DEFAULT_TICKERS
     return {

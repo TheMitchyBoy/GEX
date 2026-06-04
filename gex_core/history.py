@@ -29,6 +29,10 @@ def get_latest_ts(ticker: str, export_dir: Path | None = None) -> str | None:
     return max(exports.keys())
 
 
+def list_timestamps(ticker: str, export_dir: Path | None = None) -> list[str]:
+    return sorted(collect_snapshot_files(ticker, export_dir).keys())
+
+
 def list_tickers(export_dir: Path | None = None) -> list[str]:
     export_dir = export_dir or EXPORT_DIR
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -79,8 +83,8 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
 
         with summary_path.open(encoding="utf-8") as f:
             summary = json.load(f)
-        source = summary.get("data_source")
-        spot = summary.get("spot")
+        source = summary.get("data_source") or summary.get("source")
+        spot = summary.get("spot") or summary.get("spot_price")
 
     metrics = {
         "ts": ts,

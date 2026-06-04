@@ -85,9 +85,21 @@
 
       {% if not has_history %}
       <div class="alert alert-warning" role="alert">
-        <div class="mb-2">No snapshot history is available for {{ ticker }} yet.</div>
+        <div class="mb-2">No CSV snapshot history in <code>data/exports/</code> for {{ ticker }} yet.</div>
         <form method="post" action="{{ url_for('bootstrap_ticker_history', ticker=ticker) }}">
-          <button class="btn btn-sm btn-warning" type="submit">Refresh now</button>
+          <button class="btn btn-sm btn-warning" type="submit">Export CBOE snapshot now</button>
+        </form>
+      </div>
+      {% elif timestamps and timestamps|length > 1 %}
+      <div class="glass rounded-4 p-3 mb-3">
+        <form method="get" class="d-flex flex-wrap align-items-center gap-2">
+          <label class="small text-secondary mb-0" for="ts">CSV snapshot</label>
+          <select class="form-select form-select-sm mono" style="max-width: 280px;" id="ts" name="ts" onchange="this.form.submit()">
+            {% for ts in timestamps %}
+            <option value="{{ ts }}" {% if ts == selected_ts %}selected{% endif %}>{{ ts }}</option>
+            {% endfor %}
+          </select>
+          <span class="small text-secondary">Charts and metrics use this export (CBOE-based).</span>
         </form>
       </div>
       {% endif %}
@@ -96,13 +108,21 @@
         <div class="col-12 col-xl-8">
           <div class="glass rounded-4 p-3 mb-3">
             <h2 class="h5 mb-2">Market Maker Position</h2>
-            <p class="small text-secondary mb-2">Dealer gamma by strike (green long, red short).</p>
+            <p class="small text-secondary mb-2">From CSV export in <code>data/exports/</code> (CBOE). Green = long gamma, red = short.</p>
             {% if profile_json %}
             <div id="profileChart"></div>
             {% else %}
             <div class="text-secondary">No position profile data available.</div>
             {% endif %}
           </div>
+
+          {% if uw_profile_json %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h5 mb-2">Live overlay · Unusual Whales</h2>
+            <p class="small text-secondary mb-2">Optional live feed — may differ from CSV/CBOE values.</p>
+            <div id="uwProfileChart"></div>
+          </div>
+          {% endif %}
 
           {% if timeline_chart_json %}
           <div class="glass rounded-4 p-3 mb-3">
@@ -227,6 +247,7 @@
       }
 
       renderPlot("profileChart", {{ profile_json|tojson }});
+      renderPlot("uwProfileChart", {{ uw_profile_json|tojson }});
       renderPlot("currentStrike", {{ current_strike_chart_json|tojson }});
       renderPlot("predictedStrike", {{ predicted_strike_chart_json|tojson }});
       renderPlot("timelineChart", {{ timeline_chart_json|tojson }});

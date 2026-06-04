@@ -21,7 +21,7 @@ from gex_core.charts import (
     safe_float,
 )
 from gex_core.exports import EXPORT_DIR
-from gex_core.history import build_history, get_latest_ts, list_tickers, ts_label
+from gex_core.history import build_history, get_latest_ts, list_tickers, list_timestamps, ts_label
 from gex_core.predict import predict_next_snapshot, similar_setups
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_ticker, refresh_tickers
 
@@ -101,6 +101,20 @@ REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
 def find_available_tickers(export_dir: Path | None = None):
     return list_tickers(export_dir)
+
+
+def _uw_live_enabled() -> bool:
+    return os.environ.get("GEX_SHOW_UW_LIVE", "1").lower() in {"1", "true", "yes"}
+
+
+def _select_snapshot(history: list, requested_ts: str | None) -> dict:
+    if not history:
+        raise ValueError("empty history")
+    if requested_ts:
+        for row in history:
+            if row["ts"] == requested_ts:
+                return row
+    return history[-1]
 
 
 def _safe_similar_setups(history: list) -> list:
@@ -187,6 +201,9 @@ def ticker_page(ticker):
             current_strike_chart_json=current_strike_chart_json,
             predicted_strike_chart_json=None,
             uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
+            uw_profile_json=None,
+            timestamps=[],
+            selected_ts=None,
             timeline_chart_json=None,
             cumulative_chart_json=None,
             similar_setups=[],
@@ -195,34 +212,33 @@ def ticker_page(ticker):
             ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
         )
 
-    uw_entry = get_uw_data(ticker)
-    if uw_entry:
-        uw_spot = uw_entry["spot"]
-        uw_agg = uw_entry["agg"]
-        uw_fetched_at = uw_entry["fetched_at"]
-    else:
-        uw_spot = None
-        uw_agg = None
-        uw_fetched_at = None
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_spot = uw_entry["spot"] if uw_entry else None
+    uw_agg = uw_entry["agg"] if uw_entry else None
+    uw_fetched_at = uw_entry["fetched_at"] if uw_entry else None
 
-    selected = history[-1]
+    requested_ts = request.args.get("ts")
+    selected = _select_snapshot(history, requested_ts)
+    timestamps = list_timestamps(ticker)
 
+    # Primary charts: always from CSV export (CBOE-based historical snapshots).
+    csv_spot = safe_float(selected.get("spot"), None) or None
+    profile_json = make_gex_profile_chart(
+        selected.get("strike"),
+        ticker,
+        spot=csv_spot,
+        title="Market Maker Position (CSV export)",
+    )
+    current_profile_series = selected.get("strike")
+
+    uw_profile_json = None
     if uw_agg is not None:
-        profile_json = make_gex_profile_chart(
+        uw_profile_json = make_gex_profile_chart(
             uw_agg.gex_by_strike,
             ticker,
             spot=uw_spot,
-            title="Market Maker Position (UW Live)",
+            title="Live overlay · Unusual Whales",
         )
-        current_profile_series = uw_agg.gex_by_strike
-    else:
-        profile_json = make_gex_profile_chart(
-            selected.get("strike"),
-            ticker,
-            spot=safe_float(selected.get("spot"), None) or None,
-            title="Market Maker Position",
-        )
-        current_profile_series = selected.get("strike")
 
     prediction = None
     try:
@@ -254,7 +270,10 @@ def ticker_page(ticker):
         prediction = {k: v for k, v in prediction.items() if k != "predicted_strike"}
 
     latest_raw = get_latest_ts(ticker)
-    data_source = "Unusual Whales (live)" if uw_agg is not None else selected.get("data_source") or "CSV history"
+    csv_source = selected.get("data_source") or "cboe"
+    data_source = f"CSV export ({csv_source}) · {selected['ts_label']}"
+    if uw_agg is not None:
+        data_source += " · UW live overlay available"
     spot_dist = None
     if selected.get("spot") and selected.get("gamma_flip"):
         spot_dist = abs(float(selected["spot"]) - float(selected["gamma_flip"]))
@@ -263,8 +282,11 @@ def ticker_page(ticker):
         "ticker.html",
         ticker=ticker,
         profile_json=profile_json,
+        uw_profile_json=uw_profile_json,
         uw_fetched_at=uw_fetched_at,
         selected=selected,
+        timestamps=timestamps,
+        selected_ts=selected.get("ts"),
         prediction=prediction,
         latest_ts=ts_label(latest_raw) if latest_raw else None,
         refresh_minutes=REFRESH_MINUTES,
@@ -287,7 +309,7 @@ def ticker_page(ticker):
 def bootstrap_ticker_history(ticker):
     ticker = ticker.upper()
     try:
-        ok = refresh_ticker(ticker, force=True)
+        ok = refresh_ticker(ticker, force=True, force_cboe=True)
     except Exception:
         logger.exception("Manual GEX refresh failed for %s", ticker)
         return redirect(url_for("ticker_page", ticker=ticker, bootstrap="error"))
