@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pandas as pd
 
-EXPORT_DIR = Path("data/exports")
+# Resolve relative to repo root so gunicorn/docker cwd does not break history.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+EXPORT_DIR = _REPO_ROOT / "data" / "exports"
 
 TIMESTAMP_RE = re.compile(
     r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"
@@ -52,7 +54,12 @@ def load_cumulative_series(path: Path) -> pd.Series:
 
 
 def load_surface_df(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    if not path.exists() or path.stat().st_size < 2:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
     if "expiration" in df.columns:
         df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
     if "strike" in df.columns:

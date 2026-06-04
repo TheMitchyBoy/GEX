@@ -140,7 +140,10 @@ def build_history(ticker: str, export_dir: Path | None = None) -> list[dict]:
             metrics = load_snapshot_metrics(ts, files)
             metrics["ticker"] = ticker
             snapshots.append(metrics)
-        except Exception:
-            continue
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Skipping snapshot %s for %s: %s", ts, ticker, exc
+            )
     snapshots.sort(key=lambda row: row["ts"])
     return snapshots

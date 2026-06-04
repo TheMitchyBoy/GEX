@@ -1348,7 +1348,8 @@ def export_analytics_csv(
     gex_by_expiration.rename("gex_bn_per_pct").to_csv(
         export_dir / f"{ticker}_gex_by_expiration_{timestamp}.csv"
     )
-    surface_data.to_csv(export_dir / f"{ticker}_gex_surface_{timestamp}.csv", index=False)
+    if surface_data is not None and not surface_data.empty:
+        surface_data.to_csv(export_dir / f"{ticker}_gex_surface_{timestamp}.csv", index=False)
     with (export_dir / f"{ticker}_summary_{timestamp}.json").open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
