@@ -2,6 +2,7 @@
 
 from gex_core.data_quality import DataQualityConfig, DataQualityReport, clean_option_data
 from gex_core.gcs_loader import latest_gcs_url, load_gcs_options
+from gex_core.uw_loader import fetch_uw_gex, fetch_uw_greek_exposure, fetch_uw_spot
 from gex_core.decompose import GexDecomposition, decompose_gex, decompose_from_snapshots
 from gex_core.exports import (
     EXPORT_DIR,
@@ -41,6 +42,9 @@ __all__ = [
     "extract_surface_vector",
     "fetch_options_payload",
     "find_exports_for_ticker",
+    "fetch_uw_gex",
+    "fetch_uw_greek_exposure",
+    "fetch_uw_spot",
     "latest_gcs_url",
     "load_flow_predictions",
     "load_gcs_options",

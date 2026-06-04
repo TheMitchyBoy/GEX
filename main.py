@@ -125,6 +125,148 @@ REQUEST_TIMEOUT_SECONDS = 10     # API request timeout
 
 
 # ============================================================================
+# UNUSUAL WHALES DATA PATH
+# ============================================================================
+
+def _run_uw(
+    ticker,
+    show_plots,
+    save_plots,
+    outdir,
+    top_n,
+    strike_window_pct,
+    export_csv,
+    export_dir,
+    uw_api_key=None,
+):
+    """
+    Execute the full GEX analysis workflow using Unusual Whales API data.
+
+    UW provides verified, trade-level GEX (buy/sell distinguished) aggregated
+    by strike across all expirations.  This is more accurate than the CBOE
+    open-interest based approach for intraday GEX levels.
+
+    The function prints the same regime summary and key levels as the CBOE
+    path, then generates charts and exports using the same functions.
+    """
+    from gex_core.uw_loader import fetch_uw_gex, fetch_uw_spot_exposures
+
+    print(color_text("Fetching data from Unusual Whales API...", ANSI_DIM))
+    spot_price, agg = fetch_uw_gex(ticker, api_key=uw_api_key)
+    print(
+        f"{color_text('Spot (UW)', ANSI_YELLOW)}: {spot_price:.2f}   "
+        f"{color_text('As of', ANSI_DIM)}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    gex_by_strike = agg.gex_by_strike
+    cumulative_gex = agg.cumulative_gex
+    gex_by_expiration = agg.gex_by_expiration
+    surface_data = agg.surface_data
+    total_gex_bn = agg.total_gex_bn
+
+    # ── Print regime and key levels ──────────────────────────────────────────
+    print_section_header("Total GEX (Unusual Whales)")
+    regime = "LONG gamma" if total_gex_bn >= 0 else "SHORT gamma"
+    print(f"Total net GEX: {color_text(f'${total_gex_bn:.4f} Bn', ANSI_GREEN)}")
+
+    print_section_header("Gamma Regime")
+    print(f"Net gamma regime: {color_text(regime, ANSI_YELLOW)} ({total_gex_bn:.3f} Bn$ / %)")
+
+    # Call wall / put wall from GEX-by-strike
+    if not gex_by_strike.empty:
+        call_wall = float(gex_by_strike.idxmax())
+        put_wall  = float(gex_by_strike.idxmin())
+        print(f"Estimated call wall: strike {color_text(str(int(call_wall)), ANSI_GREEN)} ({gex_by_strike.max():.3f})")
+        print(f"Estimated put wall:  strike {color_text(str(int(put_wall)), ANSI_RED)} ({gex_by_strike.min():.3f})")
+
+    # Top N levels
+    print_section_header(f"Top {top_n} GEX Strikes (UW)")
+    positive = gex_by_strike[gex_by_strike > 0].sort_values(ascending=False).head(top_n)
+    negative = gex_by_strike[gex_by_strike < 0].sort_values().head(top_n)
+    print(f"{color_text('Signal', ANSI_BOLD):<12} {color_text('Strike', ANSI_BOLD):<10} {color_text('GEX (Bn$ / %)', ANSI_BOLD)}")
+    for strike, gex in positive.items():
+        print(f"  {color_text('LONG', ANSI_GREEN):<12} {strike:<10.0f} {gex:.3f}")
+    for strike, gex in negative.items():
+        print(f"  {color_text('SHORT', ANSI_RED):<12} {strike:<10.0f} {gex:.3f}")
+
+    gamma_flip = print_gamma_flip_estimate(cumulative_gex)
+    gamma_flip_strike = gamma_flip.get("flip_strike") if isinstance(gamma_flip, dict) else None
+
+    # ── Spot-exposures: OI vs volume breakdown for the tightest ATM window ──
+    try:
+        spot_df = fetch_uw_spot_exposures(ticker, api_key=uw_api_key)
+        if not spot_df.empty and "net_gamma_oi" in spot_df.columns:
+            print_section_header("Intraday Gamma OI vs Volume (±ATM, relative units)")
+            # Show top 5 strikes by absolute OI-based gamma
+            top_idx = spot_df["net_gamma_oi"].abs().sort_values(ascending=False).head(5).index
+            best = spot_df.loc[top_idx].sort_values("strike")
+            for _, row in best.iterrows():
+                net = float(row["net_gamma_oi"])
+                c = float(row.get("call_gamma_oi", 0))
+                p = float(row.get("put_gamma_oi", 0))
+                sign = color_text("+", ANSI_GREEN) if net >= 0 else color_text("-", ANSI_RED)
+                print(f"  Strike {row['strike']:>8.0f}: net={net:>+14,.0f}  (call={c:>+14,.0f} / put={p:>+14,.0f})")
+    except Exception:
+        pass
+
+    # ── Charts ────────────────────────────────────────────────────────────────
+    if show_plots or save_plots:
+        plot_gex_profile(
+            ticker=ticker,
+            gex_by_strike=gex_by_strike,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+            spot=spot_price,
+            window_pct=strike_window_pct if strike_window_pct >= 0.05 else 0.10,
+        )
+        plot_gex_by_strike(
+            ticker=ticker,
+            spot=spot_price,
+            gex_by_strike=gex_by_strike,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+            top_n=top_n,
+            strike_window_pct=strike_window_pct,
+            cumulative_gex=cumulative_gex,
+            gamma_flip=gamma_flip_strike,
+        )
+        plot_cumulative_gex(
+            ticker=ticker,
+            cumulative_gex=cumulative_gex,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+            spot=spot_price,
+            gamma_flip=gamma_flip_strike,
+        )
+
+    # ── Export ────────────────────────────────────────────────────────────────
+    if export_csv:
+        summary = {
+            "ticker": ticker.upper(),
+            "source": "Unusual Whales API",
+            "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+            "spot_price": float(spot_price),
+            "total_gex_bn_per_pct": float(total_gex_bn),
+            "net_gamma_regime": regime,
+            "call_wall": {"strike": float(gex_by_strike.idxmax()), "gex_bn_per_pct": float(gex_by_strike.max())} if not gex_by_strike.empty else None,
+            "put_wall":  {"strike": float(gex_by_strike.idxmin()), "gex_bn_per_pct": float(gex_by_strike.min())} if not gex_by_strike.empty else None,
+            "gamma_flip": gamma_flip,
+        }
+        export_analytics_csv(
+            ticker=ticker,
+            gex_by_strike=gex_by_strike,
+            cumulative_gex=cumulative_gex,
+            gex_by_expiration=gex_by_expiration,
+            surface_data=surface_data,
+            summary=summary,
+            export_dir=export_dir,
+        )
+
+
+# ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
 
@@ -142,6 +284,8 @@ def run(
     export_dir=DEFAULT_EXPORT_DIR,
     gcs_source=None,
     spot_override=None,
+    use_uw=False,
+    uw_api_key=None,
 ):
     """
     Execute the complete GEX analysis workflow for a given ticker.
@@ -176,9 +320,25 @@ def run(
     """
     
     print_banner(ticker)
+
+    # ── Unusual Whales data path ───────────────────────────────────────────────
+    if use_uw:
+        return _run_uw(
+            ticker=ticker,
+            show_plots=show_plots,
+            save_plots=save_plots,
+            outdir=outdir,
+            top_n=top_n,
+            strike_window_pct=strike_window_pct,
+            export_csv=export_csv,
+            export_dir=export_dir,
+            uw_api_key=uw_api_key,
+        )
+
+    # ── CBOE / GCS data path ──────────────────────────────────────────────────
     if refresh:
         print(color_text("Refreshing data from CBOE...", ANSI_DIM))
-    
+
     # Step 1: Fetch and parse option data
     spot_price, option_data, quality = scrape_data(
         ticker=ticker,
@@ -191,7 +351,7 @@ def run(
         f"{color_text('Spot', ANSI_YELLOW)}: {spot_price:.2f}   "
         f"{color_text('As of', ANSI_DIM)}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
-    
+
     # Step 2: Single-pass GEX + aggregates (avoids repeated groupbys)
     option_data = attach_signed_gex(spot_price, option_data)
     agg = aggregate_gex(
@@ -1449,6 +1609,24 @@ def parse_args():
         help=f"Directory where CSV exports are saved (default: {DEFAULT_EXPORT_DIR}).",
     )
 
+    # Unusual Whales data source
+    parser.add_argument(
+        "--uw",
+        action="store_true",
+        help=(
+            "Use the Unusual Whales API instead of CBOE. "
+            "Requires UW_API_KEY environment variable (or --uw-key). "
+            "Fetches verified trade-level GEX from /api/stock/{ticker}/greek-exposure/strike."
+        ),
+    )
+    parser.add_argument(
+        "--uw-key",
+        type=str,
+        default=None,
+        metavar="KEY",
+        help="Unusual Whales API key (overrides UW_API_KEY env var).",
+    )
+
     # GCS data source
     parser.add_argument(
         "--gcs-source",
@@ -1503,4 +1681,6 @@ if __name__ == "__main__":
         export_dir=args.export_dir,
         gcs_source=args.gcs_source,
         spot_override=args.spot,
+        use_uw=args.uw,
+        uw_api_key=args.uw_key,
     )
