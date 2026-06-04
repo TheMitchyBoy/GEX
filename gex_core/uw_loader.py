@@ -55,6 +55,41 @@ _GEX_SCALE = 1e3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Exposure normalization helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _normalize_net_exposure(
+    frame: pd.DataFrame,
+    *,
+    call_col: str,
+    put_col: str,
+    net_col: str | None = None,
+) -> pd.Series:
+    """
+    Build signed net exposure from call/put columns with UW-convention fallback.
+
+    Prefer the explicit net column from UW when available. Otherwise infer whether
+    put exposure is already signed (sum) or unsigned magnitude (difference).
+    """
+    if net_col and net_col in frame.columns:
+        net = pd.to_numeric(frame[net_col], errors="coerce")
+        if net.notna().any():
+            return net
+
+    calls = pd.to_numeric(frame.get(call_col), errors="coerce").fillna(0.0)
+    puts = pd.to_numeric(frame.get(put_col), errors="coerce").fillna(0.0)
+
+    sum_candidate = calls + puts
+    diff_candidate = calls - puts
+
+    # Heuristic: if puts are mostly negative, they are likely already signed.
+    put_negative_share = float((puts < 0).mean()) if len(puts) else 0.0
+    if put_negative_share >= 0.55:
+        return sum_candidate
+    return diff_candidate
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HTTP helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -132,7 +167,12 @@ def fetch_uw_greek_exposure(
     for col in greek_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce") / _GEX_SCALE
 
-    df["net_gex"] = df["call_gex"] + df["put_gex"]
+    df["net_gex"] = _normalize_net_exposure(
+        df,
+        call_col="call_gex",
+        put_col="put_gex",
+        net_col="net_gex",
+    )
     df = df.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
     logger.info("Fetched %d strike rows from UW greek-exposure for %s", len(df), ticker)
     return df
@@ -165,7 +205,13 @@ def fetch_uw_spot_exposures(
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "call_gamma_oi" in df.columns and "put_gamma_oi" in df.columns:
-        df["net_gamma_oi"] = df["call_gamma_oi"] + df["put_gamma_oi"]
+        df["net_gamma_oi"] = _normalize_net_exposure(
+            df,
+            call_col="call_gamma_oi",
+            put_col="put_gamma_oi",
+        )
+        # spot-exposure endpoint is raw-dollar scale per 1% move
+        df["net_gamma_oi_bn"] = pd.to_numeric(df["net_gamma_oi"], errors="coerce") / 1e9
     return df.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
 
 
