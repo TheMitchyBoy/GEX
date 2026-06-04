@@ -239,10 +239,37 @@ def main():
     render_gamma_hero(history)
     render_predictions_detail(ticker, history)
 
+    if history:
+        st.markdown("#### Gamma Charts")
+        latest = history[-1]
+        c1, c2 = st.columns(2)
+        with c1:
+            strike_path = latest_file_for(f"{ticker}_gex_by_strike_*.csv", EXPORT_DIR)
+            if strike_path:
+                df_strike = pd.read_csv(str(strike_path), index_col=0)
+                fig = px.bar(
+                    df_strike,
+                    x=df_strike.index.astype(float),
+                    y=df_strike.iloc[:, 0],
+                )
+                fig.update_layout(title="GEX by Strike", height=420)
+                st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            exp_path = latest_file_for(f"{ticker}_gex_by_expiration_*.csv", EXPORT_DIR)
+            if exp_path:
+                df_exp = pd.read_csv(str(exp_path))
+                fig2 = px.bar(
+                    df_exp,
+                    x="expiration" if "expiration" in df_exp.columns else df_exp.columns[0],
+                    y="gex_bn_per_pct" if "gex_bn_per_pct" in df_exp.columns else df_exp.columns[1],
+                )
+                fig2.update_layout(title="GEX by Expiration", height=420)
+                st.plotly_chart(fig2, use_container_width=True)
+
     if show_timeline and len(history) >= 2:
         render_gex_timeline(history)
 
-    st.markdown("#### Analysis & Exports")
+    st.markdown("#### Surface & Exports")
     col1, col2 = st.columns([1, 2])
 
     with col1:

@@ -264,6 +264,106 @@ def make_timeline_chart(history, ticker):
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
+def _strike_near_atm(strike: pd.Series, window_pct: float = 0.15) -> pd.Series:
+    if strike.empty:
+        return strike
+    s = strike.astype(float)
+    spot = float(np.median(s.index.astype(float)))
+    if spot <= 0:
+        return s
+    lower, upper = spot * (1 - window_pct), spot * (1 + window_pct)
+    near = s.loc[(s.index >= lower) & (s.index <= upper)]
+    return near if len(near) > 0 else s
+
+
+def make_strike_chart(strike: pd.Series, ticker: str):
+    near = _strike_near_atm(strike)
+    if near.empty:
+        return None
+    colors = ["#4ade80" if float(v) >= 0 else "#fb7185" for v in near.values]
+    fig = go.Figure(
+        go.Bar(
+            x=near.index.astype(float),
+            y=near.values,
+            marker_color=colors,
+            name="GEX by strike",
+        )
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="#64748b")
+    fig.update_layout(
+        title=f"{ticker} GEX by Strike",
+        template="plotly_dark",
+        height=420,
+        margin=dict(l=20, r=20, t=45, b=20),
+        xaxis_title="Strike",
+        yaxis_title="GEX (Bn$ / %)",
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_expiration_chart(expiration: pd.Series | pd.DataFrame, ticker: str):
+    if expiration is None:
+        return None
+    if isinstance(expiration, pd.DataFrame):
+        if expiration.empty:
+            return None
+        df = expiration.copy()
+        if "gex_bn_per_pct" in df.columns:
+            exp = pd.to_numeric(df["gex_bn_per_pct"], errors="coerce").fillna(0.0)
+            idx = df["expiration"] if "expiration" in df.columns else df.index
+        elif df.shape[1] >= 2:
+            idx = df.iloc[:, 0]
+            exp = pd.to_numeric(df.iloc[:, 1], errors="coerce").fillna(0.0)
+        else:
+            exp = pd.to_numeric(df.iloc[:, 0], errors="coerce").fillna(0.0)
+            idx = df.index
+    elif len(expiration) == 0:
+        return None
+    else:
+        exp = pd.to_numeric(expiration, errors="coerce").fillna(0.0)
+        idx = expiration.index
+    colors = ["#4ade80" if float(v) >= 0 else "#fb7185" for v in exp.values]
+    labels = [pd.to_datetime(i).strftime("%Y-%m-%d") if not isinstance(i, str) else str(i) for i in idx]
+    fig = go.Figure(go.Bar(x=labels, y=exp.values, marker_color=colors, name="GEX by expiration"))
+    fig.add_hline(y=0, line_dash="dash", line_color="#64748b")
+    fig.update_layout(
+        title=f"{ticker} GEX by Expiration",
+        template="plotly_dark",
+        height=420,
+        margin=dict(l=20, r=20, t=45, b=20),
+        xaxis_title="Expiration",
+        yaxis_title="GEX (Bn$ / %)",
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_cumulative_chart(cumulative: pd.Series, ticker: str):
+    if cumulative is None or len(cumulative) < 2:
+        return None
+    cum = cumulative.astype(float)
+    near = _strike_near_atm(cum, window_pct=0.2)
+    fig = go.Figure(
+        go.Scatter(
+            x=near.index.astype(float),
+            y=near.values,
+            mode="lines",
+            fill="tozeroy",
+            line=dict(color="#60a5fa", width=2),
+            name="Cumulative GEX",
+        )
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="#fbbf24", annotation_text="Gamma flip zone")
+    fig.update_layout(
+        title=f"{ticker} Cumulative GEX",
+        template="plotly_dark",
+        height=380,
+        margin=dict(l=20, r=20, t=45, b=20),
+        xaxis_title="Strike",
+        yaxis_title="Cumulative GEX (Bn$ / %)",
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
 def _load_surface_df(surface_path: Path | None = None, surface_df: pd.DataFrame | None = None):
     if surface_df is not None and not surface_df.empty:
         return surface_df
@@ -382,6 +482,9 @@ def ticker_page(ticker):
             "ticker.html",
             ticker=ticker,
             imgs=imgs,
+            strike_chart_json=None,
+            exp_chart_json=None,
+            cumulative_chart_json=None,
             heatmap_json=None,
             scatter3d_json=None,
             timeline_json=None,
@@ -405,6 +508,12 @@ def ticker_page(ticker):
     ts_index = {row["ts"]: row for row in history}
     selected = ts_index.get(requested_ts, history[-1])
 
+    strike_chart_json = make_strike_chart(selected.get("strike", pd.Series(dtype=float)), ticker)
+    exp_chart_json = make_expiration_chart(
+        selected.get("exp_df") if isinstance(selected.get("exp_df"), pd.DataFrame) else selected.get("expiration"),
+        ticker,
+    )
+    cumulative_chart_json = make_cumulative_chart(selected.get("cumulative", pd.Series(dtype=float)), ticker)
     heatmap_json = make_heatmap(
         selected.get("surface_path"),
         ticker,
@@ -450,6 +559,9 @@ def ticker_page(ticker):
         "ticker.html",
         ticker=ticker,
         imgs=imgs,
+        strike_chart_json=strike_chart_json,
+        exp_chart_json=exp_chart_json,
+        cumulative_chart_json=cumulative_chart_json,
         heatmap_json=heatmap_json,
         scatter3d_json=scatter3d_json,
         timeline_json=timeline_json,
