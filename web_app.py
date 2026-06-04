@@ -396,7 +396,8 @@ def ticker_page(ticker):
     data_source = f"Unusual Whales CSV · {selected['ts_label']} ({csv_source})"
     if uw_agg is not None:
         data_source += " · live API"
-
+    if uw_mm is not None and not uw_mm.empty:
+        data_source += " · spot-exposure OI position"
     spot_dist = None
     if selected.get("spot") and selected.get("gamma_flip"):
         spot_dist = abs(float(selected["spot"]) - float(selected["gamma_flip"]))
