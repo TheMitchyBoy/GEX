@@ -190,6 +190,7 @@ def main():
     show_images = st.sidebar.checkbox("Show image snapshots", value=True)
     show_heatmap = st.sidebar.checkbox("Show heatmap", value=True)
     show_3d = st.sidebar.checkbox("Show 3D scatter", value=False)
+    positive_gamma_focus = st.sidebar.checkbox("Strike charts: positive gamma focus", value=True)
     show_predictions = st.sidebar.checkbox("Show GEX predictions", value=True)
 
     history = build_history_from_exports(ticker)
@@ -249,9 +250,35 @@ def main():
 
         if strike_path:
             st.subheader("GEX by strike")
-            df_strike = pd.read_csv(str(strike_path), index_col=0)
-            fig = px.bar(df_strike, x=df_strike.index.astype(float), y=df_strike.iloc[:, 0])
-            st.plotly_chart(fig, use_container_width=True)
+            df_strike = pd.read_csv(str(strike_path), index_col=0, parse_dates=False)
+            try:
+                df_strike.index = df_strike.index.astype(float)
+            except Exception:
+                pass
+            strike_chart = pd.DataFrame({"strike": df_strike.index, "gex": df_strike.iloc[:, 0]})
+            strike_chart["gex"] = pd.to_numeric(strike_chart["gex"], errors="coerce").fillna(0.0)
+            if positive_gamma_focus:
+                strike_chart = strike_chart.loc[strike_chart["gex"] > 0].sort_values("gex", ascending=False).head(40).sort_values("strike")
+            if strike_chart.empty:
+                st.info(
+                    "No positive gamma strikes available for this snapshot."
+                    if positive_gamma_focus
+                    else "No strike-level gamma data is available for this snapshot."
+                )
+            else:
+                y_label = "Positive GEX (Bn$ / %)" if positive_gamma_focus else "GEX (Bn$ / %)"
+                fig = px.bar(
+                    strike_chart,
+                    x="strike",
+                    y="gex",
+                    labels={"strike": "Strike", "gex": y_label},
+                    color="gex" if positive_gamma_focus else None,
+                    color_continuous_scale=["#34d399", "#22c55e"] if positive_gamma_focus else None,
+                )
+                fig.update_layout(title="Positive gamma strike focus" if positive_gamma_focus else "GEX by strike")
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No gex_by_strike CSV found in data/exports for this ticker.")
 
         if exp_path:
             st.subheader("GEX by expiration")

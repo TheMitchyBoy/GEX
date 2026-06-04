@@ -139,6 +139,26 @@
           </div>
 
           <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h5">Current Positive Gamma by Strike</h2>
+            <p class="small muted mb-2">Focused view: only positive gamma strikes are shown.</p>
+            {% if current_strike_chart_json %}
+              <div id="currentStrike" class="chart-box" style="min-height:320px;"></div>
+            {% else %}
+              <div class="muted">No positive gamma strikes available for this snapshot.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
+            <h2 class="h5">Predicted Positive Gamma by Strike</h2>
+            <p class="small muted mb-2">Prediction is based on weighted nearest historical analog outcomes.</p>
+            {% if predicted_strike_chart_json %}
+              <div id="predictedStrike" class="chart-box" style="min-height:320px;"></div>
+            {% else %}
+              <div class="muted">Not enough history to project a positive gamma strike curve yet.</div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 p-lg-4 mb-3">
             <h2 class="h5">Gamma Surface Matrix</h2>
             {% if heatmap_json %}
               <div id="heatmap" class="chart-box"></div>
@@ -298,6 +318,8 @@
       }
 
       renderPlot('timeline', {{ timeline_json|tojson }});
+      renderPlot('currentStrike', {{ current_strike_chart_json|tojson }});
+      renderPlot('predictedStrike', {{ predicted_strike_chart_json|tojson }});
       renderPlot('heatmap', {{ heatmap_json|tojson }});
       renderPlot('scatter3d', {{ scatter3d_json|tojson }});
 

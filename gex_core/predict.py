@@ -8,6 +8,7 @@ from typing import Any
 
 import joblib
 import numpy as np
+import pandas as pd
 
 from gex_core.features import enrich_snapshot_metrics, safe_float, snapshot_feature_vector
 
@@ -29,7 +30,7 @@ def _weighted_knn_predict(
     surface_vectors: list[np.ndarray] | None = None,
     query_surface: np.ndarray | None = None,
     surface_weight: float = 0.35,
-) -> tuple[dict[str, float], list[dict[str, Any]], float]:
+) -> tuple[dict[str, float], list[int], np.ndarray, float]:
     z_train, mean, std = _zscore_matrix(train_features)
     z_query = (query - mean) / std
     distances = np.linalg.norm(z_train - z_query, axis=1)
@@ -52,7 +53,7 @@ def _weighted_knn_predict(
 
     avg_dist = float(nn_dist.mean())
     confidence = max(0.0, min(1.0, 1.0 / (1.0 + avg_dist)))
-    return predictions, list(nn_idx), confidence
+    return predictions, list(nn_idx), weights, confidence
 
 
 def prepare_training_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -77,6 +78,7 @@ def prepare_training_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "target_delta_gex": nxt["total_gex"] - cur["total_gex"],
                 "target_flip": safe_float(nxt.get("gamma_flip"), safe_float(cur.get("gamma_flip"), 0.0)),
                 "target_near_term_ratio": nxt["near_term_ratio"],
+                "target_strike": nxt.get("strike"),
                 "next_ts": nxt["ts"],
             }
         )
@@ -110,7 +112,7 @@ def predict_next_snapshot(history: list[dict[str, Any]], k: int = 4) -> dict[str
         "near_term_ratio": np.array([row["target_near_term_ratio"] for row in train]),
     }
 
-    preds, nn_idx, confidence = _weighted_knn_predict(
+    preds, nn_idx, nn_weights, confidence = _weighted_knn_predict(
         x_train, targets, x_now, k=k,
         surface_vectors=surface_vectors,
         query_surface=query_surface,
@@ -137,6 +139,13 @@ def predict_next_snapshot(history: list[dict[str, Any]], k: int = 4) -> dict[str
         )
 
     regime_flip_prob = _regime_flip_probability(train, nn_idx, current["total_gex"])
+    predicted_strike = pd.Series(dtype=float)
+    for weight, idx in zip(nn_weights, nn_idx):
+        strike_series = train[idx].get("target_strike")
+        if strike_series is None:
+            continue
+        strike_series = pd.Series(strike_series, dtype=float)
+        predicted_strike = predicted_strike.add(strike_series * float(weight), fill_value=0.0)
 
     return {
         "predicted_total_gex": preds["total_gex"],
@@ -144,6 +153,7 @@ def predict_next_snapshot(history: list[dict[str, Any]], k: int = 4) -> dict[str
         "predicted_regime": "LONG gamma" if preds["total_gex"] >= 0 else "SHORT gamma",
         "predicted_flip": preds["flip"],
         "predicted_near_term_ratio": preds["near_term_ratio"],
+        "predicted_strike": predicted_strike if not predicted_strike.empty else None,
         "regime_flip_probability": regime_flip_prob,
         "confidence": confidence,
         "neighbors": neighbors,
