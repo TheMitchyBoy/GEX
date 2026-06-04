@@ -140,6 +140,8 @@ def run(
     max_dte=365,
     export_csv=True,
     export_dir=DEFAULT_EXPORT_DIR,
+    gcs_source=None,
+    spot_override=None,
 ):
     """
     Execute the complete GEX analysis workflow for a given ticker.
@@ -179,7 +181,11 @@ def run(
     
     # Step 1: Fetch and parse option data
     spot_price, option_data, quality = scrape_data(
-        ticker=ticker, refresh=refresh, cache_ttl_minutes=cache_ttl_minutes
+        ticker=ticker,
+        refresh=refresh,
+        cache_ttl_minutes=cache_ttl_minutes,
+        gcs_source=gcs_source,
+        spot_override=spot_override,
     )
     print(
         f"{color_text('Spot', ANSI_YELLOW)}: {spot_price:.2f}   "
@@ -315,35 +321,52 @@ def is_cache_fresh(cache_file, cache_ttl_minutes):
     return datetime.now() - modified_at <= max_age
 
 
-def scrape_data(ticker, refresh=False, cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUTES):
+def scrape_data(
+    ticker,
+    refresh=False,
+    cache_ttl_minutes=DEFAULT_CACHE_TTL_MINUTES,
+    gcs_source=None,
+    spot_override=None,
+):
     """
-    Fetch and cache options data from CBOE website.
-    
-    Implements a caching strategy to minimize API calls:
-    1. If refresh=False and cache is fresh, loads from disk
-    2. Otherwise, fetches from CBOE and saves to cache
-    3. Parses the JSON payload and fixes data types
-    
-    Cache file location: data/{ticker}.json
-    
+    Fetch and return cleaned options data.
+
+    Data sources (in priority order):
+      1. GCS CSV  — when ``gcs_source`` is a gs:// or HTTPS GCS URL.
+      2. CBOE API — default; respects local JSON cache.
+
     Args:
-        ticker (str): Stock ticker symbol
-        refresh (bool): Force fresh fetch even if cache is valid
-        cache_ttl_minutes (int): Cache validity duration in minutes
-    
+        ticker (str): Stock ticker symbol (e.g. 'SPX').
+        refresh (bool): Force fresh CBOE fetch even if cache is valid.
+        cache_ttl_minutes (int): CBOE cache validity in minutes.
+        gcs_source (str | None): GCS URL, e.g.
+            "gs://options_data_gex_analysis/option-trades-2026-06-03.csv"
+            Requires GOOGLE_APPLICATION_CREDENTIALS or ADC to be configured.
+        spot_override (float | None): Explicit spot price.  Required when
+            the GCS CSV has no 'underlying_price' column.
+
     Returns:
         tuple: (spot_price, option_data, quality_report)
-               Cleaned option data with parsed fields and a filter breakdown
-    
-    Example:
-        >>> spot, options_df = scrape_data("SPX", refresh=False)
-        >>> print(len(options_df), "options available")
-        1248 options available
     """
+    # ── GCS data source ────────────────────────────────────────────────────
+    if gcs_source:
+        from gex_core.gcs_loader import load_gcs_options
+        print(color_text(f"Loading options data from GCS: {gcs_source}", ANSI_DIM))
+        spot_price, option_data = load_gcs_options(
+            gcs_source,
+            ticker=ticker,
+            spot=spot_override,
+        )
+        option_data, quality = clean_option_data(option_data, spot=spot_price)
+        print(color_text(quality.summary_line(), ANSI_DIM))
+        if option_data.empty:
+            raise RuntimeError("No valid option rows after cleaning GCS data.")
+        return spot_price, option_data, quality
+
+    # ── CBOE cache / API ───────────────────────────────────────────────────
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = DATA_DIR / f"{ticker}.json"
 
-    # Load from cache if valid, otherwise fetch fresh
     if not refresh and is_cache_fresh(cache_file, cache_ttl_minutes):
         with cache_file.open() as f:
             payload = json.load(f)
@@ -1425,7 +1448,32 @@ def parse_args():
         default=str(DEFAULT_EXPORT_DIR),
         help=f"Directory where CSV exports are saved (default: {DEFAULT_EXPORT_DIR}).",
     )
-    
+
+    # GCS data source
+    parser.add_argument(
+        "--gcs-source",
+        type=str,
+        default=None,
+        metavar="URL",
+        help=(
+            "GCS URL of an options CSV to use instead of the CBOE API. "
+            "Formats: gs://bucket/object  or  "
+            "https://storage.googleapis.com/bucket/object. "
+            "Requires GOOGLE_APPLICATION_CREDENTIALS or Application Default Credentials. "
+            "Example: --gcs-source gs://options_data_gex_analysis/option-trades-2026-06-03.csv"
+        ),
+    )
+    parser.add_argument(
+        "--spot",
+        type=float,
+        default=None,
+        metavar="PRICE",
+        help=(
+            "Explicit underlying spot price. Required when using --gcs-source and "
+            "the CSV does not contain an 'underlying_price' column."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -1449,9 +1497,10 @@ if __name__ == "__main__":
         save_plots=not args.no_save,
         outdir=args.outdir,
         top_n=max(1, args.top_n),
-        # Allow customizable strike context while still bounding extreme ranges
         strike_window_pct=min(max(0.0, args.strike_window_pct), 0.50),
         max_dte=max(0, args.max_dte),
         export_csv=not args.no_export_csv,
         export_dir=args.export_dir,
+        gcs_source=args.gcs_source,
+        spot_override=args.spot,
     )

@@ -1,6 +1,7 @@
 """GEX analytics: data quality, fetch, aggregation, features, and prediction."""
 
 from gex_core.data_quality import DataQualityConfig, DataQualityReport, clean_option_data
+from gex_core.gcs_loader import latest_gcs_url, load_gcs_options
 from gex_core.decompose import GexDecomposition, decompose_gex, decompose_from_snapshots
 from gex_core.exports import (
     EXPORT_DIR,
@@ -40,7 +41,9 @@ __all__ = [
     "extract_surface_vector",
     "fetch_options_payload",
     "find_exports_for_ticker",
+    "latest_gcs_url",
     "load_flow_predictions",
+    "load_gcs_options",
     "load_strike_series",
     "parse_payload",
     "parse_timestamp",
