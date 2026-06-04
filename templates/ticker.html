@@ -88,7 +88,7 @@
           <span class="small text-secondary mono">{{ latest_ts }} · every {{ refresh_minutes }}m</span>
           {% endif %}
           <a class="btn btn-sm btn-outline-secondary" href="/">← All</a>
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker) }}">Refresh</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker, force_refresh=1) }}">Refresh</a>
         </div>
       </section>
 
@@ -453,6 +453,15 @@
       renderPlot("timelineChart", {{ timeline_chart_json|tojson }});
       renderPlot("cumulativeChart", {{ cumulative_chart_json|tojson }});
       renderPlot("aiInsights", {{ ai_insights_json|tojson }});
+
+      const autoRefreshMinutes = Number({{ refresh_minutes|tojson }});
+      if (autoRefreshMinutes > 0) {
+        window.setTimeout(() => {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("force_refresh");
+          window.location.href = url.toString();
+        }, autoRefreshMinutes * 60 * 1000);
+      }
 
       const replayTimestamps = {{ timestamps|tojson }};
       let replayIndex = {{ replay_index|tojson }};
