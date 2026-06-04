@@ -24,14 +24,13 @@ def backtest_delta_sign_accuracy(ticker: str, min_history: int = 6) -> dict[str,
     hits = 0
     total = 0
     abs_errors = []
-    enriched = [enrich_snapshot_metrics(h.copy()) for h in history]
 
-    for i in range(4, len(enriched) - 1):
-        window = enriched[: i + 1]
+    for i in range(4, len(history) - 1):
+        window = history[: i + 1]
         pred = predict_next_snapshot(window)
         if not pred:
             continue
-        actual_delta = enriched[i + 1]["total_gex"] - enriched[i]["total_gex"]
+        actual_delta = history[i + 1]["total_gex"] - history[i]["total_gex"]
         predicted_delta = pred["predicted_delta_gex"]
         if (actual_delta >= 0) == (predicted_delta >= 0):
             hits += 1
