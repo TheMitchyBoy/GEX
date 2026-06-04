@@ -52,7 +52,12 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _UW_CACHE: dict[str, dict] = {}          # ticker → {spot, agg, ts, analysis}
-_UW_CACHE_TTL = 600                       # seconds (10 minutes)
+_UW_CACHE_TTL = int(
+    os.environ.get(
+        "GEX_UW_CACHE_TTL_SECONDS",
+        str(max(30, int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "1")) * 60)),
+    )
+)  # keep cache aligned to refresh cadence by default
 _UW_API_KEY = os.environ.get("UW_API_KEY")
 _UW_ENABLED = bool(_UW_API_KEY)
 
@@ -221,8 +226,22 @@ def index():
 @APP.route("/ticker/<ticker>/")
 def ticker_page(ticker):
     ticker = ticker.upper()
-    history = build_history(ticker)
     bootstrap_status = request.args.get("bootstrap")
+    force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
+    if force_refresh:
+        refreshed_csv = False
+        refreshed_live = False
+        try:
+            refreshed_csv = refresh_ticker(ticker, force=True)
+        except Exception:
+            logger.exception("Force CSV refresh failed for %s", ticker)
+        try:
+            refreshed_live = refresh_uw_data(ticker, force=True) is not None
+        except Exception:
+            logger.exception("Force UW refresh failed for %s", ticker)
+        bootstrap_status = "ok" if (refreshed_csv or refreshed_live) else "failed"
+
+    history = build_history(ticker)
 
     if not history:
         selected = {
