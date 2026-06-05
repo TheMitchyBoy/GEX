@@ -49,11 +49,20 @@ def _history_cache_key(
     *,
     lookback_days: int | None,
     max_snapshots: int | None,
+    dedupe_identical_strikes: bool = True,
 ) -> tuple:
     export_dir = export_dir or EXPORT_DIR
     timestamps = list_export_timestamps(ticker.upper(), export_dir)
     if not timestamps:
-        return (ticker.upper(), str(export_dir.resolve()), "", 0, lookback_days or 0, max_snapshots or 0)
+        return (
+            ticker.upper(),
+            str(export_dir.resolve()),
+            "",
+            0,
+            lookback_days or 0,
+            max_snapshots or 0,
+            int(dedupe_identical_strikes),
+        )
     return (
         ticker.upper(),
         str(export_dir.resolve()),
@@ -61,6 +70,7 @@ def _history_cache_key(
         len(timestamps),
         lookback_days or 0,
         max_snapshots or 0,
+        int(dedupe_identical_strikes),
     )
 
 
@@ -69,7 +79,7 @@ def clear_history_cache() -> None:
     build_history_cached.cache_clear()
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def build_history_cached(
     ticker: str,
     export_dir_str: str,
@@ -77,6 +87,7 @@ def build_history_cached(
     sig_n: int,
     lookback_days: int,
     max_snapshots: int,
+    dedupe_identical_strikes: int,
 ) -> tuple:
     """LRU-cached history builder; returns tuple for hashability."""
     return tuple(
@@ -85,6 +96,7 @@ def build_history_cached(
             Path(export_dir_str),
             lookback_days=lookback_days or None,
             max_snapshots=max_snapshots or None,
+            dedupe_identical_strikes=bool(dedupe_identical_strikes),
         )
     )
 
@@ -251,6 +263,7 @@ def _build_history_impl(
     *,
     lookback_days: int | None = None,
     max_snapshots: int | None = None,
+    dedupe_identical_strikes: bool = True,
 ) -> list[dict]:
     ticker = ticker.upper()
     snapshots = []
@@ -269,10 +282,12 @@ def _build_history_impl(
                 "Skipping snapshot %s for %s: %s", ts, ticker, exc
             )
     snapshots.sort(key=lambda row: row["ts"])
+    if not dedupe_identical_strikes:
+        return snapshots
     deduped = []
     for row in snapshots:
         if deduped and row.get("strike") is not None and row["strike"].equals(deduped[-1].get("strike")):
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).debug(
                 "Skipping duplicate snapshot %s for %s; strike profile matches %s",
                 row["ts"],
                 ticker,
@@ -348,13 +363,20 @@ def build_history(
     *,
     lookback_days: int | None = None,
     max_snapshots: int | None = None,
+    dedupe_identical_strikes: bool = True,
 ) -> list[dict]:
     export_dir = export_dir or EXPORT_DIR
     lb, cap = _history_limits(lookback_days, max_snapshots)
-    key = _history_cache_key(ticker, export_dir, lookback_days=lb, max_snapshots=cap)
+    key = _history_cache_key(
+        ticker,
+        export_dir,
+        lookback_days=lb,
+        max_snapshots=cap,
+        dedupe_identical_strikes=dedupe_identical_strikes,
+    )
     if key in _HISTORY_CACHE:
         return _HISTORY_CACHE[key]
-    cached = build_history_cached(key[0], key[1], key[2], key[3], key[4], key[5])
+    cached = build_history_cached(key[0], key[1], key[2], key[3], key[4], key[5], key[6])
     history = list(cached)
     _HISTORY_CACHE[key] = history
     return history

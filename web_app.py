@@ -64,6 +64,7 @@ from gex_core.intelligence import (
 )
 from gex_core.predict import (
     apply_flow_to_prediction,
+    forecast_blocker_message,
     load_flow_predictions,
     predict_next_snapshot,
     similar_setups,
@@ -235,6 +236,66 @@ def _dashboard_history(ticker: str) -> list[dict]:
         ticker,
         lookback_days=int(os.environ.get("GEX_DASHBOARD_HISTORY_DAYS", "30")),
         max_snapshots=int(os.environ.get("GEX_DASHBOARD_HISTORY_MAX", "240")),
+        dedupe_identical_strikes=True,
+    )
+
+
+def _prediction_history(ticker: str) -> list[dict]:
+    """History for KNN — keep consecutive duplicate strike profiles for sample depth."""
+    dedupe = os.environ.get("GEX_PREDICTION_DEDUP", "0").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    return build_history(
+        ticker,
+        lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
+        max_snapshots=int(os.environ.get("GEX_PREDICTION_HISTORY_MAX", "240")),
+        dedupe_identical_strikes=dedupe,
+    )
+
+
+def _fallback_predicted_strike(selected: dict, prediction: dict):
+    """Scale the current strike profile when KNN neighbors lack per-strike targets."""
+    import pandas as pd
+
+    strike = selected.get("strike")
+    if strike is None or (isinstance(strike, pd.Series) and strike.empty):
+        return None
+    strike = pd.Series(strike, dtype=float)
+    cur_total = safe_float(selected.get("total_gex"), 0.0)
+    delta = safe_float(prediction.get("predicted_delta_gex"), 0.0)
+    if abs(cur_total) < 1e-9:
+        return None
+    return strike * (delta / cur_total)
+
+
+def _build_predicted_strike_chart(
+    prediction: dict | None,
+    *,
+    selected: dict,
+    ticker: str,
+    csv_spot: float | None,
+) -> str | None:
+    if not prediction:
+        return None
+    knn_strike = prediction.get("knn_strike")
+    if knn_strike is None:
+        knn_strike = prediction.get("predicted_strike")
+    flow_strike = prediction.get("flow_strike")
+    combined_strike = prediction.get("predicted_strike")
+    if knn_strike is None and combined_strike is None:
+        knn_strike = _fallback_predicted_strike(selected, prediction)
+        combined_strike = knn_strike
+    if knn_strike is None and combined_strike is None:
+        return None
+    return make_prediction_gamma_chart(
+        knn_strike=knn_strike,
+        combined_strike=combined_strike,
+        flow_strike=flow_strike,
+        ticker=ticker,
+        spot=csv_spot,
     )
 
 
@@ -364,10 +425,9 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
             "watchlist": [],
         }
     selected = _select_snapshot(history, selected_ts, ticker=ticker)
-    prediction = predict_next_snapshot(
-        history,
-        lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
-    )
+    prediction_history = _prediction_history(ticker)
+    prediction_lookback = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30"))
+    prediction = predict_next_snapshot(prediction_history, lookback_days=prediction_lookback)
     flow_overlay = None
     spot_for_flow = safe_float(selected.get("spot"), 0.0) or 4800.0
     try:
@@ -640,13 +700,20 @@ def ticker_page(ticker):
 
     prediction = None
     flow_overlay = None
+    prediction_history = _prediction_history(ticker)
+    prediction_lookback = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30"))
+    forecast_blocker = None
     try:
-        prediction = predict_next_snapshot(
-            history,
-            lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
-        )
+        prediction = predict_next_snapshot(prediction_history, lookback_days=prediction_lookback)
+        if prediction is None:
+            forecast_blocker = forecast_blocker_message(
+                prediction_history,
+                lookback_days=prediction_lookback,
+                export_timestamp_count=len(timestamps),
+            )
     except Exception:
         logger.exception("Prediction failed for %s", ticker)
+        forecast_blocker = "Forecast failed with an internal error — check service logs."
 
     spot_for_flow = csv_spot or selected_spot or 4800.0
     try:
@@ -678,21 +745,12 @@ def ticker_page(ticker):
         ticker,
         "Current Position Focus (Positive GEX)",
     )
-    predicted_strike_chart_json = None
-    if prediction:
-        knn_strike = prediction.get("knn_strike")
-        if knn_strike is None:
-            knn_strike = prediction.get("predicted_strike")
-        flow_strike = prediction.get("flow_strike")
-        combined_strike = prediction.get("predicted_strike")
-        if knn_strike is not None or combined_strike is not None:
-            predicted_strike_chart_json = make_prediction_gamma_chart(
-                knn_strike=knn_strike,
-                combined_strike=combined_strike,
-                flow_strike=flow_strike,
-                ticker=ticker,
-                spot=csv_spot,
-            )
+    predicted_strike_chart_json = _build_predicted_strike_chart(
+        prediction,
+        selected=selected,
+        ticker=ticker,
+        csv_spot=csv_spot,
+    )
 
     prediction_raw = prediction
     prediction = _prediction_public_view(prediction_raw)
@@ -775,6 +833,9 @@ def ticker_page(ticker):
         outcome_panel=outcome_panel,
         term_structure=term_structure,
         model_accountability=model_accountability,
+        forecast_blocker=forecast_blocker,
+        forecast_snapshot_count=len(prediction_history),
+        export_timestamp_count=len(timestamps),
         scenario=scenario,
         scenario_pct=scenario_pct,
         replay_index=replay_index,
@@ -905,8 +966,9 @@ def _auto_dispatch_alerts(ticker: str) -> None:
     if not history:
         return
     selected = _select_snapshot(history, None)
+    prediction_history = _prediction_history(ticker)
     prediction = predict_next_snapshot(
-        history,
+        prediction_history,
         lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
     )
     alerts = generate_alerts(history, selected, prediction)

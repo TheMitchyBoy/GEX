@@ -470,8 +470,16 @@
             </p>
             {% if predicted_strike_chart_json %}
             <div id="predictedStrike" class="chart-lg"></div>
+            {% elif forecast_blocker %}
+            <div class="text-secondary">{{ forecast_blocker }}</div>
             {% else %}
-            <div class="text-secondary">Need at least 4 CSV snapshots to build a gamma change forecast.</div>
+            <div class="text-secondary">
+              Gamma change chart unavailable.
+              {% if export_timestamp_count is defined and forecast_snapshot_count is defined %}
+              ({{ export_timestamp_count }} export timestamps indexed;
+              {{ forecast_snapshot_count }} loaded for forecast.)
+              {% endif %}
+            </div>
             {% endif %}
           </div>
         </div>
@@ -563,8 +571,10 @@
             <div class="metric-label">Expected absolute move</div>
             <div class="metric-value">{{ '%.2f'|format(forecast_probs.expected_abs_move_pct * 100) }}%</div>
             {% endif %}
+            {% elif forecast_blocker %}
+            <div class="text-secondary">{{ forecast_blocker }}</div>
             {% else %}
-            <div class="text-secondary">Need at least 4 CSV snapshots to forecast.</div>
+            <div class="text-secondary">Forecast unavailable for this snapshot.</div>
             {% endif %}
           </div>
 
