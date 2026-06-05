@@ -161,6 +161,17 @@ python scripts/train_gex_model.py --ticker SPX
 curl -s localhost:8080/health | jq
 ```
 
+`uw_api_configured: false` in the `/health` payload (or a startup log warning
+`UW_API_KEY is not set ...`) means the server has no API key. The dashboard then
+shows **"Live data isn't configured on this server (UW_API_KEY is missing)"** and
+serves only saved snapshots. Fix by setting `UW_API_KEY` in the **service**
+environment:
+
+- **docker compose:** export `UW_API_KEY` in your shell or a `.env` file before `docker compose up` (the compose file passes it through).
+- **Heroku/Procfile-style:** `heroku config:set UW_API_KEY=...` (or the platform's config UI).
+- **systemd/bare gunicorn:** add `UW_API_KEY=...` to the unit's `Environment=`/`EnvironmentFile=`.
+- **Cursor Cloud Agents:** add it under Dashboard → Cloud Agents → Secrets.
+
 Compact aged strike CSVs (keeps summaries + cumulative):
 
 ```bash
