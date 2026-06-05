@@ -53,32 +53,103 @@ def make_timeline_chart(history, ticker: str) -> str | None:
         return None
     labels = [row["ts_label"] for row in history]
     totals = [safe_float(row.get("total_gex"), 0.0) for row in history]
-    pos = [safe_float(row.get("pos_gex"), 0.0) for row in history]
-    neg = [safe_float(row.get("neg_gex"), 0.0) for row in history]
+    spot = [safe_float(row.get("spot"), 0.0) or None for row in history]
+    gamma_flip = [safe_float(row.get("gamma_flip"), 0.0) or None for row in history]
+    call_wall = [safe_float(row.get("call_wall"), 0.0) or None for row in history]
+    put_wall = [safe_float(row.get("put_wall"), 0.0) or None for row in history]
+    near_term_ratio = [safe_float(row.get("near_term_ratio"), 0.0) for row in history]
+    regimes = [row.get("regime", "N/A") for row in history]
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=labels, y=pos, fill="tozeroy", fillcolor="rgba(0,217,126,0.10)",
-        line=dict(color=_GREEN, width=1), name="Positive GEX",
+
+    if any(v is not None for v in put_wall) and any(v is not None for v in call_wall):
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=put_wall,
+            mode="lines",
+            line=dict(color="rgba(255,71,87,0.55)", width=1, dash="dashdot"),
+            name="Put wall",
+            hovertemplate="%{x}<br>Put wall %{y:.0f}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=call_wall,
+            mode="lines",
+            line=dict(color="rgba(0,217,126,0.55)", width=1, dash="dashdot"),
+            fill="tonexty",
+            fillcolor="rgba(148,163,184,0.08)",
+            name="Call/put wall corridor",
+            hovertemplate="%{x}<br>Call wall %{y:.0f}<extra></extra>",
+        ))
+
+    if any(v is not None for v in gamma_flip):
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=gamma_flip,
+            mode="lines+markers",
+            line=dict(color="#e2e8f0", width=2, dash="dot"),
+            marker=dict(size=6, color="#e2e8f0", line=dict(color=_CHART_BG, width=1)),
+            name="Gamma flip",
+            hovertemplate="%{x}<br>Gamma flip %{y:.0f}<extra></extra>",
+        ))
+
+    if any(v is not None for v in spot):
+        spot_custom = [
+            [totals[idx], near_term_ratio[idx], regimes[idx]]
+            for idx in range(len(labels))
+        ]
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=spot,
+            customdata=spot_custom,
+            mode="lines+markers",
+            line=dict(color=_AMBER, width=3),
+            marker=dict(size=8, color=_AMBER, line=dict(color=_CHART_BG, width=1.5)),
+            name="SPX spot",
+            hovertemplate=(
+                "%{x}<br>SPX spot %{y:.2f}"
+                "<br>Regime %{customdata[2]}"
+                "<br>Net GEX %{customdata[0]:+.3f} Bn$ / %"
+                "<br>Near-term gamma share %{customdata[1]:.1%}<extra></extra>"
+            ),
+        ))
+
+    bar_colors = [_GREEN if t >= 0 else _RED for t in totals]
+    bar_custom = [[near_term_ratio[idx], regimes[idx]] for idx in range(len(labels))]
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=totals,
+        yaxis="y2",
+        customdata=bar_custom,
+        marker_color=bar_colors,
+        marker_line_width=0,
+        opacity=0.34,
+        name="Net dealer GEX",
+        hovertemplate=(
+            "%{x}<br>Net dealer GEX %{y:+.3f} Bn$ / %"
+            "<br>Near-term gamma share %{customdata[0]:.1%}"
+            "<br>Regime %{customdata[1]}<extra></extra>"
+        ),
     ))
-    fig.add_trace(go.Scatter(
-        x=labels, y=neg, fill="tozeroy", fillcolor="rgba(255,71,87,0.10)",
-        line=dict(color=_RED, width=1), name="Negative GEX",
-    ))
-    marker_colors = [_GREEN if t >= 0 else _RED for t in totals]
-    fig.add_trace(go.Scatter(
-        x=labels, y=totals, mode="lines+markers",
-        line=dict(color=_BLUE, width=2.5),
-        marker=dict(size=7, color=marker_colors, line=dict(color=_CHART_BG, width=1)),
-        name="Total GEX",
-    ))
-    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)", line_width=1)
+
     _apply_base(
-        fig, title=f"{ticker} · GEX Timeline", height=340,
-        margin=dict(l=20, r=20, t=45, b=20),
-        xaxis_title="Snapshot", yaxis_title="GEX (Bn$ / %)",
+        fig,
+        title=f"{ticker} · Options Movement Map",
+        height=430,
+        margin=dict(l=48, r=58, t=58, b=36),
+        xaxis=dict(title="Snapshot", rangeslider=dict(visible=len(labels) > 4, thickness=0.08)),
+        yaxis=dict(title="SPX level / key option strikes", zeroline=False),
+        yaxis2=dict(
+            title="Net GEX (Bn$ / %)",
+            overlaying="y",
+            side="right",
+            zeroline=True,
+            zerolinecolor="rgba(255,255,255,0.25)",
+            gridcolor="rgba(255,255,255,0)",
+        ),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        barmode="overlay",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
