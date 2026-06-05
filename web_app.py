@@ -79,6 +79,15 @@ _UW_CACHE_TTL = int(
 _UW_API_KEY = os.environ.get("UW_API_KEY")
 _UW_ENABLED = bool(_UW_API_KEY)
 
+if not _UW_ENABLED:
+    logger.warning(
+        "UW_API_KEY is not set in this environment — live data is DISABLED. The "
+        "dashboard will only show previously saved snapshots and forced refreshes "
+        "will report 'Live data isn't configured'. Set UW_API_KEY in the service "
+        "environment (e.g. host env / .env for docker compose, or your platform's "
+        "config) to enable live fetches."
+    )
+
 # Last classified UW failure reason per ticker, so the dashboard and logs can
 # report *why* a refresh failed instead of guessing.
 _LAST_UW_ERROR: dict[str, str] = {}
