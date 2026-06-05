@@ -1,4 +1,11 @@
-"""Feature engineering for GEX prediction and similarity matching."""
+"""Feature engineering for GEX prediction and similarity matching.
+
+Each historical snapshot is reduced to a numeric vector (total GEX, flip
+distance, strike concentration, term-structure shape, optional market-context
+fields from ``market_features``). ``predict_next_snapshot`` compares the
+current vector to past snapshots with exponential recency weighting and
+strike-surface cosine similarity.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,10 @@
-"""GEX data loading from Unusual Whales only."""
+"""GEX data loading from Unusual Whales only.
+
+``fetch_gex_data`` is the single front door for fresh GEX. It returns a
+``GexFetchResult`` with spot price and a ``GexAggregates`` bundle ready for
+charts, export, and dashboard refresh. Requires ``UW_API_KEY`` in the environment
+or an explicit ``uw_api_key`` argument.
+"""
 
 from __future__ import annotations
 

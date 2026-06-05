@@ -1,4 +1,11 @@
-"""Build snapshot history from CSV exports (no database)."""
+"""Build snapshot history from CSV exports (no database).
+
+``build_history`` joins strike, cumulative, expiration, surface, and summary
+files into a chronologically sorted list of snapshot dicts. That list is the
+shared memory model for prediction (KNN features), backtests, and dashboard
+panels. Enrichment (gamma flip, term structure, concentration) happens in
+``gex_core.features.enrich_snapshot_metrics``.
+"""
 
 from __future__ import annotations
 

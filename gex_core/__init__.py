@@ -1,8 +1,18 @@
-"""GEX analytics: data quality, fetch, aggregation, features, and prediction."""
+"""
+GEX analytics package.
+
+Layers (bottom to top):
+
+1. **Load** — ``uw_loader`` / ``data_source`` fetch Unusual Whales strike GEX.
+2. **Persist** — ``exports`` + ``history`` scan timestamped CSV/JSON snapshots.
+3. **Features** — ``features`` enriches each snapshot with flip, concentration, surface vectors.
+4. **Forecast** — ``predict`` runs weighted KNN with optional trained-model overlay;
+   ``calibration``, ``regime``, and ``structural`` refine confidence and attribution.
+5. **Present** — ``charts``, ``intelligence``, and the Flask/Streamlit apps render dashboards.
+"""
 
 from gex_core.ai_analyst import GammaAnalysis, GammaSignal, analyze_dealer_gamma
 from gex_core.data_quality import DataQualityConfig, DataQualityReport, clean_option_data
-from gex_core.gcs_loader import latest_gcs_url, load_gcs_options
 from gex_core.uw_loader import fetch_uw_gex, fetch_uw_greek_exposure, fetch_uw_spot
 from gex_core.decompose import GexDecomposition, decompose_gex, decompose_from_snapshots
 from gex_core.exports import (
@@ -21,7 +31,6 @@ from gex_core.pipeline import (
     GexAggregates,
     aggregate_gex,
     attach_signed_gex,
-    fetch_options_payload,
     parse_payload,
 )
 from gex_core.predict import (
@@ -69,14 +78,11 @@ __all__ = [
     "enrich_snapshot_metrics",
     "estimate_gamma_flip",
     "extract_surface_vector",
-    "fetch_options_payload",
     "find_exports_for_ticker",
     "fetch_uw_gex",
     "fetch_uw_greek_exposure",
     "fetch_uw_spot",
-    "latest_gcs_url",
     "load_flow_predictions",
-    "load_gcs_options",
     "load_strike_series",
     "parse_payload",
     "parse_timestamp",

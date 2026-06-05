@@ -1,4 +1,12 @@
-"""Decompose GEX changes into spot, time, vol, and flow components."""
+"""Decompose GEX changes into spot, time, vol, and flow components.
+
+Prefer :func:`decompose_from_snapshots` — it compares two UW export snapshots
+and is what the live forecast stack uses via :mod:`gex_core.structural`.
+
+:func:`decompose_gex` remains for hypothetical what-if scenarios but needs a
+legacy per-contract JSON cache at ``data/{TICKER}.json`` (CBOE-style payload).
+The UW-only CLI no longer writes that file; use ``--compare-snapshots`` instead.
+"""
 
 from __future__ import annotations
 
@@ -37,7 +45,10 @@ class GexDecomposition:
 def load_cached_options(ticker: str) -> tuple[float, pd.DataFrame]:
     cache_file = DATA_DIR / f"{ticker.upper()}.json"
     if not cache_file.exists():
-        raise FileNotFoundError(f"No cached options data at {cache_file}. Run main.py --ticker {ticker} first.")
+        raise FileNotFoundError(
+            f"No per-contract cache at {cache_file}. "
+            "Use scripts/gex_decompose.py --compare-snapshots for UW export snapshots."
+        )
     with cache_file.open() as f:
         payload = json.load(f)
     spot, df = parse_payload(payload)

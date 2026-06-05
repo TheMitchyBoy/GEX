@@ -1,4 +1,16 @@
-"""GEX prediction: KNN, surface similarity, and trained model inference."""
+"""GEX prediction: KNN, surface similarity, and trained model inference.
+
+Core flow for ``predict_next_snapshot``:
+
+1. Build feature rows from export history (recent lookback window).
+2. Weighted KNN on z-scored regime features → ΔGEX point estimate + interval.
+3. Optional overlay from ``models/{TICKER}/`` (linear or LSTM) when the manifest
+   reports enough training rows and the model is not stale.
+4. Blend KNN and overlay using ``regime.model_blend_weight`` (volatility-aware).
+5. Attach structural attribution from ``structural.attribute_last_move``.
+
+``similar_setups`` surfaces nearest historical neighbors for the dashboard.
+"""
 
 from __future__ import annotations
 

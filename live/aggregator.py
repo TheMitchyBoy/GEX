@@ -79,7 +79,7 @@ class GEXAggregator:
         # delta in open interest approximation: assume quantity increases OI if side is buy
         delta_oi = qty if side in ("buy", "open") else -qty
 
-        # GEX formula used in main.py: spot * gamma * open_interest * contract_size * spot * 0.01
+        # GEX formula (gex_core.pipeline): spot * gamma * OI * 100 * spot * 0.01
         delta_gex = spot * float(gamma) * delta_oi * contract_size * spot * 0.01
         delta_gex = delta_gex * type_mul
 

@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+# Legacy per-contract option-chain caches (CBOE-style JSON)
+*.json
+!data/exports/*.json
+!models/**/manifest.json
 data/.gex_scheduler.lock
 data/live_flow_state.json
 models/*

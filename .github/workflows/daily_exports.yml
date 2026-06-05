@@ -35,7 +35,7 @@ jobs:
           IFS=',' read -ra TS <<< "${TICKERS}"
           for t in "${TS[@]}"; do
             echo "Running main.py for $t"
-            python main.py --ticker "$t" --no-show --no-save || python main.py --ticker "$t" --no-show --no-save --refresh
+            python main.py --ticker "$t" --no-show --no-save
           done
 
       - name: Commit and push exports

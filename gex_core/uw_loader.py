@@ -25,10 +25,11 @@ Or pass ``api_key`` explicitly to :func:`fetch_uw_gex`.
 
 Usage
 -----
-CLI:
-    python main.py --ticker SPX --uw
+CLI::
 
-Python:
+    python main.py --ticker SPX
+
+Python::
     from gex_core.uw_loader import fetch_uw_gex
     spot, agg = fetch_uw_gex("SPX")
     # agg is a GexAggregates namedtuple ready for charts and export

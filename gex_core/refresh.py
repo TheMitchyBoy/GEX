@@ -1,4 +1,11 @@
-"""Scheduled and manual GEX refresh: fetch UW and write CSV exports."""
+"""Scheduled and manual GEX refresh: fetch UW and write CSV exports.
+
+The refresh loop is file-based — each successful run appends a timestamped
+snapshot under ``data/exports/``. ``is_snapshot_stale`` compares the latest
+export age to ``GEX_REFRESH_INTERVAL_MINUTES`` (default 1 minute for the web
+dashboard). ``refresh_recent_tickers`` backfills one snapshot per weekday over
+a lookback window for prediction history.
+"""
 
 from __future__ import annotations
 

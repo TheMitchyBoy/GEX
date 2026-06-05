@@ -1,25 +1,33 @@
-"""Fetch, GEX computation, and aggregation."""
+"""
+Contract-level GEX math and aggregation helpers.
+
+The live data path uses Unusual Whales strike aggregates (see ``uw_loader``).
+This module keeps the shared :class:`GexAggregates` container and the
+open-interest GEX formula used by decomposition utilities and any legacy
+contract-chain workflows::
+
+    GEX = spot × gamma × OI × 100 × spot × 0.01 × sign
+
+Calls are positive gamma; puts are negative. Totals are in billions of dollars
+per 1% underlying move (Bn$ / %).
+"""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import requests
 
 CONTRACT_SIZE = 100
-REQUEST_TIMEOUT_SECONDS = int(os.environ.get("GEX_REQUEST_TIMEOUT", "10"))
-
-_HTTP = requests.Session()
-_HTTP.headers.update({"User-Agent": "GEX-Tracker/1.0"})
 
 
 @dataclass(frozen=True)
 class GexAggregates:
+    """Standard bundle of GEX views produced by loaders and aggregators."""
+
     gex_by_strike: pd.Series
     gex_by_expiration: pd.Series
     cumulative_gex: pd.Series
@@ -27,23 +35,8 @@ class GexAggregates:
     total_gex_bn: float
 
 
-def fetch_options_payload(ticker: str) -> dict[str, Any]:
-    endpoints = [
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{ticker}.json",
-        f"https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json",
-    ]
-    last_error: Exception | None = None
-    for endpoint in endpoints:
-        try:
-            response = _HTTP.get(endpoint, timeout=REQUEST_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as err:
-            last_error = err
-    raise RuntimeError(f"Could not fetch options data for {ticker}: {last_error}")
-
-
 def parse_payload(payload: dict[str, Any]) -> tuple[float, pd.DataFrame]:
+    """Parse a cached CBOE-style JSON payload into spot + options DataFrame."""
     if "data" not in payload:
         raise ValueError("Unexpected response format: missing 'data' field.")
     block = payload["data"]
@@ -83,7 +76,7 @@ def aggregate_gex(
     max_dte: int = 365,
     strike_window_pct: float = 0.15,
 ) -> GexAggregates:
-    """Single-pass strike/expiration/surface aggregates."""
+    """Single-pass strike/expiration/surface aggregates from a contract chain."""
     term = filter_by_dte(data, max_dte)
     gex_by_expiration = term.groupby("expiration", sort=True)["GEX"].sum() / 1e9
 
@@ -105,4 +98,3 @@ def aggregate_gex(
         surface_data=surface,
         total_gex_bn=total_gex_bn,
     )
-

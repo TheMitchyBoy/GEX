@@ -1,3 +1,11 @@
+"""
+Flask SPX gamma dashboard.
+
+Serves historical GEX snapshots from ``data/exports/``, renders Plotly charts,
+runs weighted-KNN forecasts, and optionally auto-refreshes via APScheduler when
+``UW_API_KEY`` is set. All state is file-based; there is no database.
+"""
+
 from __future__ import annotations
 
 import atexit

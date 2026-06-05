@@ -1,10 +1,11 @@
 """CLI: decompose GEX changes into spot, time, vol, and flow components.
 
 Usage:
-    python scripts/gex_decompose.py --ticker SPX
-    python scripts/gex_decompose.py --ticker SPX --spot-pct 0.01 --hours 4 --vol-pct 0.05
-    python scripts/gex_decompose.py --ticker SPX --flow data/flow_sample.jsonl
     python scripts/gex_decompose.py --ticker SPX --compare-snapshots
+    python scripts/gex_decompose.py --ticker SPX --compare-snapshots --flow data/flow_sample.jsonl
+
+Hypothetical contract-level decomposition (requires data/{TICKER}.json cache):
+    python scripts/gex_decompose.py --ticker SPX --spot-pct 0.01 --hours 4 --vol-pct 0.05
 """
 from __future__ import annotations
 
@@ -52,13 +53,21 @@ def main():
     parser.add_argument("--hours", type=float, default=0.0, help="Hours elapsed for time decay")
     parser.add_argument("--vol-pct", type=float, default=0.0, help="Hypothetical vol shift")
     parser.add_argument("--flow", type=Path, default=None, help="JSONL flow feed path")
-    parser.add_argument("--compare-snapshots", action="store_true", help="Compare last two export snapshots")
+    parser.add_argument(
+        "--compare-snapshots",
+        action="store_true",
+        help="Compare last two UW export snapshots (recommended)",
+    )
     args = parser.parse_args()
 
     ticker = args.ticker.upper()
     flow_events = load_flow_events(args.flow) if args.flow else []
 
-    if args.compare_snapshots:
+    use_snapshots = args.compare_snapshots or (
+        args.spot_pct == 0.0 and args.hours == 0.0 and args.vol_pct == 0.0 and not flow_events
+    )
+
+    if use_snapshots:
         exports = find_exports_for_ticker(ticker)
         timestamps = sorted(
             ts for ts, kinds in exports.items() if "gex_by_strike" in kinds
