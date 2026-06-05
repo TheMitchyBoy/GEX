@@ -8,14 +8,11 @@ from datetime import datetime, timedelta
 
 from gex_core.exports import parse_timestamp
 from gex_core.history import get_latest_ts
+from gex_core.tickers import PRIMARY_TICKER, SUPPORTED_TICKERS, is_supported_ticker
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TICKERS = [
-    item.strip().upper()
-    for item in os.environ.get("GEX_DEFAULT_TICKERS", "SPX").split(",")
-    if item.strip()
-]
+DEFAULT_TICKERS = list(SUPPORTED_TICKERS)
 DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "1"))
 
 
@@ -31,6 +28,9 @@ def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:
 def refresh_ticker(ticker: str, force: bool = False) -> bool:
     """Fetch UW GEX and write a new CSV snapshot. Returns True if a new export was saved."""
     ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        logger.warning("Skipping refresh for unsupported ticker %s; dashboard is SPX-only", ticker)
+        return False
     if not force and not is_snapshot_stale(ticker):
         logger.info("Skipping refresh for %s; latest export is still fresh", ticker)
         return False
@@ -61,5 +61,7 @@ def refresh_ticker(ticker: str, force: bool = False) -> bool:
 
 
 def refresh_tickers(tickers: list[str] | None = None, force: bool = False) -> dict[str, bool]:
-    symbols = tickers or DEFAULT_TICKERS
+    symbols = [symbol.upper() for symbol in (tickers or DEFAULT_TICKERS) if is_supported_ticker(symbol)]
+    if not symbols:
+        symbols = [PRIMARY_TICKER]
     return {symbol.upper(): refresh_ticker(symbol, force=force) for symbol in symbols}

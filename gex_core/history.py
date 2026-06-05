@@ -16,6 +16,7 @@ from gex_core.exports import (
     parse_timestamp,
 )
 from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip
+from gex_core.tickers import SUPPORTED_TICKERS
 
 
 def ts_label(ts: str) -> str:
@@ -40,8 +41,10 @@ def list_tickers(export_dir: Path | None = None) -> list[str]:
     for path in export_dir.glob("*.csv"):
         parts = path.name.split("_")
         if parts:
-            tickers.add(parts[0].upper())
-    return sorted(tickers)
+            ticker = parts[0].upper()
+            if ticker in SUPPORTED_TICKERS:
+                tickers.add(ticker)
+    return [ticker for ticker in SUPPORTED_TICKERS if ticker in tickers]
 
 
 def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:

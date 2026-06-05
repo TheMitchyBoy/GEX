@@ -58,6 +58,102 @@ def build_today_regime_snapshot(selected: dict, prediction: dict | None) -> dict
     }
 
 
+def _distance_payload(spot: float, level: float) -> dict | None:
+    if spot <= 0 or level <= 0:
+        return None
+    pts = level - spot
+    return {
+        "level": level,
+        "distance_pts": pts,
+        "abs_distance_pts": abs(pts),
+        "distance_pct": pts / spot,
+        "abs_distance_pct": abs(pts) / spot,
+        "side": "above spot" if pts > 0 else "below spot" if pts < 0 else "at spot",
+    }
+
+
+def build_gamma_analysis_panel(selected: dict, prediction: dict | None = None) -> dict:
+    """Build an SPX-focused gamma analysis summary for dashboard cards."""
+    spot = safe_float(selected.get("spot"), 0.0)
+    total_gex = safe_float(selected.get("total_gex"), 0.0)
+    pos_gex = safe_float(selected.get("pos_gex"), 0.0)
+    neg_gex = safe_float(selected.get("neg_gex"), 0.0)
+    gross_gex = abs(pos_gex) + abs(neg_gex)
+    net_ratio = total_gex / gross_gex if gross_gex else 0.0
+    gamma_flip = safe_float(selected.get("gamma_flip"), 0.0)
+    call_wall = safe_float(selected.get("call_wall"), 0.0)
+    put_wall = safe_float(selected.get("put_wall"), 0.0)
+    near_term_ratio = safe_float(selected.get("near_term_ratio"), 0.0)
+    concentration = safe_float(selected.get("gex_concentration"), 0.0)
+    slope = safe_float(selected.get("cum_slope_at_spot"), 0.0)
+
+    flip = _distance_payload(spot, gamma_flip)
+    call = _distance_payload(spot, call_wall)
+    put = _distance_payload(spot, put_wall)
+    wall_candidates = [("Call wall", call), ("Put wall", put)]
+    wall_candidates = [(name, payload) for name, payload in wall_candidates if payload is not None]
+    nearest_wall_name = None
+    nearest_wall = None
+    if wall_candidates:
+        nearest_wall_name, nearest_wall = min(wall_candidates, key=lambda item: item[1]["abs_distance_pts"])
+
+    regime = str(selected.get("regime") or "")
+    if "SHORT" in regime.upper():
+        hedging_tone = "Short gamma: dealer hedging can amplify intraday SPX moves."
+    elif "LONG" in regime.upper():
+        hedging_tone = "Long gamma: dealer hedging can dampen SPX moves near key strikes."
+    else:
+        hedging_tone = "Neutral gamma: watch flip and wall proximity for regime definition."
+
+    risk_score = 0.0
+    if "SHORT" in regime.upper():
+        risk_score += 35.0
+    elif "LONG" in regime.upper():
+        risk_score += 10.0
+    if flip:
+        risk_score += max(0.0, 30.0 * (1.0 - min(flip["abs_distance_pct"], 0.025) / 0.025))
+    if nearest_wall:
+        risk_score += max(0.0, 20.0 * (1.0 - min(nearest_wall["abs_distance_pct"], 0.015) / 0.015))
+    risk_score += min(15.0, abs(near_term_ratio) * 15.0)
+    risk_score = min(100.0, risk_score)
+
+    if risk_score >= 70:
+        risk_label = "high"
+    elif risk_score >= 40:
+        risk_label = "moderate"
+    else:
+        risk_label = "low"
+
+    predicted_delta = safe_float(prediction.get("predicted_delta_gex"), 0.0) if prediction else 0.0
+    return {
+        "spot": spot,
+        "regime": selected.get("regime", "N/A"),
+        "hedging_tone": hedging_tone,
+        "total_gex": total_gex,
+        "positive_gex": pos_gex,
+        "negative_gex": neg_gex,
+        "gross_gex": gross_gex,
+        "net_ratio": net_ratio,
+        "gamma_flip": gamma_flip or None,
+        "flip": flip,
+        "spot_minus_flip_pts": spot - gamma_flip if spot > 0 and gamma_flip > 0 else None,
+        "spot_minus_flip_pct": (spot - gamma_flip) / spot if spot > 0 and gamma_flip > 0 else None,
+        "call_wall": call_wall or None,
+        "put_wall": put_wall or None,
+        "call": call,
+        "put": put,
+        "nearest_wall_name": nearest_wall_name,
+        "nearest_wall": nearest_wall,
+        "wall_spread": call_wall - put_wall if call_wall and put_wall else None,
+        "near_term_ratio": near_term_ratio,
+        "concentration": concentration,
+        "cumulative_slope_at_spot": slope,
+        "risk_score": risk_score,
+        "risk_label": risk_label,
+        "predicted_delta_gex": predicted_delta,
+    }
+
+
 def generate_alerts(
     history: list[dict],
     selected: dict,
@@ -436,7 +532,7 @@ def build_outcome_panel(history: list[dict], selected_ts: str | None) -> dict | 
 
 
 def build_watchlist_rows(tickers: list[str]) -> list[dict]:
-    """Aggregate multi-ticker watchlist metrics."""
+    """Aggregate supported dashboard ticker metrics."""
     rows = []
     for ticker in tickers:
         history = build_history(ticker)
