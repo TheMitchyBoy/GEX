@@ -47,6 +47,9 @@ def build_feature_timeseries(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows).sort_values("ts").reset_index(drop=True)
+    # Encode the (irregular) time gap between snapshots so the LSTM is not
+    # forced to treat uneven spacing as uniform steps.
+    df["dt_hours"] = df["ts"].diff().dt.total_seconds().div(3600.0).fillna(0.0)
     df["target_delta_gex"] = df["total_gex_bn"].shift(-1) - df["total_gex_bn"]
     df = df.dropna(subset=["target_delta_gex"])
     df.set_index("ts", inplace=True)
@@ -107,6 +110,8 @@ def train_lstm(ticker: str, seq_len: int = 8, epochs: int = 50, batch_size: int 
         verbose=2,
     )
 
+    mae = None
+    sign_acc = None
     if len(X_test):
         preds = model.predict(X_test_scaled, verbose=0).flatten()
         mae = float(np.mean(np.abs(preds - y_test)))
@@ -115,9 +120,39 @@ def train_lstm(ticker: str, seq_len: int = 8, epochs: int = 50, batch_size: int 
 
     model_path = MODELS_DIR / f"{ticker}_gex_lstm.keras"
     model.save(str(model_path))
+    training_end_ts = df.index.max().strftime("%Y-%m-%d_%H%M%S")
     joblib.dump(
-        {"scaler": scaler, "meta": {"features": feature_cols, "seq_len": seq_len, "target": "delta_gex"}},
+        {
+            "scaler": scaler,
+            "meta": {
+                "features": feature_cols,
+                "seq_len": seq_len,
+                "target": "delta_gex",
+                "training_end_ts": training_end_ts,
+                "n_train": int(len(X_train)),
+                "test_mae": mae,
+                "sign_accuracy": sign_acc,
+            },
+        },
         MODELS_DIR / f"{ticker}_gex_lstm_meta.joblib",
+    )
+
+    # Write/refresh the model manifest so the inference overlay can apply its
+    # staleness + sample-size gates to the LSTM (previously only XGB did this).
+    from gex_core.models_manifest import write_manifest
+
+    write_manifest(
+        ticker,
+        model_type="lstm",
+        metrics={
+            "test_mae": mae,
+            "sign_accuracy": sign_acc,
+            "n_train": int(len(X_train)),
+        },
+        extra={
+            "training_end_ts": training_end_ts,
+            "seq_len": seq_len,
+        },
     )
     print(f"Saved LSTM model to {model_path}")
 
