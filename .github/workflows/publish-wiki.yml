@@ -34,9 +34,4 @@ jobs:
           git commit -m "docs: sync wiki from ${GITHUB_SHA}"
           git branch -M master
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${WIKI_REPO}.git"
-          if ! git push -f origin master; then
-            echo "::warning::Wiki git push failed. Create the first wiki page once:"
-            echo "https://github.com/${{ github.repository }}/wiki"
-            echo "See docs/WIKI_SETUP.md"
-            exit 0
-          fi
+          git push -f origin master
