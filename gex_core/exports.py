@@ -66,20 +66,30 @@ def scan_export_timestamps(ticker: str, export_dir: Path | None = None) -> list[
 
 
 def list_export_timestamps(ticker: str, export_dir: Path | None = None) -> list[str]:
-    """Fast timestamp list preferring the SQLite index, then strike-file scan."""
+    """List export timestamps that have a strike CSV on disk.
+
+    Uses the SQLite index when it matches on-disk files; otherwise trusts the
+    directory scan (handles stale index rows after redeploys).
+    """
     export_dir = export_dir or EXPORT_DIR
+    on_disk = scan_export_timestamps(ticker, export_dir)
     if export_dir.resolve() != EXPORT_DIR.resolve():
-        return scan_export_timestamps(ticker, export_dir)
+        return on_disk
     try:
         from gex_core.storage import list_indexed_timestamps, sync_ticker_exports
 
         sync_ticker_exports(ticker, export_dir)
         indexed = list_indexed_timestamps(ticker)
-        if indexed:
+        if indexed and len(indexed) == len(on_disk):
             return indexed
+        if indexed and on_disk:
+            disk_set = set(on_disk)
+            verified = [ts for ts in indexed if ts in disk_set]
+            if len(verified) == len(on_disk):
+                return verified
     except Exception as exc:
         logger.debug("Indexed export timestamps unavailable for %s: %s", ticker, exc)
-    return scan_export_timestamps(ticker, export_dir)
+    return on_disk
 
 
 def filter_export_timestamps(

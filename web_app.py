@@ -72,6 +72,7 @@ from gex_core.predict import (
 from gex_core.alert_dispatch import maybe_dispatch_alerts
 from gex_core.env_bootstrap import bootstrap_env, uw_api_configured, uw_api_key
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
+from gex_core.storage import count_strike_exports_on_disk, list_indexed_timestamps
 from gex_core.system_status import build_system_status
 from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
 
@@ -642,6 +643,8 @@ def ticker_page(ticker):
 
     requested_ts = request.args.get("ts")
     selected = _select_snapshot(history, requested_ts, ticker=ticker)
+    strike_files_on_disk = count_strike_exports_on_disk(ticker)
+    indexed_before_reconcile = len(list_indexed_timestamps(ticker))
     timestamps = list_timestamps(ticker)
     timeline_history = build_index_timeline_history(ticker)
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
@@ -709,7 +712,8 @@ def ticker_page(ticker):
             forecast_blocker = forecast_blocker_message(
                 prediction_history,
                 lookback_days=prediction_lookback,
-                export_timestamp_count=len(timestamps),
+                export_timestamp_count=indexed_before_reconcile or len(timestamps),
+                strike_file_count=strike_files_on_disk,
             )
     except Exception:
         logger.exception("Prediction failed for %s", ticker)
