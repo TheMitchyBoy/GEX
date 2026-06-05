@@ -11,6 +11,38 @@ from gex_core.predict import MIN_KNN_SNAPSHOTS
 from gex_core.storage import count_strike_exports_on_disk, list_indexed_timestamps, sync_ticker_exports
 
 
+def prediction_lookback_days(ticker: str | None = None) -> int:
+    """Resolve KNN lookback, auto-widening when the configured window is too thin."""
+    configured = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "90"))
+    fallback = int(os.environ.get("GEX_PREDICTION_LOOKBACK_FALLBACK_DAYS", "90"))
+    max_snapshots = int(os.environ.get("GEX_PREDICTION_HISTORY_MAX", "240"))
+    if configured >= fallback:
+        return configured
+    if ticker:
+        on_disk = count_strike_exports_on_disk(ticker)
+        if on_disk < MIN_KNN_SNAPSHOTS:
+            return configured
+        in_window = len(
+            collect_snapshot_files(
+                ticker,
+                lookback_days=configured,
+                max_snapshots=max_snapshots,
+            )
+        )
+        if in_window >= MIN_KNN_SNAPSHOTS:
+            return configured
+        wider = len(
+            collect_snapshot_files(
+                ticker,
+                lookback_days=fallback,
+                max_snapshots=max_snapshots,
+            )
+        )
+        if wider >= MIN_KNN_SNAPSHOTS:
+            return fallback
+    return configured
+
+
 def summarize_export_state(
     ticker: str,
     *,
@@ -20,7 +52,7 @@ def summarize_export_state(
 ) -> dict[str, Any]:
     """Compare SQLite index rows, strike CSVs on disk, and loadable snapshot depth."""
     ticker = ticker.upper()
-    lookback_days = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")) if lookback_days is None else lookback_days
+    lookback_days = prediction_lookback_days(ticker) if lookback_days is None else lookback_days
     max_snapshots = int(os.environ.get("GEX_PREDICTION_HISTORY_MAX", "240")) if max_snapshots is None else max_snapshots
 
     indexed_before = len(list_indexed_timestamps(ticker))
