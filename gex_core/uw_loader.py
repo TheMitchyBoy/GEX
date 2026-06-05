@@ -112,7 +112,8 @@ def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
         "Authorization": f"Bearer {key}",
         "UW-CLIENT-API-ID": _CLIENT_ID,
     }
-    resp = requests.get(url, headers=headers, params=params or None, timeout=15)
+    clean_params = {key: value for key, value in params.items() if value is not None}
+    resp = requests.get(url, headers=headers, params=clean_params or None, timeout=15)
     resp.raise_for_status()
     payload = resp.json()
     if "error" in payload:
@@ -124,13 +125,17 @@ def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
 # Spot price
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_uw_spot(ticker: str, api_key: str | None = None) -> float:
+def fetch_uw_spot(
+    ticker: str,
+    api_key: str | None = None,
+    date: str | None = None,
+) -> float:
     """
     Return the current spot price for *ticker* from UW spot-exposures.
 
     Falls back to the ``price`` field on the first row of the response.
     """
-    rows = _get(f"/api/stock/{ticker}/spot-exposures/strike", api_key=api_key)
+    rows = _get(f"/api/stock/{ticker}/spot-exposures/strike", api_key=api_key, date=date)
     if not rows:
         raise ValueError(f"No spot-exposure data returned for {ticker!r}.")
     price = rows[0].get("price")
@@ -146,6 +151,7 @@ def fetch_uw_spot(ticker: str, api_key: str | None = None) -> float:
 def fetch_uw_greek_exposure(
     ticker: str,
     api_key: str | None = None,
+    date: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch the full GEX-by-strike table from ``/greek-exposure/strike``.
@@ -155,7 +161,7 @@ def fetch_uw_greek_exposure(
       call_delta, put_delta, call_charm, put_charm, call_vanna, put_vanna
     All GEX/greek values are in Bn$/% (already scaled from raw dollars).
     """
-    rows = _get(f"/api/stock/{ticker}/greek-exposure/strike", api_key=api_key)
+    rows = _get(f"/api/stock/{ticker}/greek-exposure/strike", api_key=api_key, date=date)
     if not rows:
         raise ValueError(f"No greek-exposure data returned for {ticker!r}.")
 
@@ -174,6 +180,8 @@ def fetch_uw_greek_exposure(
         net_col="net_gex",
     )
     df = df.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
+    if "date" in df.columns and df["date"].notna().any():
+        df.attrs["market_date"] = str(df["date"].dropna().iloc[0])
     logger.info("Fetched %d strike rows from UW greek-exposure for %s", len(df), ticker)
     return df
 
@@ -181,6 +189,7 @@ def fetch_uw_greek_exposure(
 def fetch_uw_spot_exposures(
     ticker: str,
     api_key: str | None = None,
+    date: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch the intraday ATM spot-exposures table (~50 strikes around spot).
@@ -192,7 +201,7 @@ def fetch_uw_spot_exposures(
     they should be interpreted as a relative comparison across strikes,
     not directly converted to Bn$.
     """
-    rows = _get(f"/api/stock/{ticker}/spot-exposures/strike", api_key=api_key)
+    rows = _get(f"/api/stock/{ticker}/spot-exposures/strike", api_key=api_key, date=date)
     if not rows:
         return pd.DataFrame()
 
@@ -212,7 +221,10 @@ def fetch_uw_spot_exposures(
         )
         # spot-exposure endpoint is raw-dollar scale per 1% move
         df["net_gamma_oi_bn"] = pd.to_numeric(df["net_gamma_oi"], errors="coerce") / 1e9
-    return df.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
+    df = df.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
+    if "date" in df.columns and df["date"].notna().any():
+        df.attrs["market_date"] = str(df["date"].dropna().iloc[0])
+    return df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +234,7 @@ def fetch_uw_spot_exposures(
 def fetch_uw_gex(
     ticker: str = "SPX",
     api_key: str | None = None,
+    date: str | None = None,
 ) -> tuple[float, GexAggregates]:
     """
     Fetch GEX aggregates from the Unusual Whales API.
@@ -252,10 +265,10 @@ def fetch_uw_gex(
     than open-interest alone, so values may differ from CBOE-based estimates.
     """
     # Fetch both endpoints in parallel would be nice; keeping it simple here.
-    spot = fetch_uw_spot(ticker, api_key=api_key)
+    spot = fetch_uw_spot(ticker, api_key=api_key, date=date)
     logger.info("UW spot price for %s: %.2f", ticker, spot)
 
-    df = fetch_uw_greek_exposure(ticker, api_key=api_key)
+    df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
 
     gex_by_strike = pd.Series(
         df["net_gex"].values,
@@ -268,6 +281,10 @@ def fetch_uw_gex(
 
     cumulative_gex = gex_by_strike.cumsum()
     total_gex_bn = float(gex_by_strike.sum())
+    market_date = df.attrs.get("market_date")
+    if market_date:
+        gex_by_strike.attrs["market_date"] = market_date
+        cumulative_gex.attrs["market_date"] = market_date
 
     logger.info(
         "UW GEX for %s: total=%.3f Bn$, strikes=%d, gamma_flip near zero-crossing",
@@ -286,6 +303,7 @@ def fetch_uw_gex(
 def fetch_uw_charm_vanna(
     ticker: str = "SPX",
     api_key: str | None = None,
+    date: str | None = None,
 ) -> dict[str, pd.Series]:
     """
     Return charm and vanna exposure by strike.
@@ -298,7 +316,7 @@ def fetch_uw_charm_vanna(
     Keys: ``call_charm``, ``put_charm``, ``net_charm``,
           ``call_vanna``, ``put_vanna``, ``net_vanna``.
     """
-    df = fetch_uw_greek_exposure(ticker, api_key=api_key)
+    df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
     idx = df["strike"].values
     return {
         "call_charm":  pd.Series(df["call_charm"].values, index=idx),

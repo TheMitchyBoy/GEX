@@ -15,6 +15,9 @@ EXPORT_DIR = _REPO_ROOT / "data" / "exports"
 TIMESTAMP_RE = re.compile(
     r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"
 )
+SUMMARY_RE = re.compile(
+    r"^(?P<ticker>[A-Z0-9]+)_summary_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.json$"
+)
 
 
 def parse_timestamp(ts_str: str) -> datetime:
@@ -32,6 +35,11 @@ def find_exports_for_ticker(ticker: str, export_dir: Path | None = None) -> dict
         ts = match.group("ts")
         kind = match.group("kind")
         records.setdefault(ts, {})[kind] = path
+    for path in export_dir.glob(f"{ticker.upper()}_summary_*.json"):
+        match = SUMMARY_RE.match(path.name)
+        if not match:
+            continue
+        records.setdefault(match.group("ts"), {})["summary"] = path
     return records
 
 

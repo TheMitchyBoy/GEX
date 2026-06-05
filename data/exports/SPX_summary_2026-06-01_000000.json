@@ -1,0 +1,25 @@
+{
+  "ticker": "SPX",
+  "data_source": "unusual_whales",
+  "source": "Unusual Whales API",
+  "generated_at_utc": "2026-06-05T02:30:03.017141Z",
+  "market_date": "2026-06-01",
+  "spot": 7600.0,
+  "spot_price": 7600.0,
+  "total_gex_bn_per_pct": 146.20347320000005,
+  "net_gamma_regime": "LONG gamma",
+  "call_wall": {
+    "strike": 7600.0,
+    "gex_bn_per_pct": 17.0850592
+  },
+  "put_wall": {
+    "strike": 7550.0,
+    "gex_bn_per_pct": -3.5555778999999994
+  },
+  "gamma_flip": {
+    "flip_strike": 7634.888852408521,
+    "confidence": "high",
+    "message": "ok",
+    "local_slope": 0.16648224
+  }
+}

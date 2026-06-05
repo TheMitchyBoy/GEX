@@ -263,6 +263,12 @@ export UW_API_KEY=your-key
 python scripts/gex_refresh.py --force
 ```
 
+Backfill recent UW market snapshots for regime-relevant prediction history:
+
+```bash
+python scripts/gex_refresh.py --tickers SPX --backfill-days 7
+```
+
 Docker:
 
 ```bash
@@ -286,13 +292,16 @@ The live flow aggregator computes:
 
 ## Model Training
 
-The project includes model training scripts for GEX prediction:
+The project includes model training scripts for GEX prediction. The default
+delta-GEX model trains on the most recent 7 calendar days so the overlay stays
+aligned with the current market regime:
 
-- `scripts/train_gex_model.py` — trains an XGBoost classifier from historical exports
+- `scripts/train_gex_model.py` — trains a next-snapshot ΔGEX regressor from recent historical exports
 - `scripts/train_gex_lstm.py` — trains an LSTM on sequential export feature history
 
 Example training command:
 ```bash
+python scripts/train_gex_model.py --ticker SPX --lookback-days 7
 python scripts/train_gex_lstm.py --ticker SPX --seq-len 8 --epochs 50 --batch-size 16
 ```
 

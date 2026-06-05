@@ -138,6 +138,7 @@ def _run_uw(
     export_dir,
     uw_api_key=None,
     fetched=None,
+    market_date=None,
 ):
     """
     Execute the full GEX analysis workflow using Unusual Whales API data.
@@ -153,12 +154,14 @@ def _run_uw(
 
     if fetched is not None:
         spot_price, agg = fetched.spot, fetched.aggregates
+        market_date = fetched.market_date or market_date
     else:
         print(color_text("Fetching data from Unusual Whales API...", ANSI_DIM))
-        spot_price, agg = fetch_uw_gex(ticker, api_key=uw_api_key)
+        spot_price, agg = fetch_uw_gex(ticker, api_key=uw_api_key, date=market_date)
+        market_date = agg.gex_by_strike.attrs.get("market_date") or market_date
     print(
         f"{color_text('Spot (UW)', ANSI_YELLOW)}: {spot_price:.2f}   "
-        f"{color_text('As of', ANSI_DIM)}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        f"{color_text('As of', ANSI_DIM)}: {market_date or datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
     gex_by_strike = agg.gex_by_strike
@@ -224,7 +227,7 @@ def _run_uw(
 
     # ── Spot-exposures: OI vs volume breakdown for the tightest ATM window ──
     try:
-        spot_df = fetch_uw_spot_exposures(ticker, api_key=uw_api_key)
+        spot_df = fetch_uw_spot_exposures(ticker, api_key=uw_api_key, date=market_date)
         if not spot_df.empty and "net_gamma_oi" in spot_df.columns:
             print_section_header("Intraday Gamma OI vs Volume (±ATM, relative units)")
             # Show top 5 strikes by absolute OI-based gamma
@@ -279,6 +282,7 @@ def _run_uw(
             "data_source": "unusual_whales",
             "source": "Unusual Whales API",
             "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+            "market_date": market_date,
             "spot": float(spot_price),
             "spot_price": float(spot_price),
             "total_gex_bn_per_pct": float(total_gex_bn),
@@ -295,6 +299,7 @@ def _run_uw(
             surface_data=surface_data,
             summary=summary,
             export_dir=export_dir,
+            timestamp=f"{market_date}_000000" if market_date else None,
         )
 
 
@@ -319,6 +324,7 @@ def run(
     use_uw=False,
     uw_api_key=None,
     force_cboe=False,
+    market_date=None,
 ):
     """
     Execute the complete GEX analysis workflow for a given ticker.
@@ -357,7 +363,7 @@ def run(
 
     from gex_core.data_source import fetch_gex_data
 
-    fetched = fetch_gex_data(ticker, uw_api_key=uw_api_key)
+    fetched = fetch_gex_data(ticker, uw_api_key=uw_api_key, market_date=market_date)
     return _run_uw(
         ticker=ticker,
         show_plots=show_plots,
@@ -369,6 +375,7 @@ def run(
         export_dir=export_dir,
         uw_api_key=uw_api_key,
         fetched=fetched,
+        market_date=market_date,
     )
 
 
@@ -1304,7 +1311,7 @@ def build_gamma_summary(
 # ============================================================================
 
 def export_analytics_csv(
-    ticker, gex_by_strike, cumulative_gex, gex_by_expiration, surface_data, summary, export_dir
+    ticker, gex_by_strike, cumulative_gex, gex_by_expiration, surface_data, summary, export_dir, timestamp=None
 ) -> str:
     """
     Export all computed gamma metrics to CSV files for external analysis.
@@ -1336,7 +1343,10 @@ def export_analytics_csv(
     """
     export_dir = Path(export_dir)
     export_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    timestamp = timestamp or datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    if summary is not None and "data_source" not in summary:
+        summary["data_source"] = "unusual_whales"
 
     # Export each metric to its own CSV
     gex_by_strike.rename("gex_bn_per_pct").to_csv(
@@ -1352,9 +1362,6 @@ def export_analytics_csv(
         surface_data.to_csv(export_dir / f"{ticker}_gex_surface_{timestamp}.csv", index=False)
     with (export_dir / f"{ticker}_summary_{timestamp}.json").open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
-
-    if summary is not None and "data_source" not in summary:
-        summary["data_source"] = "unusual_whales"
 
     print(f"Saved CSV exports to: {export_dir}")
     return timestamp
@@ -1470,6 +1477,12 @@ def parse_args():
         metavar="KEY",
         help="Unusual Whales API key (overrides UW_API_KEY env var). Required for all runs.",
     )
+    parser.add_argument(
+        "--market-date",
+        type=str,
+        default=None,
+        help="Historical UW market date to fetch in YYYY-MM-DD format.",
+    )
 
     return parser.parse_args()
 
@@ -1499,4 +1512,5 @@ if __name__ == "__main__":
         export_csv=not args.no_export_csv,
         export_dir=args.export_dir,
         uw_api_key=args.uw_key,
+        market_date=args.market_date,
     )

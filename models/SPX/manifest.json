@@ -1,0 +1,17 @@
+{
+  "ticker": "SPX",
+  "model_type": "linear",
+  "trained_at_utc": "2026-06-05T02:35:11.696041+00:00",
+  "feature_version": "1",
+  "metrics": {
+    "test_mae": 0.3556335007812592,
+    "test_r2": null,
+    "sign_accuracy": 1.0,
+    "n_train": 2
+  },
+  "training_start_ts": "2026-06-01_000000",
+  "training_end_ts": "2026-06-03_000000",
+  "lookback_days": 7,
+  "lag": 0,
+  "n_snapshots": 4
+}
