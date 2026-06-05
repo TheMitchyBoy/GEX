@@ -78,6 +78,8 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
     near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
     term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
     near_term_ratio = near_term / term_total if term_total else 0.0
+    front_term = float(exp_vals.iloc[0]) if len(exp_vals) else 0.0
+    front_term_ratio = front_term / term_total if term_total else 0.0
 
     summary_path = files.get("summary")
     source = None
@@ -109,6 +111,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         "put_wall": put_wall,
         "gamma_flip": gamma_flip,
         "near_term_ratio": near_term_ratio,
+        "front_term_ratio": front_term_ratio,
         "surface_peak": surface_peak,
         "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
         "data_source": source,
