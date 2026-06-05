@@ -79,6 +79,46 @@ _UW_CACHE_TTL = int(
 _UW_API_KEY = os.environ.get("UW_API_KEY")
 _UW_ENABLED = bool(_UW_API_KEY)
 
+# Last classified UW failure reason per ticker, so the dashboard and logs can
+# report *why* a refresh failed instead of guessing.
+_LAST_UW_ERROR: dict[str, str] = {}
+
+_REFRESH_REASON_MESSAGES = {
+    "not_configured": "Live data isn't configured on this server (UW_API_KEY is missing).",
+    "auth": "The data provider rejected the request — the API key is invalid or lacks permission.",
+    "rate_limited": "The data provider is rate-limiting requests right now.",
+    "network": "Couldn't reach the data provider (timeout or connection error).",
+    "error": "Couldn't fetch fresh data right now.",
+}
+
+
+def _classify_uw_error(exc: Exception) -> str:
+    """Map a UW fetch exception to a coarse, user-meaningful reason code.
+
+    Order matters: ``requests.HTTPError`` is itself a subclass of ``OSError``
+    (== ``EnvironmentError``), so HTTP status and network categories are checked
+    before the missing-key (plain ``EnvironmentError``) case.
+    """
+    import requests
+
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 403):
+        return "auth"
+    if status == 429:
+        return "rate_limited"
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return "network"
+    if isinstance(exc, EnvironmentError) and not isinstance(exc, requests.RequestException):
+        return "not_configured"
+    return "error"
+
+
+def _uw_failure_reason(ticker: str) -> str:
+    if not _UW_ENABLED:
+        return "not_configured"
+    with _uw_lock:
+        return _LAST_UW_ERROR.get(ticker.upper(), "error")
+
 _uw_lock = threading.Lock()
 
 
@@ -117,10 +157,14 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
         }
         with _uw_lock:
             _UW_CACHE[ticker] = entry
+            _LAST_UW_ERROR.pop(ticker, None)
         logger.info("UW data refreshed for %s: spot=%.2f, GEX=%.3f Bn$", ticker, spot, agg.total_gex_bn)
         return entry
-    except Exception:
-        logger.exception("UW data refresh failed for %s", ticker)
+    except Exception as exc:
+        reason = _classify_uw_error(exc)
+        with _uw_lock:
+            _LAST_UW_ERROR[ticker] = reason
+        logger.exception("UW data refresh failed for %s (reason=%s)", ticker, reason)
         return None
 
 
@@ -347,6 +391,7 @@ def ticker_page(ticker):
     bootstrap_status = request.args.get("bootstrap")
     force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
     force_refresh_failed = False
+    refresh_message = None
     if force_refresh:
         refreshed_csv = False
         refreshed_live = False
@@ -365,6 +410,9 @@ def ticker_page(ticker):
             # fresh data but a cached snapshot exists" (soft, stale). The latter
             # is downgraded once we confirm history is available below.
             force_refresh_failed = True
+            reason = _uw_failure_reason(ticker)
+            refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
+            logger.warning("Forced refresh failed for %s (reason=%s)", ticker, reason)
             bootstrap_status = "failed"
 
     history = build_history(ticker)
@@ -427,6 +475,7 @@ def ticker_page(ticker):
             prediction=None,
             has_history=False,
             bootstrap_status=bootstrap_status,
+            refresh_message=refresh_message,
             latest_ts=None,
             refresh_minutes=REFRESH_MINUTES,
             current_strike_chart_json=current_strike_chart_json,
@@ -636,6 +685,7 @@ def ticker_page(ticker):
         refresh_minutes=REFRESH_MINUTES,
         has_history=True,
         bootstrap_status=bootstrap_status,
+        refresh_message=refresh_message,
         current_strike_chart_json=current_strike_chart_json,
         zero_dte_movement_chart_json=zero_dte_movement_chart_json,
         zero_dte_movement=zero_dte_movement,

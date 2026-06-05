@@ -137,9 +137,9 @@
       {% if bootstrap_status == "ok" %}
       <div class="alert alert-success" role="alert">Snapshot refresh completed for {{ ticker }}.</div>
       {% elif bootstrap_status == "stale" %}
-      <div class="alert alert-warning" role="alert">Couldn't fetch fresh data right now (the data provider may be rate-limited). Showing the last saved snapshot.</div>
+      <div class="alert alert-warning" role="alert">{{ refresh_message or "Couldn't fetch fresh data right now." }} Showing the last saved snapshot.</div>
       {% elif bootstrap_status == "failed" %}
-      <div class="alert alert-danger" role="alert">Snapshot refresh failed for {{ ticker }} and no saved snapshot is available yet. Check service logs.</div>
+      <div class="alert alert-danger" role="alert">{{ refresh_message or "Snapshot refresh failed for " ~ ticker ~ "." }} No saved snapshot is available yet — check service logs.</div>
       {% elif bootstrap_status == "error" %}
       <div class="alert alert-danger" role="alert">Snapshot refresh encountered an internal error before execution.</div>
       {% endif %}
