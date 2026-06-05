@@ -283,6 +283,65 @@ def _build_history_impl(
     return deduped
 
 
+def load_snapshot_at_ts(
+    ticker: str,
+    ts: str,
+    export_dir: Path | None = None,
+) -> dict | None:
+    """Load one snapshot by timestamp (for replay outside the cached window)."""
+    export_dir = export_dir or EXPORT_DIR
+    kinds = paths_for_export_timestamp(ticker.upper(), ts, export_dir)
+    if "gex_by_strike" not in kinds:
+        return None
+    if "cumulative_gex" not in kinds:
+        kinds = dict(kinds)
+        kinds.setdefault("cumulative_gex", kinds["gex_by_strike"])
+    summary = export_dir / f"{ticker.upper()}_summary_{ts}.json"
+    if summary.exists():
+        kinds = dict(kinds)
+        kinds["summary"] = summary
+    try:
+        metrics = load_snapshot_metrics(ts, kinds)
+        metrics["ticker"] = ticker.upper()
+        return metrics
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Failed to load snapshot %s for %s: %s", ts, ticker, exc)
+        return None
+
+
+def build_index_timeline_history(
+    ticker: str,
+    *,
+    days: int | None = None,
+    interval_minutes: int | None = None,
+    max_points: int | None = None,
+) -> list[dict]:
+    """Fast timeline rows (spot + net GEX) from the export index."""
+    from gex_core.storage import fetch_index_spot_series
+
+    days = int(os.environ.get("GEX_DASHBOARD_TIMELINE_DAYS", "90")) if days is None else days
+    interval = int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10")) if interval_minutes is None else interval_minutes
+    cap = int(os.environ.get("GEX_DASHBOARD_TIMELINE_MAX_POINTS", "400")) if max_points is None else max_points
+    rows = fetch_index_spot_series(
+        ticker,
+        days=days,
+        interval_minutes=interval,
+        max_points=cap,
+    )
+    return [
+        {
+            **row,
+            "gamma_flip": None,
+            "call_wall": None,
+            "put_wall": None,
+            "near_term_ratio": 0.0,
+            "pos_gex": 0.0,
+            "neg_gex": 0.0,
+        }
+        for row in rows
+    ]
+
+
 def build_history(
     ticker: str,
     export_dir: Path | None = None,

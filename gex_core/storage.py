@@ -182,3 +182,93 @@ def export_age_minutes(ticker: str, export_dir: Path | None = None) -> float | N
         return None
     age = datetime.now() - parse_timestamp(latest)
     return age.total_seconds() / 60.0
+
+
+def fetch_index_spot_series(
+    ticker: str,
+    *,
+    days: int = 90,
+    interval_minutes: int = 10,
+    max_points: int | None = 500,
+    export_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Lightweight spot/GEX series from the SQLite index for charts."""
+    from datetime import timedelta
+
+    ticker = ticker.upper()
+    export_dir = export_dir or EXPORT_DIR
+    sync_ticker_exports(ticker, export_dir)
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ts, spot, total_gex, regime
+                FROM snapshots
+                WHERE ticker = ?
+                ORDER BY ts ASC
+                """,
+                (ticker,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("fetch_index_spot_series failed: %s", exc)
+        return []
+
+    if not rows:
+        return []
+
+    latest = parse_timestamp(str(rows[-1]["ts"]))
+    cutoff = latest - timedelta(days=max(1, days))
+    series: list[dict[str, Any]] = []
+    last_bucket: datetime | None = None
+    for row in rows:
+        ts = str(row["ts"])
+        spot = row["spot"]
+        if spot is None:
+            continue
+        ts_dt = parse_timestamp(ts)
+        if ts_dt < cutoff:
+            continue
+        if interval_minutes > 1:
+            bucket = ts_dt.replace(second=0, microsecond=0) - timedelta(
+                minutes=ts_dt.minute % interval_minutes
+            )
+            if last_bucket is not None and bucket <= last_bucket:
+                series[-1] = {
+                    "ts": ts,
+                    "ts_label": ts_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "spot": float(spot),
+                    "total_gex": float(row["total_gex"]) if row["total_gex"] is not None else None,
+                    "regime": row["regime"],
+                }
+                continue
+            last_bucket = bucket
+        series.append(
+            {
+                "ts": ts,
+                "ts_label": ts_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "spot": float(spot),
+                "total_gex": float(row["total_gex"]) if row["total_gex"] is not None else None,
+                "regime": row["regime"],
+            }
+        )
+
+    if max_points and len(series) > max_points:
+        step = max(1, len(series) // max_points)
+        series = series[::step]
+        if series[-1]["ts"] != rows[-1]["ts"]:
+            last_row = rows[-1]
+            if last_row["spot"] is not None:
+                ts = str(last_row["ts"])
+                ts_dt = parse_timestamp(ts)
+                series.append(
+                    {
+                        "ts": ts,
+                        "ts_label": ts_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        "spot": float(last_row["spot"]),
+                        "total_gex": float(last_row["total_gex"])
+                        if last_row["total_gex"] is not None
+                        else None,
+                        "regime": last_row["regime"],
+                    }
+                )
+    return series

@@ -34,8 +34,20 @@ from gex_core.charts import (
     safe_float,
 )
 from gex_core.exports import EXPORT_DIR
-from gex_core.history import build_history, get_latest_ts, list_tickers, list_timestamps, ts_label
-from gex_core.market_features import fetch_spx_price, fetch_spx_price_history
+from gex_core.history import (
+    build_history,
+    build_index_timeline_history,
+    get_latest_ts,
+    list_tickers,
+    list_timestamps,
+    load_snapshot_at_ts,
+    ts_label,
+)
+from gex_core.market_features import (
+    fetch_spx_price,
+    fetch_spx_price_history,
+    fetch_spx_price_series_for_dashboard,
+)
 from gex_core.intelligence import (
     build_gamma_analysis_panel,
     build_data_quality_panel,
@@ -76,7 +88,7 @@ _UW_CACHE: dict[str, dict] = {}          # ticker → {spot, agg, ts, analysis}
 _UW_CACHE_TTL = int(
     os.environ.get(
         "GEX_UW_CACHE_TTL_SECONDS",
-        str(max(30, int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "1")) * 60)),
+        str(max(30, int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10")) * 60)),
     )
 )  # keep cache aligned to refresh cadence by default
 
@@ -204,14 +216,40 @@ def _uw_live_enabled() -> bool:
     return os.environ.get("GEX_SHOW_UW_LIVE", "1").lower() in {"1", "true", "yes"}
 
 
-def _select_snapshot(history: list, requested_ts: str | None) -> dict:
+def _select_snapshot(history: list, requested_ts: str | None, ticker: str | None = None) -> dict:
     if not history:
         raise ValueError("empty history")
     if requested_ts:
         for row in history:
             if row["ts"] == requested_ts:
                 return row
+        if ticker:
+            loaded = load_snapshot_at_ts(ticker, requested_ts)
+            if loaded:
+                return loaded
     return history[-1]
+
+
+def _dashboard_history(ticker: str) -> list[dict]:
+    return build_history(
+        ticker,
+        lookback_days=int(os.environ.get("GEX_DASHBOARD_HISTORY_DAYS", "30")),
+        max_snapshots=int(os.environ.get("GEX_DASHBOARD_HISTORY_MAX", "120")),
+    )
+
+
+def _dashboard_spx_price_context(ticker: str) -> tuple[list[dict], float, str]:
+    points, current, source = fetch_spx_price_series_for_dashboard(ticker)
+    if current <= 0:
+        latest = get_latest_ts(ticker)
+        if latest:
+            loaded = load_snapshot_at_ts(ticker, latest)
+            if loaded and loaded.get("spot"):
+                current = float(loaded["spot"])
+                if not points:
+                    points = [{"ts": loaded.get("ts_label", latest), "close": current}]
+                    source = "snapshots"
+    return points, current, source
 
 
 def _previous_same_day_snapshot(history: list, selected: dict) -> dict | None:
@@ -301,7 +339,7 @@ def _spx_redirect(**extra):
 
 def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
     ticker = PRIMARY_TICKER
-    history = build_history(ticker)
+    history = _dashboard_history(ticker)
     if not history:
         selected = {
             "regime": "N/A",
@@ -325,7 +363,7 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
             "model_accountability": build_model_accountability_panel(ticker, None, {}),
             "watchlist": [],
         }
-    selected = _select_snapshot(history, selected_ts)
+    selected = _select_snapshot(history, selected_ts, ticker=ticker)
     prediction = predict_next_snapshot(history)
     flow_overlay = None
     spot_for_flow = safe_float(selected.get("spot"), 0.0) or 4800.0
@@ -428,7 +466,7 @@ def ticker_page(ticker):
             logger.warning("Forced refresh failed for %s (reason=%s)", ticker, reason)
             bootstrap_status = "failed"
 
-    history = build_history(ticker)
+    history = _dashboard_history(ticker)
 
     if force_refresh_failed and history:
         bootstrap_status = "stale"
@@ -480,6 +518,9 @@ def ticker_page(ticker):
                 "Current Position Focus (Positive GEX)",
             )
 
+        spx_price_points, spx_current_price, spx_price_source = _dashboard_spx_price_context(ticker)
+        if spx_current_price <= 0 and uw_entry and uw_entry.get("spot"):
+            spx_current_price = float(uw_entry["spot"])
         return render_template(
             "ticker.html",
             ticker=ticker,
@@ -497,8 +538,12 @@ def ticker_page(ticker):
             predicted_strike_chart_json=None,
             uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
             uw_profile_json=None,
-            spx_price_chart_json=make_spx_price_chart(fetch_spx_price_history(), ticker=ticker),
-            spx_current_price=fetch_spx_price() or (uw_entry["spot"] if uw_entry else None),
+            spx_price_chart_json=make_spx_price_chart(
+                spx_price_points,
+                ticker=ticker,
+                price_source=spx_price_source,
+            ),
+            spx_current_price=spx_current_price or None,
             timestamps=[],
             selected_ts=None,
             timeline_chart_json=None,
@@ -533,8 +578,9 @@ def ticker_page(ticker):
     uw_fetched_at = uw_entry["fetched_at"] if uw_entry else None
 
     requested_ts = request.args.get("ts")
-    selected = _select_snapshot(history, requested_ts)
+    selected = _select_snapshot(history, requested_ts, ticker=ticker)
     timestamps = list_timestamps(ticker)
+    timeline_history = build_index_timeline_history(ticker)
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
     prev_ts = timestamps[replay_index - 1] if replay_index > 0 else None
     next_ts = timestamps[replay_index + 1] if replay_index + 1 < len(timestamps) else None
@@ -542,23 +588,24 @@ def ticker_page(ticker):
     selected_spot = safe_float(selected.get("spot"), 0.0)
     csv_spot = selected_spot if selected_spot > 0 else (uw_spot if uw_spot else None)
 
-    # Current SPX price: live intraday feed when available, otherwise the saved
-    # snapshot spot series so the chart always renders.
-    spx_price_points = fetch_spx_price_history()
-    spx_current_price = fetch_spx_price() or (safe_float(uw_spot, 0.0) or csv_spot)
+    spx_price_points, spx_current_price, spx_price_source = _dashboard_spx_price_context(ticker)
+    if spx_current_price <= 0:
+        spx_current_price = safe_float(uw_spot, 0.0) or csv_spot or 0.0
     spx_price_chart_json = make_spx_price_chart(
         spx_price_points,
-        history=history,
+        history=history if not spx_price_points else None,
         ticker=ticker,
         gamma_flip=selected.get("gamma_flip"),
         call_wall=selected.get("call_wall"),
         put_wall=selected.get("put_wall"),
+        price_source=spx_price_source,
     )
 
+    profile_spot = spx_current_price if spx_current_price and spx_current_price > 0 else csv_spot
     profile_json = make_gex_profile_chart(
         selected.get("strike"),
         ticker,
-        spot=csv_spot,
+        spot=profile_spot,
         title="Gamma Exposure Map (UW CSV)",
         cumulative_series=selected.get("cumulative"),
         gamma_flip=selected.get("gamma_flip"),
@@ -572,7 +619,7 @@ def ticker_page(ticker):
         selected,
         previous_same_day,
         ticker,
-        spot=csv_spot,
+        spot=profile_spot,
     )
 
     uw_profile_json = None
@@ -703,7 +750,7 @@ def ticker_page(ticker):
         zero_dte_movement_chart_json=zero_dte_movement_chart_json,
         zero_dte_movement=zero_dte_movement,
         predicted_strike_chart_json=predicted_strike_chart_json,
-        timeline_chart_json=make_timeline_chart(history, ticker),
+        timeline_chart_json=make_timeline_chart(timeline_history or history, ticker),
         cumulative_chart_json=make_cumulative_gex_chart(
             selected.get("cumulative"), ticker, gamma_flip=selected.get("gamma_flip"),
         ),
@@ -745,6 +792,20 @@ def bootstrap_ticker_history(ticker):
 
     status = "ok" if ok else "failed"
     return redirect(url_for("ticker_page", ticker=ticker, bootstrap=status))
+
+
+@APP.get("/api/spx-price")
+def api_spx_price():
+    points, current, source = _dashboard_spx_price_context(PRIMARY_TICKER)
+    return jsonify(
+        {
+            "ticker": PRIMARY_TICKER,
+            "current": current if current > 0 else None,
+            "source": source,
+            "points": len(points),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
 
 
 @APP.get("/api/latest-summary")
@@ -834,7 +895,7 @@ def _manual_dispatch_authorized(req) -> bool:
 
 def _auto_dispatch_alerts(ticker: str) -> None:
     """Generate alerts and run auto-dispatch. Background scheduler only."""
-    history = build_history(ticker)
+    history = _dashboard_history(ticker)
     if not history:
         return
     selected = _select_snapshot(history, None)

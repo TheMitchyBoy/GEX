@@ -154,15 +154,24 @@ def fetch_vol_regime() -> dict[str, float]:
     }
 
 
+def _spx_price_config() -> tuple[str, str]:
+    period = os.environ.get("GEX_SPX_PRICE_PERIOD", "5d")
+    interval = os.environ.get("GEX_SPX_PRICE_INTERVAL", "15m")
+    return period, interval
+
+
 def fetch_spx_price_history(
-    period: str = "5d",
-    interval: str = "30m",
+    period: str | None = None,
+    interval: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """Recent SPX price history as ``[{"ts": iso, "close": float}, ...]``.
 
     Best-effort via ``yfinance``; returns ``None`` when offline or the optional
     dependency is missing so callers can fall back to the snapshot spot series.
     """
+    default_period, default_interval = _spx_price_config()
+    period = period or default_period
+    interval = interval or default_interval
     try:
         import yfinance as yf
 
@@ -182,10 +191,63 @@ def fetch_spx_price_history(
 
 def fetch_spx_price() -> float:
     """Latest SPX index price; ``0.0`` when unavailable (offline)."""
-    points = fetch_spx_price_history(period="1d", interval="5m")
-    if points:
-        return float(points[-1]["close"])
+    for period, interval in (("1d", "5m"), ("5d", "30m"), ("1mo", "1d")):
+        points = fetch_spx_price_history(period=period, interval=interval)
+        if points:
+            return float(points[-1]["close"])
     return 0.0
+
+
+def fetch_spx_price_series_for_dashboard(
+    ticker: str = "SPX",
+    *,
+    index_days: int | None = None,
+    index_interval_minutes: int | None = None,
+) -> tuple[list[dict[str, Any]], float, str]:
+    """Merge live Yahoo SPX prices with indexed export spots for the dashboard chart."""
+    from gex_core.storage import fetch_index_spot_series
+
+    index_days = int(os.environ.get("GEX_DASHBOARD_TIMELINE_DAYS", "90")) if index_days is None else index_days
+    index_interval = (
+        int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"))
+        if index_interval_minutes is None
+        else index_interval_minutes
+    )
+
+    live_points = fetch_spx_price_history()
+    indexed = fetch_index_spot_series(
+        ticker,
+        days=index_days,
+        interval_minutes=index_interval,
+        max_points=800,
+    )
+    indexed_points = [
+        {"ts": row["ts_label"], "close": float(row["spot"])}
+        for row in indexed
+        if row.get("spot")
+    ]
+
+    points: list[dict[str, Any]] = []
+    source = "snapshots"
+    if indexed_points and live_points:
+        live_start = live_points[0]["ts"]
+        points = [p for p in indexed_points if p["ts"] < live_start]
+        points.extend(live_points)
+        source = "live+snapshots"
+    elif live_points:
+        points = live_points
+        source = "live"
+    elif indexed_points:
+        points = indexed_points
+        source = "snapshots"
+
+    current = fetch_spx_price()
+    if current <= 0 and points:
+        current = float(points[-1]["close"])
+    elif current <= 0 and indexed:
+        current = float(indexed[-1]["spot"])
+
+    return points, current, source
 
 
 def _include_vol_regime() -> bool:

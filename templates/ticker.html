@@ -125,6 +125,10 @@
           <span class="small text-secondary mono">{{ latest_ts }} · every {{ refresh_minutes }}m</span>
           {% endif %}
           {% if system_status %}
+          <span class="small mono text-secondary">
+            {{ system_status.history_depth or 0 }} snapshots indexed
+            {% if system_status.history_loaded %}· {{ system_status.history_loaded }} loaded{% endif %}
+          </span>
           <span class="small mono {{ 'text-warning' if system_status.export_stale else 'text-success' }}">
             export {{ '%.0f'|format(system_status.export_age_minutes) if system_status.export_age_minutes is not none else '?' }}m ago
           </span>
@@ -363,7 +367,9 @@
             <div class="d-flex justify-content-between align-items-center mb-2">
               <h2 class="h5 mb-0">SPX Price</h2>
               {% if spx_current_price %}
-              <span class="pill">{{ '%.2f'|format(spx_current_price) }}</span>
+              <span id="spxPricePill" class="pill">{{ '%.2f'|format(spx_current_price) }}</span>
+              {% else %}
+              <span id="spxPricePill" class="pill text-secondary">—</span>
               {% endif %}
             </div>
             <p class="small text-secondary mb-2">Current SPX index price with gamma flip and wall levels for context.</p>
@@ -804,8 +810,25 @@
           console.debug("pollSummary", err);
         }
       }
+
+      async function pollSpxPrice() {
+        try {
+          const resp = await fetch("/api/spx-price");
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const pill = document.getElementById("spxPricePill");
+          if (pill && data.current) {
+            pill.textContent = Number(data.current).toFixed(2);
+            pill.classList.remove("text-secondary");
+          }
+        } catch (err) {
+          console.debug("pollSpxPrice", err);
+        }
+      }
       pollSummary();
+      pollSpxPrice();
       window.setInterval(pollSummary, pollMs);
+      window.setInterval(pollSpxPrice, Math.min(pollMs, 60000));
 
       const replayTimestamps = {{ timestamps|tojson }};
       let replayIndex = {{ replay_index|tojson }};

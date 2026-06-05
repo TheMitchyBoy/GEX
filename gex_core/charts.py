@@ -210,6 +210,7 @@ def make_spx_price_chart(
     gamma_flip: float | None = None,
     call_wall: float | None = None,
     put_wall: float | None = None,
+    price_source: str | None = None,
 ) -> str | None:
     """Current SPX price line.
 
@@ -236,6 +237,9 @@ def make_spx_price_chart(
     if not y:
         return None
 
+    if price_source:
+        source = price_source
+
     current = y[-1]
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -261,13 +265,25 @@ def make_spx_price_chart(
         showlegend=False,
     ))
 
+    level_values = [
+        safe_float(gamma_flip, 0.0),
+        safe_float(call_wall, 0.0),
+        safe_float(put_wall, 0.0),
+    ]
+    level_values = [v for v in level_values if v > 0]
+    y_min = min(y)
+    y_max = max(y)
+    if level_values:
+        y_min = min(y_min, min(level_values))
+        y_max = max(y_max, max(level_values))
+
     for level, label, color in (
         (gamma_flip, "Flip", "#e2e8f0"),
         (call_wall, "Call wall", _GREEN),
         (put_wall, "Put wall", _RED),
     ):
         value = safe_float(level, 0.0)
-        if value and min(y) <= value <= max(y):
+        if value:
             fig.add_hline(
                 y=value,
                 line=dict(color=color, dash="dot", width=1.2),
@@ -276,15 +292,20 @@ def make_spx_price_chart(
                 annotation_font_color=color,
             )
 
-    subtitle = "live · Yahoo Finance" if source == "live" else "from saved snapshots"
-    pad = max(5.0, (max(y) - min(y)) * 0.12)
+    subtitle_map = {
+        "live": "live · Yahoo Finance",
+        "live+snapshots": "live + 90d backfill",
+        "snapshots": "from saved snapshots",
+    }
+    subtitle = subtitle_map.get(source or "", "from saved snapshots")
+    pad = max(5.0, (y_max - y_min) * 0.12)
     _apply_base(
         fig,
         title=f"{ticker} · Current Price ({subtitle})",
         height=320,
         margin=dict(l=48, r=70, t=58, b=36),
         xaxis=dict(title="Time", rangeslider=dict(visible=len(x) > 4, thickness=0.08)),
-        yaxis=dict(title="SPX price", zeroline=False, range=[min(y) - pad, max(y) + pad]),
+        yaxis=dict(title="SPX price", zeroline=False, range=[y_min - pad, y_max + pad]),
         hovermode="x unified",
         showlegend=False,
     )
