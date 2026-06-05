@@ -6,6 +6,7 @@ import pytest
 from gex_core.intraday_backfill import (
     backfill_intraday_minutes,
     minute_row_total_gex_bn,
+    sample_intraday_rows,
     scale_strike_profile,
     uw_time_to_export_ts,
 )
@@ -23,6 +24,28 @@ def test_minute_row_total_gex_bn_from_aggregate_column():
 def test_minute_row_total_gex_bn_from_call_put_oi():
     row = pd.Series({"call_gamma_oi": 1.5e9, "put_gamma_oi": -0.5e9})
     assert minute_row_total_gex_bn(row) == pytest.approx(1.0)
+
+
+def test_sample_intraday_rows_every_ten_minutes():
+    df = pd.DataFrame(
+        {
+            "time": pd.to_datetime(
+                [
+                    "2026-06-05T14:30:00Z",
+                    "2026-06-05T14:35:00Z",
+                    "2026-06-05T14:39:00Z",
+                    "2026-06-05T14:40:00Z",
+                ],
+                utc=True,
+            ),
+            "price": [5000.0, 5001.0, 5002.0, 5003.0],
+        }
+    )
+    sampled = sample_intraday_rows(df, 10)
+    assert len(sampled) == 2
+    # Last row in each 10-minute bucket is kept.
+    assert uw_time_to_export_ts(sampled.iloc[0]["time"]) == "2026-06-05_143900"
+    assert uw_time_to_export_ts(sampled.iloc[1]["time"]) == "2026-06-05_144000"
 
 
 def test_scale_strike_profile_matches_target_total():
@@ -47,7 +70,7 @@ def test_backfill_intraday_minutes_writes_snapshots(
     monkeypatch.setenv("GEX_INDEX_DB", str(tmp_path / "test.db"))
     mock_intraday.return_value = pd.DataFrame(
         {
-            "time": pd.to_datetime(["2026-06-05T14:30:00Z", "2026-06-05T14:31:00Z"], utc=True),
+            "time": pd.to_datetime(["2026-06-05T14:30:00Z", "2026-06-05T14:40:00Z"], utc=True),
             "price": [5000.0, 5001.0],
             "gamma_per_one_percent_move_oi": [1.0e9, 2.0e9],
         }
@@ -59,10 +82,12 @@ def test_backfill_intraday_minutes_writes_snapshots(
         }
     )
 
-    saved = backfill_intraday_minutes("SPX", "2026-06-05", export_dir=tmp_path)
+    saved = backfill_intraday_minutes(
+        "SPX", "2026-06-05", export_dir=tmp_path, interval_minutes=10
+    )
     assert saved == 2
     assert (tmp_path / "SPX_gex_by_strike_2026-06-05_143000.csv").exists()
-    assert (tmp_path / "SPX_summary_2026-06-05_143100.json").exists()
+    assert (tmp_path / "SPX_summary_2026-06-05_144000.json").exists()
 
     saved_again = backfill_intraday_minutes("SPX", "2026-06-05", export_dir=tmp_path)
     assert saved_again == 0

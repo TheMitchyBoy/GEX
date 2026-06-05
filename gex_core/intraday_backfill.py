@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,6 +20,10 @@ from gex_core.tickers import is_supported_ticker
 logger = logging.getLogger(__name__)
 
 _RAW_GAMMA_SCALE = 1e9  # spot-exposures aggregate fields are raw dollars per 1%
+DEFAULT_BACKFILL_DAYS = int(os.environ.get("GEX_INTRADAY_BACKFILL_DAYS", "90"))
+DEFAULT_BACKFILL_INTERVAL_MINUTES = int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"))
+DEFAULT_LIVE_INTERVAL_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
+DEFAULT_DAILY_BACKFILL_DAYS = int(os.environ.get("GEX_DAILY_BACKFILL_DAYS", "90"))
 
 
 def uw_time_to_export_ts(value: datetime | str | pd.Timestamp) -> str:
@@ -51,6 +56,19 @@ def minute_row_total_gex_bn(row: pd.Series) -> float:
             put = float(put) if pd.notna(put) else 0.0
         return (call + put) / _RAW_GAMMA_SCALE
     return 0.0
+
+
+def sample_intraday_rows(df: pd.DataFrame, interval_minutes: int) -> pd.DataFrame:
+    """Downsample 1-minute UW rows to one row per ``interval_minutes`` bucket."""
+    if interval_minutes <= 1 or df.empty or "time" not in df.columns:
+        return df
+    sampled = df.dropna(subset=["time"]).copy()
+    sampled["time"] = pd.to_datetime(sampled["time"], utc=True, errors="coerce")
+    sampled = sampled.dropna(subset=["time"]).sort_values("time")
+    if sampled.empty:
+        return sampled
+    sampled["_bucket"] = sampled["time"].dt.floor(f"{interval_minutes}min")
+    return sampled.groupby("_bucket", as_index=False).last().drop(columns="_bucket")
 
 
 def scale_strike_profile(strike: pd.Series, target_total_bn: float) -> pd.Series:
@@ -119,8 +137,9 @@ def export_live_strike_snapshot(
 
     ticker = ticker.upper()
     export_dir = export_dir or EXPORT_DIR
-    if not force and _snapshot_fresh_this_minute(ticker, export_dir):
-        logger.info("Skipping %s — snapshot already exists for current minute", ticker)
+    interval = DEFAULT_LIVE_INTERVAL_MINUTES
+    if not force and _snapshot_fresh_within_interval(ticker, export_dir, interval_minutes=interval):
+        logger.info("Skipping %s — snapshot already exists for current %d-min window", ticker, interval)
         return get_latest_ts(ticker, export_dir)
 
     spot, agg = fetch_uw_gex(ticker, api_key=api_key)
@@ -133,10 +152,11 @@ def export_live_strike_snapshot(
         spot=spot,
         total_gex_bn=agg.total_gex_bn,
         uw_endpoint="greek-exposure/strike",
-        granularity="minute",
+        granularity=f"{interval}min",
         greek_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         spot_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
     )
+    summary["interval_minutes"] = interval
     ts = write_snapshot_export(
         ticker,
         gex_by_strike=agg.gex_by_strike,
@@ -157,8 +177,9 @@ def backfill_intraday_minutes(
     export_dir: Path | None = None,
     api_key: str | None = None,
     force: bool = False,
+    interval_minutes: int | None = None,
 ) -> int:
-    """Backfill 1-minute UW spot-exposure rows for a single trading day."""
+    """Backfill UW spot-exposure rows for a single trading day."""
     from gex_core.uw_loader import fetch_uw_greek_exposure, fetch_uw_spot_exposures_intraday
 
     ticker = ticker.upper()
@@ -166,9 +187,14 @@ def backfill_intraday_minutes(
     if not is_supported_ticker(ticker):
         return 0
 
+    interval_minutes = interval_minutes or DEFAULT_BACKFILL_INTERVAL_MINUTES
     minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key, date=market_date)
     if minute_df.empty:
         logger.warning("No intraday spot-exposures for %s on %s", ticker, market_date)
+        return 0
+    minute_df = sample_intraday_rows(minute_df, interval_minutes)
+    if minute_df.empty:
+        logger.warning("No %d-min samples for %s on %s", interval_minutes, ticker, market_date)
         return 0
 
     try:
@@ -202,11 +228,12 @@ def backfill_intraday_minutes(
             spot=spot,
             total_gex_bn=total_gex_bn,
             uw_endpoint="spot-exposures",
-            granularity="minute",
+            granularity=f"{interval_minutes}min",
             uw_time=pd.Timestamp(row["time"]).isoformat(),
             vol_regime=vol_regime,
             cross_asset=cross_asset,
         )
+        summary["interval_minutes"] = interval_minutes
         write_snapshot_export(
             ticker,
             gex_by_strike=scaled_strike,
@@ -220,7 +247,13 @@ def backfill_intraday_minutes(
 
     if saved:
         clear_history_cache()
-    logger.info("Saved %d minute snapshots for %s on %s", saved, ticker, market_date)
+    logger.info(
+        "Saved %d %d-min snapshots for %s on %s",
+        saved,
+        interval_minutes,
+        ticker,
+        market_date,
+    )
     return saved
 
 
@@ -274,12 +307,14 @@ def backfill_daily_strike_snapshots(
 def backfill_recent_intraday(
     ticker: str,
     *,
-    days: int = 7,
+    days: int | None = None,
     export_dir: Path | None = None,
     api_key: str | None = None,
     force: bool = False,
+    interval_minutes: int | None = None,
 ) -> dict[str, int]:
-    """Backfill minute-level exports for recent weekdays."""
+    """Backfill intraday exports for recent weekdays."""
+    days = days if days is not None else DEFAULT_BACKFILL_DAYS
     results: dict[str, int] = {}
     for market_date in recent_market_dates(days=days):
         results[market_date] = backfill_intraday_minutes(
@@ -288,6 +323,7 @@ def backfill_recent_intraday(
             export_dir=export_dir,
             api_key=api_key,
             force=force,
+            interval_minutes=interval_minutes,
         )
     return results
 
@@ -295,12 +331,13 @@ def backfill_recent_intraday(
 def backfill_recent_daily(
     ticker: str,
     *,
-    days: int = 30,
+    days: int | None = None,
     export_dir: Path | None = None,
     api_key: str | None = None,
     force: bool = False,
 ) -> dict[str, bool]:
     """Backfill EOD strike snapshots for recent weekdays."""
+    days = days if days is not None else DEFAULT_DAILY_BACKFILL_DAYS
     results: dict[str, bool] = {}
     for market_date in recent_market_dates(days=days):
         results[market_date] = backfill_daily_strike_snapshots(
@@ -313,12 +350,23 @@ def backfill_recent_daily(
     return results
 
 
-def _snapshot_fresh_this_minute(ticker: str, export_dir: Path) -> bool:
+def _snapshot_fresh_within_interval(
+    ticker: str,
+    export_dir: Path,
+    *,
+    interval_minutes: int,
+) -> bool:
     latest = get_latest_ts(ticker, export_dir)
     if not latest:
         return False
     from gex_core.exports import parse_timestamp
 
-    latest_minute = parse_timestamp(latest).replace(second=0, microsecond=0)
-    now_minute = datetime.now().replace(second=0, microsecond=0)
-    return latest_minute >= now_minute
+    latest_ts = parse_timestamp(latest)
+    now = datetime.now()
+    bucket_start = now.replace(second=0, microsecond=0) - timedelta(
+        minutes=now.minute % interval_minutes
+    )
+    latest_bucket = latest_ts.replace(second=0, microsecond=0) - timedelta(
+        minutes=latest_ts.minute % interval_minutes
+    )
+    return latest_bucket >= bucket_start

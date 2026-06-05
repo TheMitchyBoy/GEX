@@ -93,8 +93,8 @@ streamlit run streamlit_app.py
 ```bash
 python scripts/gex_refresh.py --force
 python scripts/gex_refresh.py --tickers SPX --backfill-days 7
-python scripts/gex_refresh.py --tickers SPX --intraday-days 10
-python scripts/gex_backfill_intraday.py --intraday-days 10 --daily-days 30
+python scripts/gex_refresh.py --tickers SPX --intraday-days 90 --interval-minutes 10
+python scripts/gex_backfill_intraday.py --intraday-days 90 --daily-days 90 --interval-minutes 10
 ```
 
 ## GEX formula
@@ -138,9 +138,10 @@ python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UW_API_KEY` | (required) | Unusual Whales API key |
-| `GEX_REFRESH_INTERVAL_MINUTES` | `1` | Web dashboard auto-refresh (minute snapshots) |
-| `GEX_INTRADAY_BACKFILL_DAYS` | `10` | Default lookback for minute backfill script |
-| `GEX_DAILY_BACKFILL_DAYS` | `0` | Optional EOD strike backfill via `gex_backfill_intraday.py` |
+| `GEX_REFRESH_INTERVAL_MINUTES` | `10` | Web dashboard auto-refresh (10-minute snapshots) |
+| `GEX_BACKFILL_INTERVAL_MINUTES` | `10` | Sample UW 1-minute API rows every N minutes |
+| `GEX_INTRADAY_BACKFILL_DAYS` | `90` | Default lookback for intraday backfill script |
+| `GEX_DAILY_BACKFILL_DAYS` | `90` | EOD strike backfill via `gex_backfill_intraday.py` |
 | `GEX_HISTORY_LOOKBACK_DAYS` | `7` | Dashboard history load window (`0` = all) |
 | `GEX_HISTORY_MAX_SNAPSHOTS` | `500` | Cap CSV loads per refresh (`0` = unlimited) |
 | `GEX_DISABLE_SCHEDULER` | off | Set `1` to disable background refresh |
@@ -187,7 +188,7 @@ python scripts/gex_compact_exports.py --ticker SPX --keep-full-days 14
 ## Scheduled exports
 
 - Daily: `.github/workflows/daily_exports.yml`
-- Intraday (weekdays, every minute during US session): `.github/workflows/intraday_exports.yml`
+- Intraday (weekdays, every 10 minutes during US session): `.github/workflows/intraday_exports.yml`
 
 See [ROADMAP.md](ROADMAP.md) for planned work.
 

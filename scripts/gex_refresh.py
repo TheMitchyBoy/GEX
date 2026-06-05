@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -25,7 +26,13 @@ def main():
     parser.add_argument(
         "--intraday-days",
         type=int,
-        help="Backfill 1-minute UW spot-exposures for recent weekdays (advanced API tier)",
+        help="Backfill UW spot-exposures for recent weekdays (advanced API tier)",
+    )
+    parser.add_argument(
+        "--interval-minutes",
+        type=int,
+        default=int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10")),
+        help="Sample UW rows every N minutes during intraday backfill",
     )
     args = parser.parse_args()
     tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
@@ -36,11 +43,15 @@ def main():
                 ticker,
                 days=args.intraday_days,
                 force=args.force,
+                interval_minutes=args.interval_minutes,
             )
             day_total = sum(results_by_date.values())
             total += day_total
-            print(f"{ticker} intraday: saved {day_total} minute snapshots")
-        print(f"intraday backfill total: {total} minute snapshots")
+            print(
+                f"{ticker} intraday: saved {day_total} "
+                f"{args.interval_minutes}-min snapshots"
+            )
+        print(f"intraday backfill total: {total} snapshots")
         sys.exit(0 if total > 0 else 1)
 
     if args.backfill_days:

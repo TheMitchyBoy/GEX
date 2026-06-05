@@ -2,7 +2,7 @@
 
 The refresh loop is file-based — each successful run appends a timestamped
 snapshot under ``data/exports/``. ``is_snapshot_stale`` compares the latest
-export age to ``GEX_REFRESH_INTERVAL_MINUTES`` (default 1 minute for the web
+export age to ``GEX_REFRESH_INTERVAL_MINUTES`` (default 10 minutes for the web
 dashboard). ``refresh_recent_tickers`` backfills one snapshot per weekday over
 a lookback window for prediction history.
 """
@@ -20,7 +20,7 @@ from gex_core.tickers import PRIMARY_TICKER, SUPPORTED_TICKERS, is_supported_tic
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICKERS = list(SUPPORTED_TICKERS)
-DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "1"))
+DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
 
 
 def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:
