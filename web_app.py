@@ -22,7 +22,7 @@ from gex_core.charts import (
     safe_float,
 )
 from gex_core.exports import EXPORT_DIR
-from gex_core.history import build_history, get_latest_ts, list_tickers, list_timestamps, ts_label
+from gex_core.history import build_history, get_latest_ts, list_timestamps, ts_label
 from gex_core.intelligence import (
     build_data_quality_panel,
     build_outcome_panel,
@@ -41,11 +41,12 @@ from gex_core.predict import (
     predict_next_snapshot,
     similar_setups,
 )
-from gex_core.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_ticker, refresh_tickers
+from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
 
 APP = Flask(__name__)
 app = APP
 logger = logging.getLogger(__name__)
+APP_TICKER = "SPX"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Unusual Whales live data layer
@@ -119,12 +120,12 @@ def get_uw_data(ticker: str) -> dict | None:
 
 IMG_DIR = Path("img")
 FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
-REFRESH_TICKERS = DEFAULT_TICKERS
+REFRESH_TICKERS = [APP_TICKER]
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
 
 def find_available_tickers(export_dir: Path | None = None):
-    return list_tickers(export_dir)
+    return [APP_TICKER]
 
 
 def _uw_live_enabled() -> bool:
@@ -225,7 +226,11 @@ def index():
 @APP.route("/ticker/<ticker>")
 @APP.route("/ticker/<ticker>/")
 def ticker_page(ticker):
-    ticker = ticker.upper()
+    requested = ticker.upper()
+    if requested != APP_TICKER:
+        params = {k: v for k, v in request.args.items()}
+        return redirect(url_for("ticker_page", ticker=APP_TICKER, **params))
+    ticker = APP_TICKER
     bootstrap_status = request.args.get("bootstrap")
     force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
     if force_refresh:
@@ -460,9 +465,15 @@ def ticker_page(ticker):
     )
 
 
+@APP.route("/ticker")
+@APP.route("/ticker/")
+def ticker_default():
+    return redirect(url_for("ticker_page", ticker=APP_TICKER))
+
+
 @APP.post("/ticker/<ticker>/bootstrap")
 def bootstrap_ticker_history(ticker):
-    ticker = ticker.upper()
+    ticker = APP_TICKER
     try:
         ok = refresh_ticker(ticker, force=True)
     except Exception:
@@ -475,14 +486,14 @@ def bootstrap_ticker_history(ticker):
 
 @APP.get("/api/latest-summary")
 def api_latest_summary():
-    ticker = request.args.get("ticker", "SPX").upper()
+    ticker = APP_TICKER
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     return jsonify(payload)
 
 
 @APP.get("/api/signals")
 def api_signals():
-    ticker = request.args.get("ticker", "SPX").upper()
+    ticker = APP_TICKER
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     return jsonify(
         {
@@ -504,7 +515,9 @@ def api_watchlist():
 
 @APP.get("/widget/<ticker>")
 def ticker_widget(ticker: str):
-    ticker = ticker.upper()
+    if ticker.upper() != APP_TICKER:
+        return redirect(url_for("ticker_widget", ticker=APP_TICKER, **request.args))
+    ticker = APP_TICKER
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     summary = payload.get("summary") or {}
     confluence = payload.get("confluence") or {"score": 0.0, "label": "low"}
