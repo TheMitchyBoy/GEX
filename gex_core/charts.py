@@ -31,6 +31,17 @@ def safe_float(value, default=0.0):
         return float(default)
 
 
+def _bar_width(values: list[float], fill_ratio: float = 0.86) -> float | None:
+    """Pick a visually thick bar width for numeric strike axes."""
+    if len(values) < 2:
+        return None
+    ordered = sorted(float(v) for v in values)
+    diffs = [b - a for a, b in zip(ordered, ordered[1:]) if b > a]
+    if not diffs:
+        return None
+    return max(1.0, pd.Series(diffs).median() * fill_ratio)
+
+
 def _apply_base(fig: go.Figure, **extra) -> go.Figure:
     layout = dict(_BASE_LAYOUT)
     layout.update(extra)
@@ -239,8 +250,8 @@ def make_gex_profile_chart(
     ticker: str,
     spot: float | None = None,
     title: str = "Gamma Exposure Map",
-    window_pct: float = 0.20,
-    max_bars: int = 220,
+    window_pct: float = 0.035,
+    max_bars: int = 90,
     cumulative_series: pd.Series | None = None,
     gamma_flip: float | None = None,
     call_wall: float | None = None,
@@ -279,6 +290,7 @@ def make_gex_profile_chart(
     strikes = [float(s) for s in window.index]
     gex_values = [float(v) for v in window.values]
     colors = [_GREEN if v >= 0 else _RED for v in gex_values]
+    bar_width = _bar_width(strikes)
 
     cumulative = (
         pd.Series(cumulative_series, dtype=float).sort_index()
@@ -293,6 +305,7 @@ def make_gex_profile_chart(
         name="Net GEX by strike",
         x=strikes,
         y=gex_values,
+        width=bar_width,
         marker_color=colors,
         marker_line_width=0,
         opacity=0.86,
@@ -340,6 +353,7 @@ def make_gex_profile_chart(
         margin=dict(l=48, r=58, t=72, b=52),
         xaxis=dict(
             title="SPX strike",
+            range=[x_min, x_max],
             rangeslider=dict(visible=True, thickness=0.08),
             showspikes=True,
             spikecolor="rgba(255,255,255,0.25)",
@@ -352,7 +366,7 @@ def make_gex_profile_chart(
             gridcolor="rgba(255,255,255,0)",
             zeroline=False,
         ),
-        bargap=0.05,
+        bargap=0.0,
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
@@ -363,13 +377,92 @@ def make_positive_strike_chart(strike_series: pd.Series | None, ticker: str, tit
     strike = _positive_gamma_view(strike_series)
     if strike.empty:
         return None
+    strikes = [float(x) for x in strike.index]
     fig = go.Figure(go.Bar(
-        x=[float(x) for x in strike.index], y=strike.values.tolist(),
+        x=strikes, y=strike.values.tolist(),
+        width=_bar_width(strikes),
         marker_color=_GREEN, marker_line_width=0,
     ))
     _apply_base(fig, title=f"{ticker} · {title}", height=300,
                 xaxis_title="Strike", yaxis_title="Positive GEX (Bn$ / %)",
-                yaxis=dict(rangemode="tozero"))
+                yaxis=dict(rangemode="tozero"), bargap=0.0)
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_0dte_movement_chart(
+    current: dict | None,
+    previous: dict | None,
+    ticker: str,
+    spot: float | None = None,
+    window_pct: float = 0.025,
+    max_bars: int = 80,
+) -> str | None:
+    """Same-day strike-level GEX movement, prioritized for 0DTE/intraday monitoring."""
+    if not current or not previous:
+        return None
+    cur = pd.Series(current.get("strike"), dtype=float).sort_index()
+    prev = pd.Series(previous.get("strike"), dtype=float).sort_index()
+    if cur.empty or prev.empty:
+        return None
+
+    delta = cur.subtract(prev, fill_value=0.0).sort_index()
+    if spot is None or spot <= 0:
+        spot = safe_float(current.get("spot"), 0.0)
+    if spot > 0:
+        lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
+        window = delta.loc[(delta.index >= lo) & (delta.index <= hi)]
+        if len(window) < 5:
+            window = delta
+    else:
+        window = delta
+
+    if len(window) > max_bars:
+        top = window.abs().sort_values(ascending=False).head(max_bars)
+        window = window.loc[top.index].sort_index()
+    if window.empty:
+        return None
+
+    strikes = [float(s) for s in window.index]
+    delta_values = [float(v) for v in window.values]
+    cur_values = [float(cur.get(s, 0.0)) for s in strikes]
+    prev_values = [float(prev.get(s, 0.0)) for s in strikes]
+    colors = [_GREEN if v >= 0 else _RED for v in delta_values]
+
+    fig = go.Figure(go.Bar(
+        name="ΔGEX since prior same-day snapshot",
+        x=strikes,
+        y=delta_values,
+        width=_bar_width(strikes, fill_ratio=0.90),
+        marker_color=colors,
+        marker_line_width=0,
+        customdata=list(zip(prev_values, cur_values)),
+        hovertemplate=(
+            "Strike %{x:.0f}"
+            "<br>ΔGEX %{y:+.3f} Bn$ / %"
+            "<br>Previous %{customdata[0]:+.3f}"
+            "<br>Current %{customdata[1]:+.3f}<extra></extra>"
+        ),
+    ))
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)", line_width=1)
+    if spot and spot > 0 and min(strikes) <= spot <= max(strikes):
+        fig.add_vline(
+            x=float(spot),
+            line=dict(color=_AMBER, dash="dash", width=1.7),
+            annotation_text=f"Spot {float(spot):.0f}",
+            annotation_position="top",
+            annotation_font_color=_AMBER,
+        )
+
+    _apply_base(
+        fig,
+        title=f"{ticker} · 0DTE Movement Priority",
+        height=360,
+        margin=dict(l=48, r=24, t=64, b=42),
+        xaxis=dict(title="SPX strike", range=[min(strikes), max(strikes)]),
+        yaxis=dict(title="ΔGEX vs prior same-day snapshot", zerolinecolor="rgba(255,255,255,0.20)"),
+        bargap=0.0,
+        showlegend=False,
+    )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 

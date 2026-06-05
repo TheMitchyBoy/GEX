@@ -4,3 +4,4 @@ def test_ticker_page_returns_200_with_history():
     client = APP.test_client()
     response = client.get("/ticker/SPX")
     assert response.status_code == 200
+    assert b"0DTE Movement Priority" in response.data

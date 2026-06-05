@@ -14,6 +14,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
 from gex_core.charts import (
     make_ai_insights_chart,
+    make_0dte_movement_chart,
     make_cumulative_gex_chart,
     make_gex_profile_chart,
     make_positive_strike_chart,
@@ -142,6 +143,67 @@ def _select_snapshot(history: list, requested_ts: str | None) -> dict:
             if row["ts"] == requested_ts:
                 return row
     return history[-1]
+
+
+def _previous_same_day_snapshot(history: list, selected: dict) -> dict | None:
+    selected_ts = selected.get("ts")
+    if not selected_ts:
+        return None
+    selected_day = selected_ts[:10]
+    idx = -1
+    for i, row in enumerate(history):
+        if row.get("ts") == selected_ts:
+            idx = i
+            break
+    if idx <= 0:
+        return None
+    for row in reversed(history[:idx]):
+        if str(row.get("ts", ""))[:10] == selected_day:
+            return row
+    return None
+
+
+def _build_0dte_movement_panel(selected: dict, previous: dict | None) -> dict:
+    if not previous:
+        return {
+            "available": False,
+            "message": "Waiting for the next same-day snapshot to measure 0DTE movement.",
+        }
+    import pandas as pd
+
+    current_strike = pd.Series(selected.get("strike"), dtype=float).sort_index()
+    previous_strike = pd.Series(previous.get("strike"), dtype=float).sort_index()
+    if current_strike.empty or previous_strike.empty:
+        return {
+            "available": False,
+            "message": "Strike-level data is unavailable for 0DTE movement.",
+        }
+
+    delta = current_strike.subtract(previous_strike, fill_value=0.0)
+    top_abs = delta.abs().sort_values(ascending=False)
+    top_strike = float(top_abs.index[0]) if not top_abs.empty else None
+    top_delta = float(delta.loc[top_strike]) if top_strike is not None else 0.0
+    spot_delta = safe_float(selected.get("spot"), 0.0) - safe_float(previous.get("spot"), 0.0)
+    elapsed_minutes = None
+    try:
+        elapsed = datetime.strptime(selected["ts"], "%Y-%m-%d_%H%M%S") - datetime.strptime(previous["ts"], "%Y-%m-%d_%H%M%S")
+        elapsed_minutes = max(0, int(elapsed.total_seconds() // 60))
+    except Exception:
+        pass
+
+    return {
+        "available": True,
+        "previous_label": previous.get("ts_label"),
+        "current_label": selected.get("ts_label"),
+        "elapsed_minutes": elapsed_minutes,
+        "net_delta": float(delta.sum()),
+        "gross_delta": float(delta.abs().sum()),
+        "positive_delta": float(delta[delta > 0].sum()),
+        "negative_delta": float(delta[delta < 0].sum()),
+        "top_strike": top_strike,
+        "top_delta": top_delta,
+        "spot_delta": spot_delta,
+    }
 
 
 def _safe_similar_setups(history: list) -> list:
@@ -326,6 +388,8 @@ def ticker_page(ticker):
             latest_ts=None,
             refresh_minutes=REFRESH_MINUTES,
             current_strike_chart_json=current_strike_chart_json,
+            zero_dte_movement_chart_json=None,
+            zero_dte_movement=None,
             predicted_strike_chart_json=None,
             uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
             uw_profile_json=None,
@@ -379,6 +443,14 @@ def ticker_page(ticker):
         put_wall=selected.get("put_wall"),
     )
     current_profile_series = selected.get("strike")
+    previous_same_day = _previous_same_day_snapshot(history, selected)
+    zero_dte_movement = _build_0dte_movement_panel(selected, previous_same_day)
+    zero_dte_movement_chart_json = make_0dte_movement_chart(
+        selected,
+        previous_same_day,
+        ticker,
+        spot=csv_spot,
+    )
 
     uw_profile_json = None
     if uw_agg is not None:
@@ -480,6 +552,8 @@ def ticker_page(ticker):
         has_history=True,
         bootstrap_status=bootstrap_status,
         current_strike_chart_json=current_strike_chart_json,
+        zero_dte_movement_chart_json=zero_dte_movement_chart_json,
+        zero_dte_movement=zero_dte_movement,
         predicted_strike_chart_json=predicted_strike_chart_json,
         timeline_chart_json=make_timeline_chart(history, ticker),
         cumulative_chart_json=make_cumulative_gex_chart(

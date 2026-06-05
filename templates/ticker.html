@@ -268,10 +268,60 @@
       <section class="row g-3 dashboard-section">
         <div class="col-12 col-xl-8 card-stack">
           <div class="glass rounded-4 p-3 mb-3">
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+              <div>
+                <h2 class="h5 mb-1">0DTE Movement Priority</h2>
+                <p class="small text-secondary mb-0">
+                  Same-day strike-level GEX movement versus the previous intraday snapshot. This is the first read as 10-minute updates accumulate.
+                </p>
+              </div>
+              <span class="pill pill-short">TOP PRIORITY</span>
+            </div>
+            {% if zero_dte_movement and zero_dte_movement.available %}
+            <div class="row g-2 mb-2">
+              <div class="col-6 col-lg-3">
+                <div class="metric-label">Net ΔGEX</div>
+                <div class="metric-value {{ 'text-success' if zero_dte_movement.net_delta >= 0 else 'text-danger' }}">
+                  {{ '%+.3f'|format(zero_dte_movement.net_delta) }}
+                </div>
+              </div>
+              <div class="col-6 col-lg-3">
+                <div class="metric-label">Gross Movement</div>
+                <div class="metric-value">{{ '%.3f'|format(zero_dte_movement.gross_delta) }}</div>
+              </div>
+              <div class="col-6 col-lg-3">
+                <div class="metric-label">Top Strike Move</div>
+                <div class="metric-value {{ 'text-success' if zero_dte_movement.top_delta >= 0 else 'text-danger' }}">
+                  {{ '%.0f'|format(zero_dte_movement.top_strike) if zero_dte_movement.top_strike is not none else 'N/A' }}
+                  {{ '%+.2f'|format(zero_dte_movement.top_delta) }}
+                </div>
+              </div>
+              <div class="col-6 col-lg-3">
+                <div class="metric-label">Spot Move</div>
+                <div class="metric-value {{ 'text-success' if zero_dte_movement.spot_delta >= 0 else 'text-danger' }}">
+                  {{ '%+.1f'|format(zero_dte_movement.spot_delta) }} pts
+                </div>
+              </div>
+            </div>
+            <div class="small text-secondary mb-2 mono">
+              {{ zero_dte_movement.previous_label }} → {{ zero_dte_movement.current_label }}
+              {% if zero_dte_movement.elapsed_minutes is not none %} · {{ zero_dte_movement.elapsed_minutes }}m{% endif %}
+            </div>
+            {% if zero_dte_movement_chart_json %}
+            <div id="zeroDteMovement"></div>
+            {% endif %}
+            {% else %}
+            <div class="text-secondary">
+              {{ zero_dte_movement.message if zero_dte_movement else 'Waiting for same-day snapshots to build 0DTE movement.' }}
+            </div>
+            {% endif %}
+          </div>
+
+          <div class="glass rounded-4 p-3 mb-3">
             <h2 class="h5 mb-2">SPX Gamma Exposure Map</h2>
             <p class="small text-secondary mb-2">
-              Net GEX bars by strike with cumulative GEX overlay and spot, flip, call-wall, and put-wall markers.
-              Use the range slider to zoom across the SPX strike distribution.
+              Net GEX bars are zoomed tightly around spot with thicker strike bars, plus cumulative GEX and key level markers.
+              Use the range slider to widen the strike view if needed.
             </p>
             {% if profile_json %}
             <div id="profileChart"></div>
@@ -579,6 +629,7 @@
 
       renderPlot("profileChart", {{ profile_json|tojson }});
       renderPlot("uwProfileChart", {{ uw_profile_json|tojson }});
+      renderPlot("zeroDteMovement", {{ zero_dte_movement_chart_json|tojson }});
       renderPlot("currentStrike", {{ current_strike_chart_json|tojson }});
       renderPlot("predictedStrike", {{ predicted_strike_chart_json|tojson }});
       renderPlot("timelineChart", {{ timeline_chart_json|tojson }});
