@@ -170,7 +170,7 @@ environment:
 - **docker compose:** export `UW_API_KEY` in your shell or add it to `.env` / `config/spx.env` before `docker compose up` (compose loads those files automatically).
 - **Heroku/Procfile-style:** `heroku config:set UW_API_KEY=...` (or the platform's config UI).
 - **systemd/bare gunicorn:** add `UW_API_KEY=...` to the unit's `Environment=`/`EnvironmentFile=`.
-- **Cursor Cloud Agents:** add it under Dashboard → Cloud Agents → Secrets.
+- **Cursor Cloud Agents:** add it under Dashboard → Cloud Agents → Secrets. The repo includes `.cursor/environment.json`, which starts the Flask dashboard via `scripts/start_web.sh` and inherits injected secrets.
 
 Compact aged strike CSVs (keeps summaries + cumulative):
 

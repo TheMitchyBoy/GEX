@@ -4,6 +4,7 @@ __pycache__/
 *.json
 !data/exports/*.json
 !models/**/manifest.json
+!.cursor/environment.json
 data/.gex_scheduler.lock
 data/.alert_dispatch_state.json
 data/gex_index.db
@@ -14,4 +15,6 @@ models/*
 !models/SPX/manifest.json
 .venv/
 venv/
+.env
+config/spx.env
 __pycache__/

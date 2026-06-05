@@ -1,0 +1,10 @@
+{
+  "install": "pip install -r requirements.txt",
+  "start": "bash scripts/start_web.sh",
+  "ports": [
+    {
+      "name": "web",
+      "port": 8080
+    }
+  ]
+}

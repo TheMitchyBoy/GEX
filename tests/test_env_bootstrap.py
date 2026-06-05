@@ -28,3 +28,23 @@ def test_load_env_files_reads_export_syntax(monkeypatch, tmp_path):
 def test_uw_api_configured_rejects_blank(monkeypatch):
     monkeypatch.setenv("UW_API_KEY", "   ")
     assert env_bootstrap.uw_api_configured() is False
+
+
+def test_sync_env_files_from_process_writes_missing_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("UW_API_KEY", "persisted-key")
+    target = tmp_path / ".env"
+
+    written = env_bootstrap.sync_env_files_from_process(target)
+
+    assert written == str(target)
+    assert target.read_text(encoding="utf-8") == "UW_API_KEY=persisted-key\n"
+    assert (target.stat().st_mode & 0o777) == 0o600
+
+
+def test_sync_env_files_from_process_skips_existing_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("UW_API_KEY", "new-key")
+    target = tmp_path / ".env"
+    target.write_text("UW_API_KEY=existing-key\n", encoding="utf-8")
+
+    assert env_bootstrap.sync_env_files_from_process(target) is None
+    assert target.read_text(encoding="utf-8") == "UW_API_KEY=existing-key\n"
