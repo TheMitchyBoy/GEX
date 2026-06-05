@@ -5,16 +5,21 @@ from gex_core.history import build_history, collect_snapshot_files, get_latest_t
 from gex_core.refresh import recent_market_dates
 
 
-def test_collect_snapshot_files_finds_exports():
-    export_dir = Path("data/exports")
-    if not export_dir.exists():
-        return
-    tickers = {p.name.split("_")[0] for p in export_dir.glob("SPX_*.csv")}
-    if "SPX" not in tickers:
-        return
-    files = collect_snapshot_files("SPX", export_dir)
+def test_collect_snapshot_files_finds_exports(tmp_path: Path):
+    ts = "2026-06-05_120000"
+    (tmp_path / f"SPX_gex_by_strike_{ts}.csv").write_text(
+        "strike,gex_bn_per_pct\n5000,1.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / f"SPX_cumulative_gex_{ts}.csv").write_text(
+        "strike,cumulative_gex_bn_per_pct\n5000,1.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / f"SPX_summary_{ts}.json").write_text('{"spot": 5000}', encoding="utf-8")
+
+    files = collect_snapshot_files("SPX", tmp_path)
     assert files
-    assert get_latest_ts("SPX", export_dir) in files
+    assert get_latest_ts("SPX", tmp_path) in files
 
 
 def test_build_history_skips_consecutive_duplicate_strike_profiles(tmp_path: Path):
@@ -28,7 +33,7 @@ def test_build_history_skips_consecutive_duplicate_strike_profiles(tmp_path: Pat
             encoding="utf-8",
         )
 
-    history = build_history("SPX", tmp_path)
+    history = build_history("SPX", tmp_path, lookback_days=0, max_snapshots=0)
 
     assert [row["ts"] for row in history] == ["2026-06-03_000000"]
 

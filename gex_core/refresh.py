@@ -38,13 +38,19 @@ def has_snapshot_for_market_date(ticker: str, market_date: str) -> bool:
     return any(ts.startswith(prefix) for ts in list_timestamps(ticker))
 
 
-def refresh_ticker(ticker: str, force: bool = False, market_date: str | None = None) -> bool:
+def refresh_ticker(
+    ticker: str,
+    force: bool = False,
+    market_date: str | None = None,
+    *,
+    intraday: bool = False,
+) -> bool:
     """Fetch UW GEX and write a new CSV snapshot. Returns True if a new export was saved."""
     ticker = ticker.upper()
     if not is_supported_ticker(ticker):
         logger.warning("Skipping refresh for unsupported ticker %s; dashboard is SPX-only", ticker)
         return False
-    if market_date and not force and has_snapshot_for_market_date(ticker, market_date):
+    if market_date and not intraday and not force and has_snapshot_for_market_date(ticker, market_date):
         logger.info("Skipping refresh for %s on %s; export already exists", ticker, market_date)
         return True
     if not market_date and not force and not is_snapshot_stale(ticker):
@@ -53,18 +59,25 @@ def refresh_ticker(ticker: str, force: bool = False, market_date: str | None = N
 
     before = get_latest_ts(ticker)
 
-    from main import run
-
     try:
-        run(
-            ticker=ticker,
-            refresh=True,
-            show_plots=False,
-            save_plots=False,
-            export_csv=True,
-            export_dir="data/exports",
-            market_date=market_date,
-        )
+        if market_date and not intraday:
+            from main import run
+
+            run(
+                ticker=ticker,
+                refresh=True,
+                show_plots=False,
+                save_plots=False,
+                export_csv=True,
+                export_dir="data/exports",
+                market_date=market_date,
+            )
+        else:
+            from gex_core.intraday_backfill import export_live_strike_snapshot
+
+            ts = export_live_strike_snapshot(ticker, force=force)
+            if ts is None:
+                return False
     except Exception:
         logger.exception("GEX refresh failed for %s", ticker)
         return False

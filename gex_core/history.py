@@ -10,6 +10,8 @@ panels. Enrichment (gamma flip, term structure, concentration) happens in
 from __future__ import annotations
 
 import logging
+import os
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,25 +19,49 @@ import pandas as pd
 
 from gex_core.exports import (
     EXPORT_DIR,
+    filter_export_timestamps,
     find_exports_for_ticker,
+    list_export_timestamps,
     load_cumulative_series,
     load_expiration_series,
     load_strike_series,
     load_surface_df,
     parse_timestamp,
+    paths_for_export_timestamp,
 )
 from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip, term_structure_breakdown
 from gex_core.tickers import SUPPORTED_TICKERS
 
-_HISTORY_CACHE: dict[tuple[str, str, str, int], list[dict]] = {}
+_HISTORY_CACHE: dict[tuple, list[dict]] = {}
+
+def _history_limits(
+    lookback_days: int | None,
+    max_snapshots: int | None,
+) -> tuple[int | None, int | None]:
+    lb = int(os.environ.get("GEX_HISTORY_LOOKBACK_DAYS", "7")) if lookback_days is None else lookback_days
+    cap = int(os.environ.get("GEX_HISTORY_MAX_SNAPSHOTS", "500")) if max_snapshots is None else max_snapshots
+    return (None if lb <= 0 else lb), (None if cap <= 0 else cap)
 
 
-def _history_cache_key(ticker: str, export_dir: Path | None) -> tuple[str, str, str, int]:
+def _history_cache_key(
+    ticker: str,
+    export_dir: Path | None,
+    *,
+    lookback_days: int | None,
+    max_snapshots: int | None,
+) -> tuple:
     export_dir = export_dir or EXPORT_DIR
-    files = collect_snapshot_files(ticker.upper(), export_dir)
-    if not files:
-        return (ticker.upper(), str(export_dir.resolve()), "", 0)
-    return (ticker.upper(), str(export_dir.resolve()), max(files.keys()), len(files))
+    timestamps = list_export_timestamps(ticker.upper(), export_dir)
+    if not timestamps:
+        return (ticker.upper(), str(export_dir.resolve()), "", 0, lookback_days or 0, max_snapshots or 0)
+    return (
+        ticker.upper(),
+        str(export_dir.resolve()),
+        timestamps[-1],
+        len(timestamps),
+        lookback_days or 0,
+        max_snapshots or 0,
+    )
 
 
 def clear_history_cache() -> None:
@@ -43,10 +69,24 @@ def clear_history_cache() -> None:
     build_history_cached.cache_clear()
 
 
-@lru_cache(maxsize=8)
-def build_history_cached(ticker: str, export_dir_str: str, sig_ts: str, sig_n: int) -> tuple:
+@lru_cache(maxsize=16)
+def build_history_cached(
+    ticker: str,
+    export_dir_str: str,
+    sig_ts: str,
+    sig_n: int,
+    lookback_days: int,
+    max_snapshots: int,
+) -> tuple:
     """LRU-cached history builder; returns tuple for hashability."""
-    return tuple(_build_history_impl(ticker, Path(export_dir_str)))
+    return tuple(
+        _build_history_impl(
+            ticker,
+            Path(export_dir_str),
+            lookback_days=lookback_days or None,
+            max_snapshots=max_snapshots or None,
+        )
+    )
 
 
 def ts_label(ts: str) -> str:
@@ -54,15 +94,18 @@ def ts_label(ts: str) -> str:
 
 
 def get_latest_ts(ticker: str, export_dir: Path | None = None) -> str | None:
+    export_dir = export_dir or EXPORT_DIR
+    if export_dir.resolve() != EXPORT_DIR.resolve():
+        timestamps = list_export_timestamps(ticker, export_dir)
+        return timestamps[-1] if timestamps else None
+
     from gex_core.storage import latest_timestamp
 
     ts = latest_timestamp(ticker, export_dir)
     if ts:
         return ts
-    exports = find_exports_for_ticker(ticker, export_dir)
-    if not exports:
-        return None
-    return max(exports.keys())
+    timestamps = list_export_timestamps(ticker, export_dir)
+    return timestamps[-1] if timestamps else None
 
 
 def list_timestamps(ticker: str, export_dir: Path | None = None) -> list[str]:
@@ -166,10 +209,27 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
     return enrich_snapshot_metrics(metrics)
 
 
-def collect_snapshot_files(ticker: str, export_dir: Path | None = None) -> dict[str, dict[str, Path]]:
+def collect_snapshot_files(
+    ticker: str,
+    export_dir: Path | None = None,
+    *,
+    lookback_days: int | None = None,
+    max_snapshots: int | None = None,
+) -> dict[str, dict[str, Path]]:
     """Return {ts: {kind: path}} for snapshots with at least strike + cumulative."""
     export_dir = export_dir or EXPORT_DIR
-    exports = find_exports_for_ticker(ticker, export_dir)
+    timestamps = list_export_timestamps(ticker.upper(), export_dir)
+    if lookback_days and lookback_days > 0 and timestamps:
+        latest = parse_timestamp(timestamps[-1])
+        since = latest - timedelta(days=lookback_days)
+        timestamps = filter_export_timestamps(timestamps, since=since, max_timestamps=max_snapshots)
+    elif max_snapshots:
+        timestamps = filter_export_timestamps(timestamps, max_timestamps=max_snapshots)
+
+    exports = {
+        ts: paths_for_export_timestamp(ticker, ts, export_dir)
+        for ts in timestamps
+    }
     filtered = {}
     for ts, kinds in sorted(exports.items()):
         if "gex_by_strike" not in kinds:
@@ -185,10 +245,21 @@ def collect_snapshot_files(ticker: str, export_dir: Path | None = None) -> dict[
     return filtered
 
 
-def _build_history_impl(ticker: str, export_dir: Path) -> list[dict]:
+def _build_history_impl(
+    ticker: str,
+    export_dir: Path,
+    *,
+    lookback_days: int | None = None,
+    max_snapshots: int | None = None,
+) -> list[dict]:
     ticker = ticker.upper()
     snapshots = []
-    for ts, files in collect_snapshot_files(ticker, export_dir).items():
+    for ts, files in collect_snapshot_files(
+        ticker,
+        export_dir,
+        lookback_days=lookback_days,
+        max_snapshots=max_snapshots,
+    ).items():
         try:
             metrics = load_snapshot_metrics(ts, files)
             metrics["ticker"] = ticker
@@ -212,12 +283,19 @@ def _build_history_impl(ticker: str, export_dir: Path) -> list[dict]:
     return deduped
 
 
-def build_history(ticker: str, export_dir: Path | None = None) -> list[dict]:
+def build_history(
+    ticker: str,
+    export_dir: Path | None = None,
+    *,
+    lookback_days: int | None = None,
+    max_snapshots: int | None = None,
+) -> list[dict]:
     export_dir = export_dir or EXPORT_DIR
-    key = _history_cache_key(ticker, export_dir)
+    lb, cap = _history_limits(lookback_days, max_snapshots)
+    key = _history_cache_key(ticker, export_dir, lookback_days=lb, max_snapshots=cap)
     if key in _HISTORY_CACHE:
         return _HISTORY_CACHE[key]
-    cached = build_history_cached(key[0], key[1], key[2], key[3])
+    cached = build_history_cached(key[0], key[1], key[2], key[3], key[4], key[5])
     history = list(cached)
     _HISTORY_CACHE[key] = history
     return history

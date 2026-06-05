@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from gex_core.env_bootstrap import uw_api_key_diagnostics
-from gex_core.exports import EXPORT_DIR
+from gex_core.exports import EXPORT_DIR, list_export_timestamps
 from gex_core.history import build_history, get_latest_ts
 from gex_core.models_manifest import load_manifest
 from gex_core.predict import MIN_OVERLAY_TRAIN_ROWS
@@ -45,7 +45,8 @@ def build_system_status(ticker: str | None = None) -> dict:
         "latest_export_ts": latest_ts,
         "export_age_minutes": age_min,
         "export_stale": stale,
-        "history_depth": len(history),
+        "history_depth": len(list_export_timestamps(ticker, EXPORT_DIR)),
+        "history_loaded": len(history),
         "index_db_present": db_path().exists(),
         "refresh_interval_minutes": DEFAULT_REFRESH_MINUTES,
         "model_overlay_active": n_train is not None and n_train >= MIN_OVERLAY_TRAIN_ROWS,

@@ -9,7 +9,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from gex_core.env_bootstrap import bootstrap_env
+from gex_core.intraday_backfill import backfill_recent_intraday
 from gex_core.refresh import DEFAULT_TICKERS, refresh_recent_tickers, refresh_tickers
+
+bootstrap_env()
 
 
 def main():
@@ -17,9 +21,28 @@ def main():
     parser.add_argument("--tickers", default=",".join(DEFAULT_TICKERS), help="Comma-separated tickers")
     parser.add_argument("--force", action="store_true", help="Ignore staleness and refresh")
     parser.add_argument("--market-date", help="Fetch a historical UW market date in YYYY-MM-DD format")
-    parser.add_argument("--backfill-days", type=int, help="Fetch one snapshot per recent calendar date")
+    parser.add_argument("--backfill-days", type=int, help="Fetch one EOD snapshot per recent calendar date")
+    parser.add_argument(
+        "--intraday-days",
+        type=int,
+        help="Backfill 1-minute UW spot-exposures for recent weekdays (advanced API tier)",
+    )
     args = parser.parse_args()
     tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+    if args.intraday_days:
+        total = 0
+        for ticker in tickers:
+            results_by_date = backfill_recent_intraday(
+                ticker,
+                days=args.intraday_days,
+                force=args.force,
+            )
+            day_total = sum(results_by_date.values())
+            total += day_total
+            print(f"{ticker} intraday: saved {day_total} minute snapshots")
+        print(f"intraday backfill total: {total} minute snapshots")
+        sys.exit(0 if total > 0 else 1)
+
     if args.backfill_days:
         results_by_date = refresh_recent_tickers(tickers, days=args.backfill_days, force=args.force)
         ok_values = []

@@ -12,17 +12,18 @@ from typing import Any
 import numpy as np
 
 from gex_core.calibration import calibrate_confidence
-from gex_core.history import build_history, collect_snapshot_files
+from gex_core.exports import list_export_timestamps
+from gex_core.history import build_history
 from gex_core.predict import predict_next_snapshot
 
 _CACHE: dict[tuple[str, str, int], dict[str, Any]] = {}
 
 
 def _export_signature(ticker: str) -> tuple[str, int]:
-    files = collect_snapshot_files(ticker.upper())
-    if not files:
+    timestamps = list_export_timestamps(ticker.upper())
+    if not timestamps:
         return ("", 0)
-    return (max(files.keys()), len(files))
+    return (timestamps[-1], len(timestamps))
 
 
 def backtest_delta_sign_accuracy(ticker: str, min_history: int = 6) -> dict[str, Any]:

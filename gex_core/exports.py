@@ -14,11 +14,14 @@ patterns; an optional SQLite index (``gex_core.storage``) accelerates lookups.
 
 from __future__ import annotations
 
+import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Resolve relative to repo root so gunicorn/docker cwd does not break history.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -36,10 +39,108 @@ def parse_timestamp(ts_str: str) -> datetime:
     return datetime.strptime(ts_str, "%Y-%m-%d_%H%M%S")
 
 
-def find_exports_for_ticker(ticker: str, export_dir: Path | None = None) -> dict[str, dict[str, Path]]:
-    """Return {timestamp_str: {kind: Path}} for a ticker."""
+def paths_for_export_timestamp(ticker: str, ts: str, export_dir: Path | None = None) -> dict[str, Path]:
+    """Resolve export paths for one timestamp without scanning the export directory."""
     export_dir = export_dir or EXPORT_DIR
-    records: dict[str, dict[str, Path]] = {}
+    ticker = ticker.upper()
+    kinds: dict[str, Path] = {}
+    for kind in ("gex_by_strike", "cumulative_gex", "gex_by_expiration", "gex_surface"):
+        path = export_dir / f"{ticker}_{kind}_{ts}.csv"
+        if path.exists():
+            kinds[kind] = path
+    summary = export_dir / f"{ticker}_summary_{ts}.json"
+    if summary.exists():
+        kinds["summary"] = summary
+    return kinds
+
+
+def scan_export_timestamps(ticker: str, export_dir: Path | None = None) -> list[str]:
+    """List export timestamps from strike filenames (one glob pass)."""
+    export_dir = export_dir or EXPORT_DIR
+    timestamps: set[str] = set()
+    for path in export_dir.glob(f"{ticker.upper()}_gex_by_strike_*_*.csv"):
+        match = TIMESTAMP_RE.match(path.name)
+        if match:
+            timestamps.add(match.group("ts"))
+    return sorted(timestamps)
+
+
+def list_export_timestamps(ticker: str, export_dir: Path | None = None) -> list[str]:
+    """Fast timestamp list preferring the SQLite index, then strike-file scan."""
+    export_dir = export_dir or EXPORT_DIR
+    if export_dir.resolve() != EXPORT_DIR.resolve():
+        return scan_export_timestamps(ticker, export_dir)
+    try:
+        from gex_core.storage import list_indexed_timestamps, sync_ticker_exports
+
+        sync_ticker_exports(ticker, export_dir)
+        indexed = list_indexed_timestamps(ticker)
+        if indexed:
+            return indexed
+    except Exception as exc:
+        logger.debug("Indexed export timestamps unavailable for %s: %s", ticker, exc)
+    return scan_export_timestamps(ticker, export_dir)
+
+
+def filter_export_timestamps(
+    timestamps: list[str],
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    max_timestamps: int | None = None,
+) -> list[str]:
+    """Trim a sorted timestamp list to a time window and optional cap."""
+    if not timestamps:
+        return []
+    filtered = timestamps
+    if since is not None:
+        filtered = [ts for ts in filtered if parse_timestamp(ts) >= since]
+    if until is not None:
+        filtered = [ts for ts in filtered if parse_timestamp(ts) <= until]
+    if max_timestamps is not None and max_timestamps > 0 and len(filtered) > max_timestamps:
+        filtered = filtered[-max_timestamps:]
+    return filtered
+
+
+def find_exports_for_ticker(
+    ticker: str,
+    export_dir: Path | None = None,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    max_timestamps: int | None = None,
+) -> dict[str, dict[str, Path]]:
+    """Return {timestamp_str: {kind: Path}} for a ticker.
+
+    When ``since`` / ``max_timestamps`` are set, only resolves paths for the
+    requested window instead of globbing every export file.
+    """
+    export_dir = export_dir or EXPORT_DIR
+    if since is not None or until is not None or max_timestamps is not None:
+        timestamps = filter_export_timestamps(
+            list_export_timestamps(ticker, export_dir),
+            since=since,
+            until=until,
+            max_timestamps=max_timestamps,
+        )
+        records: dict[str, dict[str, Path]] = {}
+        for ts in timestamps:
+            kinds = paths_for_export_timestamp(ticker, ts, export_dir)
+            if kinds:
+                records[ts] = kinds
+        return records
+
+    timestamps = list_export_timestamps(ticker, export_dir)
+    if timestamps:
+        records = {}
+        for ts in timestamps:
+            kinds = paths_for_export_timestamp(ticker, ts, export_dir)
+            if kinds:
+                records[ts] = kinds
+        if records:
+            return records
+
+    records = {}
     for path in export_dir.glob(f"{ticker.upper()}_*_*_*.csv"):
         match = TIMESTAMP_RE.match(path.name)
         if not match:

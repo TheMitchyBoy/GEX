@@ -26,7 +26,7 @@ try:
 except Exception:
     XGBOOST_AVAILABLE = False
 
-from gex_core.exports import EXPORT_DIR, find_exports_for_ticker, load_strike_series, parse_timestamp
+from gex_core.exports import EXPORT_DIR, list_export_timestamps, load_strike_series, parse_timestamp, paths_for_export_timestamp
 from gex_core.features import compute_features_from_exports
 
 MODELS_DIR = Path("models")
@@ -59,14 +59,12 @@ def _recent_timestamps(timestamps: list[str], lookback_days: int | None) -> list
 
 
 def build_dataset(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS) -> pd.DataFrame:
-    exports = find_exports_for_ticker(ticker)
-    timestamps = sorted(ts for ts, k in exports.items() if "gex_by_strike" in k)
-    timestamps = _recent_timestamps(timestamps, lookback_days)
+    timestamps = _recent_timestamps(list_export_timestamps(ticker), lookback_days)
     rows = []
     prev_feats = None
     prev_strike = None
     for ts in timestamps:
-        info = exports[ts]
+        info = paths_for_export_timestamp(ticker, ts, EXPORT_DIR)
         strike_path = info.get("gex_by_strike")
         strike = load_strike_series(strike_path) if strike_path else None
         if prev_strike is not None and strike is not None and strike.equals(prev_strike):

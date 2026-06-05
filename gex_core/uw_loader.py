@@ -294,6 +294,56 @@ def fetch_uw_greek_exposure_by_expiration(
     return pd.Series(dtype=float)
 
 
+def fetch_uw_spot_exposures_intraday(
+    ticker: str,
+    api_key: str | None = None,
+    date: str | None = None,
+) -> pd.DataFrame:
+    """Fetch 1-minute spot GEX exposure series for a trading day.
+
+    Uses ``GET /api/stock/{ticker}/spot-exposures`` (advanced tier). Each row
+    includes ``time``, ``price``, and aggregate gamma/charm/vanna per 1% move.
+    """
+    rows = _get(f"/api/stock/{ticker}/spot-exposures", api_key=api_key, date=date)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    for col in df.columns:
+        if col in {"time", "date", "ticker"}:
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "time" in df.columns:
+        df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
+        df = df.dropna(subset=["time"]).sort_values("time").reset_index(drop=True)
+    return df
+
+
+def fetch_uw_greek_exposure_history(
+    ticker: str,
+    api_key: str | None = None,
+    *,
+    timeframe: str = "1Y",
+    date: str | None = None,
+) -> pd.DataFrame:
+    """Daily aggregate greek exposure history from ``/greek-exposure``."""
+    rows = _get(
+        f"/api/stock/{ticker}/greek-exposure",
+        api_key=api_key,
+        date=date,
+        timeframe=timeframe,
+    )
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    for col in df.columns:
+        if col == "date":
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce") / _GEX_SCALE
+    return df.sort_values("date").reset_index(drop=True) if "date" in df.columns else df
+
+
 def fetch_uw_spot_exposures(
     ticker: str,
     api_key: str | None = None,

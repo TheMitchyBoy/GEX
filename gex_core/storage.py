@@ -9,7 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from gex_core.exports import EXPORT_DIR, find_exports_for_ticker, parse_timestamp
+from gex_core.exports import (
+    EXPORT_DIR,
+    paths_for_export_timestamp,
+    parse_timestamp,
+    scan_export_timestamps,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +112,8 @@ def latest_timestamp(ticker: str, export_dir: Path | None = None, path: Path | N
             return str(row["ts"])
     except sqlite3.Error as exc:
         logger.warning("SQLite latest_timestamp failed: %s", exc)
-    exports = find_exports_for_ticker(ticker, export_dir or EXPORT_DIR)
-    return max(exports.keys()) if exports else None
+    timestamps = scan_export_timestamps(ticker, export_dir or EXPORT_DIR)
+    return timestamps[-1] if timestamps else None
 
 
 def list_indexed_timestamps(ticker: str, path: Path | None = None) -> list[str]:
@@ -132,9 +137,11 @@ def sync_ticker_exports(ticker: str, export_dir: Path | None = None, path: Path 
 
     export_dir = export_dir or EXPORT_DIR
     ticker = ticker.upper()
-    exports = find_exports_for_ticker(ticker, export_dir)
+    existing = set(list_indexed_timestamps(ticker, path))
+    timestamps = [ts for ts in scan_export_timestamps(ticker, export_dir) if ts not in existing]
     added = 0
-    for ts, kinds in exports.items():
+    for ts in timestamps:
+        kinds = paths_for_export_timestamp(ticker, ts, export_dir)
         if "gex_by_strike" not in kinds:
             continue
         summary_path = kinds.get("summary")
