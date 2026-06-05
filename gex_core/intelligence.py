@@ -13,6 +13,7 @@ import requests
 
 from gex_core.features import safe_float
 from gex_core.history import build_history
+from gex_core.models_manifest import load_manifest
 
 
 def _sigmoid(value: float) -> float:
@@ -151,6 +152,102 @@ def build_gamma_analysis_panel(selected: dict, prediction: dict | None = None) -
         "risk_score": risk_score,
         "risk_label": risk_label,
         "predicted_delta_gex": predicted_delta,
+    }
+
+
+def build_term_structure_panel(selected: dict, prediction: dict | None = None) -> dict:
+    """Summarize 0DTE, near-term, and back-term GEX concentration."""
+    current_zero = safe_float(selected.get("zero_dte_gex_bn"), 0.0)
+    current_zero_ratio = safe_float(selected.get("zero_dte_ratio"), 0.0)
+    near = safe_float(selected.get("near_term_gex_bn"), 0.0)
+    near_ratio = safe_float(selected.get("near_term_ratio"), 0.0)
+    back = safe_float(selected.get("back_term_gex_bn"), 0.0)
+    back_ratio = safe_float(selected.get("back_term_ratio"), 0.0)
+    curvature = safe_float(selected.get("term_curvature"), 0.0)
+
+    predicted_zero_ratio = (
+        safe_float(prediction.get("predicted_zero_dte_ratio"), current_zero_ratio)
+        if prediction
+        else current_zero_ratio
+    )
+    predicted_near_ratio = (
+        safe_float(prediction.get("predicted_near_term_ratio"), near_ratio)
+        if prediction
+        else near_ratio
+    )
+    predicted_curvature = (
+        safe_float(prediction.get("predicted_term_curvature"), curvature)
+        if prediction
+        else curvature
+    )
+
+    if abs(current_zero_ratio) >= 0.45:
+        concentration_label = "0DTE-heavy"
+    elif abs(near_ratio) >= 0.55:
+        concentration_label = "near-term-heavy"
+    elif abs(back_ratio) >= 0.55:
+        concentration_label = "back-term-heavy"
+    else:
+        concentration_label = "balanced"
+
+    return {
+        "zero_dte_gex": current_zero,
+        "zero_dte_ratio": current_zero_ratio,
+        "near_term_gex": near,
+        "near_term_ratio": near_ratio,
+        "back_term_gex": back,
+        "back_term_ratio": back_ratio,
+        "term_curvature": curvature,
+        "predicted_zero_dte_ratio": predicted_zero_ratio,
+        "predicted_near_term_ratio": predicted_near_ratio,
+        "predicted_term_curvature": predicted_curvature,
+        "zero_dte_ratio_delta_forecast": predicted_zero_ratio - current_zero_ratio,
+        "near_term_ratio_delta_forecast": predicted_near_ratio - near_ratio,
+        "term_curvature_delta_forecast": predicted_curvature - curvature,
+        "expiration_count": int(safe_float(selected.get("expiration_count"), 0.0)),
+        "concentration_label": concentration_label,
+    }
+
+
+def build_model_accountability_panel(
+    ticker: str,
+    prediction: dict | None,
+    backtest: dict | None = None,
+) -> dict:
+    """Expose model provenance, sample depth, and validation warnings."""
+    manifest = load_manifest(ticker)
+    backtest = backtest or {}
+    training_count = int(safe_float(prediction.get("training_snapshot_count"), 0.0)) if prediction else 0
+    confidence = safe_float(prediction.get("confidence"), 0.0) if prediction else 0.0
+    raw_confidence = safe_float(prediction.get("raw_confidence"), confidence) if prediction else 0.0
+
+    warnings: list[str] = []
+    if training_count and training_count < 30:
+        warnings.append("Recent training window is thin; confidence is sample-damped.")
+    elif not training_count:
+        warnings.append("No forecast was generated for this snapshot.")
+    if backtest.get("n", 0) and backtest.get("accuracy") is not None:
+        gap = safe_float(backtest.get("confidence_accuracy_gap"), 0.0)
+        if gap > 0.2:
+            warnings.append("Recent confidence and realized accuracy are materially different.")
+    else:
+        warnings.append("Walk-forward validation has too few samples.")
+    if manifest and safe_float((manifest.get("metrics") or {}).get("n_train"), 0.0) < 10:
+        warnings.append("Stored trained model has very few training rows; KNN/history remains primary.")
+
+    return {
+        "model_type": manifest.get("model_type") if manifest else None,
+        "trained_at_utc": manifest.get("trained_at_utc") if manifest else None,
+        "training_start_ts": manifest.get("training_start_ts") if manifest else None,
+        "training_end_ts": manifest.get("training_end_ts") if manifest else None,
+        "manifest_metrics": manifest.get("metrics", {}) if manifest else {},
+        "training_snapshot_count": training_count,
+        "training_window_days": prediction.get("training_window_days") if prediction else None,
+        "confidence": confidence,
+        "raw_confidence": raw_confidence,
+        "confidence_breakdown": prediction.get("confidence_breakdown", {}) if prediction else {},
+        "backtest": backtest,
+        "warnings": warnings,
     }
 
 
@@ -515,18 +612,45 @@ def build_outcome_panel(history: list[dict], selected_ts: str | None) -> dict | 
         if not values:
             continue
         positives = sum(1 for v in values if v > 0)
+        abs_values = [abs(v) for v in values]
         regime_stats.append(
             {
                 "regime": regime,
                 "samples": len(values),
                 "avg_move_pct": sum(values) / len(values),
+                "avg_abs_move_pct": sum(abs_values) / len(abs_values),
                 "hit_rate_up": positives / len(values),
+                "hit_rate_down": 1.0 - (positives / len(values)),
             }
         )
+
+    flip_crosses = 0
+    wall_interactions = 0
+    checked = 0
+    for i in range(len(history) - 1):
+        spot0 = safe_float(history[i].get("spot"), 0.0)
+        spot1 = safe_float(history[i + 1].get("spot"), 0.0)
+        flip = safe_float(history[i].get("gamma_flip"), 0.0)
+        call_wall = safe_float(history[i].get("call_wall"), 0.0)
+        put_wall = safe_float(history[i].get("put_wall"), 0.0)
+        if spot0 <= 0 or spot1 <= 0:
+            continue
+        checked += 1
+        if flip > 0 and (spot0 - flip == 0 or spot1 - flip == 0 or (spot0 > flip) != (spot1 > flip)):
+            flip_crosses += 1
+        if call_wall > 0 and min(spot0, spot1) <= call_wall <= max(spot0, spot1):
+            wall_interactions += 1
+        elif put_wall > 0 and min(spot0, spot1) <= put_wall <= max(spot0, spot1):
+            wall_interactions += 1
 
     return {
         "horizons": horizon_rows,
         "regime_stats": regime_stats,
+        "structure_stats": {
+            "samples": checked,
+            "flip_cross_rate": flip_crosses / checked if checked else None,
+            "wall_interaction_rate": wall_interactions / checked if checked else None,
+        },
         "selected_ts": selected.get("ts_label"),
     }
 

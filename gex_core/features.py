@@ -65,6 +65,63 @@ def top_strike_concentration(strike: pd.Series, top_n: int = 5) -> float:
     return float(top / total_abs)
 
 
+def term_structure_breakdown(
+    expirations: pd.Series,
+    *,
+    snapshot_date: pd.Timestamp | None = None,
+    near_term_buckets: int = 3,
+) -> dict[str, float]:
+    """Summarize expiration GEX into 0DTE/near-term/back-term buckets.
+
+    When expiration dates are parseable and a snapshot date is known, 0DTE is
+    the same-date expiration. Otherwise the first available bucket acts as a
+    conservative same-day proxy for export files that only preserve ordering.
+    """
+    if expirations is None or expirations.empty:
+        return {
+            "term_total_gex_bn": 0.0,
+            "zero_dte_gex_bn": 0.0,
+            "zero_dte_ratio": 0.0,
+            "near_term_gex_bn": 0.0,
+            "near_term_ratio": 0.0,
+            "back_term_gex_bn": 0.0,
+            "back_term_ratio": 0.0,
+            "term_curvature": 0.0,
+            "expiration_count": 0.0,
+        }
+
+    exp = pd.Series(expirations, dtype=float).sort_index()
+    total = float(exp.sum())
+    abs_total = float(exp.abs().sum())
+
+    zero_dte = 0.0
+    if snapshot_date is not None:
+        idx_dates = pd.to_datetime(exp.index, errors="coerce")
+        valid_dates = pd.Series(idx_dates, index=exp.index).dt.date
+        snap_date = pd.Timestamp(snapshot_date).date()
+        same_day = exp.loc[valid_dates == snap_date]
+        if not same_day.empty:
+            zero_dte = float(same_day.sum())
+    if zero_dte == 0.0 and not exp.empty:
+        zero_dte = float(exp.iloc[0])
+
+    near = float(exp.head(max(1, near_term_buckets)).sum())
+    back = float(exp.tail(max(1, near_term_buckets)).sum())
+    denom = total if total != 0 else abs_total
+
+    return {
+        "term_total_gex_bn": total,
+        "zero_dte_gex_bn": zero_dte,
+        "zero_dte_ratio": zero_dte / denom if denom else 0.0,
+        "near_term_gex_bn": near,
+        "near_term_ratio": near / denom if denom else 0.0,
+        "back_term_gex_bn": back,
+        "back_term_ratio": back / denom if denom else 0.0,
+        "term_curvature": near - back,
+        "expiration_count": float(len(exp)),
+    }
+
+
 def cumulative_slope_at_spot(cumulative: pd.Series, spot: float) -> float:
     if cumulative.empty or spot <= 0:
         return 0.0
@@ -150,25 +207,9 @@ def compute_features_from_exports(
 
     if "gex_by_expiration" in info:
         exp = load_expiration_series(info["gex_by_expiration"])
-        features["term_total_gex_bn"] = float(exp.sum())
-        features["near_term_gex_bn"] = float(exp.head(3).sum()) if len(exp) else 0.0
-        features["near_term_ratio"] = (
-            features["near_term_gex_bn"] / features["term_total_gex_bn"]
-            if features["term_total_gex_bn"] != 0
-            else 0.0
-        )
-        features["back_term_gex_bn"] = float(exp.tail(3).sum()) if len(exp) else 0.0
-        features["term_curvature"] = features["near_term_gex_bn"] - features["back_term_gex_bn"]
+        features.update(term_structure_breakdown(exp))
     else:
-        features.update(
-            {
-                "term_total_gex_bn": 0.0,
-                "near_term_gex_bn": 0.0,
-                "near_term_ratio": 0.0,
-                "back_term_gex_bn": 0.0,
-                "term_curvature": 0.0,
-            }
-        )
+        features.update(term_structure_breakdown(pd.Series(dtype=float)))
 
     if "cumulative_gex" in info:
         cumulative = load_cumulative_series(info["cumulative_gex"])
@@ -213,10 +254,14 @@ def compute_features_from_exports(
         features["total_gex_momentum"] = features["total_gex_bn"] - prev_features.get("total_gex_bn", 0.0)
         features["flip_velocity"] = features["gamma_flip"] - prev_features.get("gamma_flip", 0.0)
         features["near_term_ratio_delta"] = features["near_term_ratio"] - prev_features.get("near_term_ratio", 0.0)
+        features["zero_dte_ratio_delta"] = features["zero_dte_ratio"] - prev_features.get("zero_dte_ratio", 0.0)
+        features["term_curvature_delta"] = features["term_curvature"] - prev_features.get("term_curvature", 0.0)
     else:
         features["total_gex_momentum"] = 0.0
         features["flip_velocity"] = 0.0
         features["near_term_ratio_delta"] = 0.0
+        features["zero_dte_ratio_delta"] = 0.0
+        features["term_curvature_delta"] = 0.0
 
     return features
 
@@ -240,6 +285,9 @@ def snapshot_feature_vector(row: dict[str, Any]) -> np.ndarray:
             safe_float(row.get("flip_velocity"), 0.0),
             safe_float(row.get("gex_concentration"), 0.0),
             safe_float(row.get("cum_slope_at_spot"), 0.0),
+            safe_float(row.get("zero_dte_ratio"), 0.0),
+            safe_float(row.get("back_term_ratio"), 0.0),
+            safe_float(row.get("term_curvature"), 0.0),
         ],
         dtype=float,
     )
@@ -263,4 +311,18 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     metrics["cum_slope_at_spot"] = cumulative_slope_at_spot(cumulative, spot) if len(cumulative) and spot > 0 else 0.0
     metrics["surface_vector"] = extract_surface_vector(strike, spot)
     metrics["spot"] = spot
+    for key in (
+        "term_total_gex_bn",
+        "zero_dte_gex_bn",
+        "zero_dte_ratio",
+        "near_term_gex_bn",
+        "near_term_ratio",
+        "back_term_gex_bn",
+        "back_term_ratio",
+        "term_curvature",
+        "expiration_count",
+        "zero_dte_ratio_delta",
+        "term_curvature_delta",
+    ):
+        metrics[key] = safe_float(metrics.get(key), 0.0)
     return metrics

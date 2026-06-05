@@ -63,3 +63,8 @@ def test_predict_next_snapshot_reports_recent_training_window():
     assert pred["training_snapshot_count"] == 5
     assert pred["training_window_days"] == 7
     assert pred["predicted_total_gex"] == history[-1]["total_gex"] + pred["predicted_delta_gex"]
+    assert pred["forecast_horizon"] == "next_snapshot"
+    assert 0.0 <= pred["confidence"] <= 1.0
+    assert 0.0 <= pred["raw_confidence"] <= 1.0
+    assert pred["confidence_breakdown"]["training_rows"] >= 3
+    assert "term_structure" in pred

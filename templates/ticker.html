@@ -381,7 +381,7 @@
             <div class="table-responsive">
               <table class="table table-dark table-sm mb-0">
                 <thead>
-                  <tr><th>Regime</th><th class="text-end">Samples</th><th class="text-end">Avg next move</th><th class="text-end">Up hit-rate</th></tr>
+                  <tr><th>Regime</th><th class="text-end">Samples</th><th class="text-end">Avg next move</th><th class="text-end">Avg abs move</th><th class="text-end">Up hit-rate</th></tr>
                 </thead>
                 <tbody>
                   {% for row in outcome_panel.regime_stats %}
@@ -389,11 +389,20 @@
                     <td>{{ row.regime }}</td>
                     <td class="text-end">{{ row.samples }}</td>
                     <td class="text-end {{ 'text-success' if row.avg_move_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.avg_move_pct * 100) }}%</td>
+                    <td class="text-end">{{ '%.2f'|format(row.avg_abs_move_pct * 100) }}%</td>
                     <td class="text-end">{{ '%.1f'|format(row.hit_rate_up * 100) }}%</td>
                   </tr>
                   {% endfor %}
                 </tbody>
               </table>
+            </div>
+            {% endif %}
+            {% if outcome_panel.structure_stats and outcome_panel.structure_stats.samples %}
+            <div class="small text-secondary mt-2 mono">
+              Structure follow-through: flip cross rate
+              {{ '%.1f'|format(outcome_panel.structure_stats.flip_cross_rate * 100) if outcome_panel.structure_stats.flip_cross_rate is not none else 'N/A' }}% ·
+              wall interaction rate
+              {{ '%.1f'|format(outcome_panel.structure_stats.wall_interaction_rate * 100) if outcome_panel.structure_stats.wall_interaction_rate is not none else 'N/A' }}%.
             </div>
             {% endif %}
           </div>
@@ -491,6 +500,10 @@
             <div class="metric-label">Backtest ΔGEX Sign (n={{ prediction.backtest_n }})</div>
             <div class="metric-value mb-2">{{ '%.1f'|format(prediction.backtest_sign_accuracy * 100) }}%</div>
             {% endif %}
+            {% if prediction.backtest_baseline_momentum_accuracy is defined and prediction.backtest_baseline_momentum_accuracy is not none %}
+            <div class="metric-label">Naive Momentum Baseline</div>
+            <div class="metric-value mb-2 text-secondary">{{ '%.1f'|format(prediction.backtest_baseline_momentum_accuracy * 100) }}%</div>
+            {% endif %}
             <div class="metric-label">Regime Flip Probability</div>
             <div class="metric-value">{{ '%.1f'|format(prediction.regime_flip_probability * 100) }}%</div>
             {% if forecast_probs %}
@@ -503,6 +516,79 @@
             <div class="text-secondary">Need at least 4 CSV snapshots to forecast.</div>
             {% endif %}
           </div>
+
+          {% if term_structure %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h2 class="h6 mb-0">0DTE / Term Structure</h2>
+              <span class="pill {{ 'pill-short' if term_structure.concentration_label == '0DTE-heavy' else 'pill-long' if term_structure.concentration_label == 'balanced' else '' }}">
+                {{ term_structure.concentration_label|upper }}
+              </span>
+            </div>
+            <div class="row g-2">
+              <div class="col-6">
+                <div class="metric-label">0DTE Share</div>
+                <div class="metric-value">{{ '%+.1f'|format(term_structure.zero_dte_ratio * 100) }}%</div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Near-Term Share</div>
+                <div class="metric-value">{{ '%+.1f'|format(term_structure.near_term_ratio * 100) }}%</div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Back-Term Share</div>
+                <div class="metric-value">{{ '%+.1f'|format(term_structure.back_term_ratio * 100) }}%</div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Curvature</div>
+                <div class="metric-value">{{ '%+.3f'|format(term_structure.term_curvature) }}</div>
+              </div>
+            </div>
+            {% if prediction %}
+            <div class="small text-secondary mt-2 mono">
+              Forecast Δ 0DTE share {{ '%+.1f'|format(term_structure.zero_dte_ratio_delta_forecast * 100) }} pts ·
+              near-term {{ '%+.1f'|format(term_structure.near_term_ratio_delta_forecast * 100) }} pts.
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          {% if model_accountability %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h6 mb-2">Model Accountability</h2>
+            <div class="row g-2">
+              <div class="col-6">
+                <div class="metric-label">Training Snapshots</div>
+                <div class="metric-value">{{ model_accountability.training_snapshot_count }}</div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Model Type</div>
+                <div class="metric-value">{{ model_accountability.model_type or 'KNN' }}</div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Raw Confidence</div>
+                <div class="metric-value">{{ '%.1f'|format(model_accountability.raw_confidence * 100) }}%</div>
+              </div>
+              <div class="col-6">
+                <div class="metric-label">Calibrated</div>
+                <div class="metric-value">{{ '%.1f'|format(model_accountability.confidence * 100) }}%</div>
+              </div>
+            </div>
+            {% if model_accountability.backtest and model_accountability.backtest.n %}
+            <div class="small text-secondary mt-2 mono">
+              Walk-forward n={{ model_accountability.backtest.n }} ·
+              MAE {{ '%.3f'|format(model_accountability.backtest.mae_delta) if model_accountability.backtest.mae_delta is not none else 'N/A' }} ·
+              confidence gap {{ '%.1f'|format(model_accountability.backtest.confidence_accuracy_gap * 100) if model_accountability.backtest.confidence_accuracy_gap is not none else 'N/A' }} pts.
+            </div>
+            {% endif %}
+            {% if model_accountability.warnings %}
+            <ul class="small mb-0 mt-2">
+              {% for warning in model_accountability.warnings %}
+              <li>{{ warning }}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+          </div>
+          {% endif %}
 
           <div class="glass rounded-4 p-3 mb-3">
             <div class="d-flex justify-content-between align-items-center mb-2">

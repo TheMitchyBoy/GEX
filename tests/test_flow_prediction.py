@@ -1,5 +1,6 @@
 """Tests for option-flow overlay on GEX predictions."""
 
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -31,11 +32,15 @@ def test_apply_flow_to_prediction_adjusts_totals_and_strikes():
         "top_signals": [],
     }
     out = apply_flow_to_prediction(pred, flow)
-    assert out["predicted_delta_gex"] == 0.11
-    assert out["predicted_total_gex"] == 1.01
-    assert out["flow_delta_gex"] == 0.01
-    assert out["predicted_strike"][4800.0] == 0.058
-    assert out["predicted_strike"][5000.0] == 0.002
+    expected_weight = math.log1p(2) / math.log(101.0)
+    expected_flow_delta = 0.01 * expected_weight
+    assert out["flow_blend_weight"] == expected_weight
+    assert out["raw_flow_delta_gex"] == 0.01
+    assert out["predicted_delta_gex"] == 0.1 + expected_flow_delta
+    assert out["predicted_total_gex"] == 1.0 + expected_flow_delta
+    assert out["flow_delta_gex"] == expected_flow_delta
+    assert out["predicted_strike"][4800.0] == 0.05 + (0.008 * expected_weight)
+    assert out["predicted_strike"][5000.0] == 0.002 * expected_weight
 
 
 def test_apply_flow_skips_when_no_events():

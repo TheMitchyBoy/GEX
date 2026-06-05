@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,30 @@ def _weighted_knn_predict(
     return predictions, list(nn_idx), weights, confidence
 
 
+def _calibrate_confidence(
+    raw_confidence: float,
+    *,
+    train_count: int,
+    model_overlay: dict[str, Any] | None = None,
+) -> tuple[float, dict[str, Any]]:
+    """Dampen confidence when the recent training window is thin."""
+    sample_factor = max(0.0, min(1.0, (train_count - 3) / 25.0))
+    model_conf = safe_float(model_overlay.get("confidence"), 0.0) if model_overlay else 0.0
+    overlay_factor = 0.15 if model_overlay else 0.0
+    calibrated = raw_confidence * (0.45 + 0.40 * sample_factor + overlay_factor)
+    if model_conf:
+        calibrated = 0.75 * calibrated + 0.25 * model_conf
+    calibrated = max(0.0, min(1.0, calibrated))
+    return calibrated, {
+        "raw_neighbor_confidence": raw_confidence,
+        "sample_factor": sample_factor,
+        "training_rows": train_count,
+        "model_overlay_used": bool(model_overlay),
+        "model_overlay_confidence": model_conf or None,
+        "method": "neighbor_distance_sample_damped",
+    }
+
+
 def prepare_training_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for i in range(len(history) - 1):
@@ -82,6 +107,8 @@ def prepare_training_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "target_delta_gex": nxt["total_gex"] - cur["total_gex"],
                 "target_flip": safe_float(nxt.get("gamma_flip"), safe_float(cur.get("gamma_flip"), 0.0)),
                 "target_near_term_ratio": nxt["near_term_ratio"],
+                "target_zero_dte_ratio": safe_float(nxt.get("zero_dte_ratio"), 0.0),
+                "target_term_curvature": safe_float(nxt.get("term_curvature"), 0.0),
                 "target_strike": nxt.get("strike"),
                 "next_ts": nxt["ts"],
             }
@@ -132,6 +159,8 @@ def predict_next_snapshot(
         "delta_gex": np.array([row["target_delta_gex"] for row in train]),
         "flip": np.array([row["target_flip"] for row in train]),
         "near_term_ratio": np.array([row["target_near_term_ratio"] for row in train]),
+        "zero_dte_ratio": np.array([row["target_zero_dte_ratio"] for row in train]),
+        "term_curvature": np.array([row["target_term_curvature"] for row in train]),
     }
 
     preds, nn_idx, nn_weights, confidence = _weighted_knn_predict(
@@ -141,11 +170,18 @@ def predict_next_snapshot(
     )
     preds["total_gex"] = current["total_gex"] + preds["delta_gex"]
 
+    raw_confidence = confidence
     model_preds = _predict_from_trained_models(current, enriched, lookback_days=lookback_days)
     if model_preds:
         preds["delta_gex"] = 0.5 * preds["delta_gex"] + 0.5 * model_preds.get("delta_gex", preds["delta_gex"])
         preds["total_gex"] = current["total_gex"] + preds["delta_gex"]
         confidence = 0.5 * confidence + 0.5 * model_preds.get("confidence", confidence)
+
+    confidence, confidence_breakdown = _calibrate_confidence(
+        confidence,
+        train_count=len(train),
+        model_overlay=model_preds,
+    )
 
     neighbors = []
     for rank, i in enumerate(nn_idx, start=1):
@@ -176,11 +212,25 @@ def predict_next_snapshot(
         "predicted_regime": "LONG gamma" if preds["total_gex"] >= 0 else "SHORT gamma",
         "predicted_flip": preds["flip"],
         "predicted_near_term_ratio": preds["near_term_ratio"],
+        "predicted_zero_dte_ratio": preds["zero_dte_ratio"],
+        "predicted_term_curvature": preds["term_curvature"],
         "predicted_strike": predicted_strike if not predicted_strike.empty else None,
         "regime_flip_probability": regime_flip_prob,
         "confidence": confidence,
+        "raw_confidence": raw_confidence,
+        "confidence_breakdown": confidence_breakdown,
         "neighbors": neighbors,
         "model_overlay": model_preds,
+        "model_manifest": _model_metadata(current.get("ticker", "SPX")),
+        "forecast_horizon": "next_snapshot",
+        "term_structure": {
+            "current_zero_dte_ratio": safe_float(current.get("zero_dte_ratio"), 0.0),
+            "predicted_zero_dte_ratio": preds["zero_dte_ratio"],
+            "current_near_term_ratio": safe_float(current.get("near_term_ratio"), 0.0),
+            "predicted_near_term_ratio": preds["near_term_ratio"],
+            "current_term_curvature": safe_float(current.get("term_curvature"), 0.0),
+            "predicted_term_curvature": preds["term_curvature"],
+        },
         "training_snapshot_count": len(enriched),
         "training_window_days": lookback_days,
     }
@@ -319,6 +369,24 @@ def _predict_from_trained_models(
     return result if result else None
 
 
+def _model_metadata(ticker: str) -> dict[str, Any] | None:
+    manifest = load_manifest(ticker)
+    if not manifest:
+        return None
+    return {
+        "ticker": manifest.get("ticker", ticker.upper()),
+        "model_type": manifest.get("model_type"),
+        "trained_at_utc": manifest.get("trained_at_utc"),
+        "feature_version": manifest.get("feature_version"),
+        "metrics": manifest.get("metrics", {}),
+        "training_start_ts": manifest.get("training_start_ts"),
+        "training_end_ts": manifest.get("training_end_ts"),
+        "lookback_days": manifest.get("lookback_days"),
+        "n_snapshots": manifest.get("n_snapshots"),
+        "lag": manifest.get("lag"),
+    }
+
+
 def _snapshot_to_feature_dict(row: dict) -> dict[str, float]:
     strike = row.get("strike", pd.Series(dtype=float))
     mag = strike.abs().sort_values(ascending=False) if len(strike) else pd.Series(dtype=float)
@@ -337,6 +405,9 @@ def _snapshot_to_feature_dict(row: dict) -> dict[str, float]:
         "near_term_gex_bn": row.get("near_term_gex_bn", 0.0),
         "near_term_ratio": row["near_term_ratio"],
         "back_term_gex_bn": row.get("back_term_gex_bn", 0.0),
+        "zero_dte_gex_bn": row.get("zero_dte_gex_bn", 0.0),
+        "zero_dte_ratio": row.get("zero_dte_ratio", 0.0),
+        "back_term_ratio": row.get("back_term_ratio", 0.0),
         "term_curvature": row.get("term_curvature", 0.0),
         "surface_mean_m": 0.0,
         "surface_std_m": 0.0,
@@ -348,6 +419,8 @@ def _snapshot_to_feature_dict(row: dict) -> dict[str, float]:
         "total_gex_momentum": safe_float(row.get("total_gex_momentum"), 0.0),
         "flip_velocity": safe_float(row.get("flip_velocity"), 0.0),
         "near_term_ratio_delta": safe_float(row.get("near_term_ratio_delta"), 0.0),
+        "zero_dte_ratio_delta": safe_float(row.get("zero_dte_ratio_delta"), 0.0),
+        "term_curvature_delta": safe_float(row.get("term_curvature_delta"), 0.0),
     }
     for i in range(5):
         features[f"top_gex_{i + 1}"] = float(mag.iloc[i]) if i < len(mag) else 0.0
@@ -416,8 +489,13 @@ def apply_flow_to_prediction(
         return prediction
 
     out = dict(prediction)
-    flow_delta = float(flow.get("predicted_flow_delta_gex_bn", 0.0))
+    raw_flow_delta = float(flow.get("predicted_flow_delta_gex_bn", 0.0))
+    event_count = int(flow.get("event_count", 0))
+    flow_weight = min(1.0, math.log1p(event_count) / math.log(101.0))
+    flow_delta = raw_flow_delta * flow_weight
     out["base_predicted_delta_gex"] = out["predicted_delta_gex"]
+    out["raw_flow_delta_gex"] = raw_flow_delta
+    out["flow_blend_weight"] = flow_weight
     out["flow_delta_gex"] = flow_delta
     out["predicted_delta_gex"] = out["predicted_delta_gex"] + flow_delta
     out["predicted_total_gex"] = out["predicted_total_gex"] + flow_delta
@@ -431,7 +509,7 @@ def apply_flow_to_prediction(
     elif knn_strike is None:
         knn_strike = pd.Series(dtype=float)
 
-    flow_strike = pd.Series(flow.get("flow_by_strike_bn", {}), dtype=float)
+    flow_strike = pd.Series(flow.get("flow_by_strike_bn", {}), dtype=float) * flow_weight
     if not flow_strike.empty:
         combined = knn_strike.add(flow_strike, fill_value=0.0)
         out["predicted_strike"] = combined if not combined.empty else None
