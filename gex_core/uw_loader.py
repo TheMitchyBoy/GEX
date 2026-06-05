@@ -260,6 +260,40 @@ def fetch_uw_greek_exposure(
     return df
 
 
+def fetch_uw_greek_exposure_by_expiration(
+    ticker: str,
+    api_key: str | None = None,
+    date: str | None = None,
+) -> pd.Series:
+    """Best-effort expiration-level GEX; empty series when endpoint unavailable."""
+    for path in (
+        f"/api/stock/{ticker}/greek-exposure/expiry",
+        f"/api/stock/{ticker}/greek-exposure/expiration",
+    ):
+        try:
+            rows = _get(path, api_key=api_key, date=date)
+        except Exception:
+            continue
+        if not rows:
+            continue
+        df = pd.DataFrame(rows)
+        exp_col = next((c for c in ("expiry", "expiration", "date") if c in df.columns), None)
+        gex_col = next(
+            (c for c in ("net_gex", "gex", "total_gex", "call_gex") if c in df.columns),
+            None,
+        )
+        if not exp_col or not gex_col:
+            continue
+        values = pd.to_numeric(df[gex_col], errors="coerce").fillna(0.0) / _GEX_SCALE
+        idx = pd.to_datetime(df[exp_col], errors="coerce")
+        series = pd.Series(values.values, index=idx, dtype=float)
+        series = series[~series.index.isna()].sort_index()
+        if not series.empty:
+            logger.info("Fetched %d expiration rows from UW %s for %s", len(series), path, ticker)
+            return series
+    return pd.Series(dtype=float)
+
+
 def fetch_uw_spot_exposures(
     ticker: str,
     api_key: str | None = None,
@@ -338,11 +372,14 @@ def fetch_uw_gex(
     UW computes GEX from verified transaction data (buy/sell flags) rather
     than open-interest alone, so values may differ from CBOE-based estimates.
     """
-    # Fetch both endpoints in parallel would be nice; keeping it simple here.
-    spot = fetch_uw_spot(ticker, api_key=api_key, date=date)
+    df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
+    spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=date)
+    spot = float(spot_df["price"].dropna().iloc[0]) if not spot_df.empty and "price" in spot_df.columns else fetch_uw_spot(
+        ticker, api_key=api_key, date=date
+    )
     logger.info("UW spot price for %s: %.2f", ticker, spot)
 
-    df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
+    gex_by_expiration = fetch_uw_greek_exposure_by_expiration(ticker, api_key=api_key, date=date)
 
     gex_by_strike = pd.Series(
         df["net_gex"].values,
@@ -359,6 +396,23 @@ def fetch_uw_gex(
     if market_date:
         gex_by_strike.attrs["market_date"] = market_date
         cumulative_gex.attrs["market_date"] = market_date
+        if not gex_by_expiration.empty:
+            gex_by_expiration.attrs["market_date"] = market_date
+
+    surface_data = pd.DataFrame()
+    if not df.empty and {"strike", "net_gex"}.issubset(df.columns):
+        surface_data = df[["strike", "net_gex"]].rename(columns={"net_gex": "GEX"}).copy()
+        if "call_charm" in df.columns:
+            surface_data["charm"] = pd.to_numeric(df["call_charm"], errors="coerce").fillna(0.0) + pd.to_numeric(
+                df["put_charm"], errors="coerce"
+            ).fillna(0.0)
+        if "call_vanna" in df.columns:
+            surface_data["vanna"] = pd.to_numeric(df["call_vanna"], errors="coerce").fillna(0.0) + pd.to_numeric(
+                df["put_vanna"], errors="coerce"
+            ).fillna(0.0)
+
+    gex_by_strike.attrs["greek_exposure_df"] = df
+    gex_by_strike.attrs["spot_exposures_df"] = spot_df
 
     logger.info(
         "UW GEX for %s: total=%.3f Bn$, strikes=%d, gamma_flip near zero-crossing",
@@ -367,9 +421,9 @@ def fetch_uw_gex(
 
     return spot, GexAggregates(
         gex_by_strike=gex_by_strike,
-        gex_by_expiration=pd.Series(dtype=float),  # not available at strike level
+        gex_by_expiration=gex_by_expiration,
         cumulative_gex=cumulative_gex,
-        surface_data=pd.DataFrame(),               # not available at strike level
+        surface_data=surface_data,
         total_gex_bn=total_gex_bn,
     )
 

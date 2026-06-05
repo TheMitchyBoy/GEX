@@ -247,6 +247,26 @@ def _run_uw(
         )
 
     if export_csv:
+        from gex_core.extended_features import merge_extended_features
+        from gex_core.market_features import fetch_cross_asset_returns, fetch_vol_regime
+
+        greek_df = gex_by_strike.attrs.get("greek_exposure_df") if hasattr(gex_by_strike, "attrs") else None
+        spot_df = None
+        try:
+            spot_df = fetch_uw_spot_exposures(ticker, api_key=uw_api_key, date=market_date)
+        except Exception:
+            spot_df = gex_by_strike.attrs.get("spot_exposures_df") if hasattr(gex_by_strike, "attrs") else None
+
+        extended_payload: dict = {}
+        merge_extended_features(
+            extended_payload,
+            greek_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+            spot_exposures_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
+            market_date=market_date,
+            vol_regime=fetch_vol_regime(),
+            cross_asset=fetch_cross_asset_returns(),
+        )
+
         summary = {
             "ticker": ticker.upper(),
             "data_source": "unusual_whales",
@@ -257,6 +277,7 @@ def _run_uw(
             "spot_price": float(spot_price),
             "total_gex_bn_per_pct": float(total_gex_bn),
             "net_gamma_regime": regime,
+            "extended_features": {k: extended_payload[k] for k in extended_payload},
             "call_wall": {
                 "strike": float(gex_by_strike.idxmax()),
                 "gex_bn_per_pct": float(gex_by_strike.max()),

@@ -27,6 +27,8 @@ class GexFetchResult:
     aggregates: GexAggregates
     market_date: str | None = None
     option_data: pd.DataFrame | None = None
+    greek_exposure_df: pd.DataFrame | None = None
+    spot_exposures_df: pd.DataFrame | None = None
     data_quality: Any | None = None
     note: str = ""
 
@@ -54,6 +56,8 @@ def fetch_gex_data(
 
     ticker = ticker.upper()
     spot, agg = fetch_uw_gex(ticker, api_key=api_key, date=market_date)
+    greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
+    spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
     return GexFetchResult(
         ticker=ticker,
         source=SOURCE_UW,
@@ -61,5 +65,7 @@ def fetch_gex_data(
         aggregates=agg,
         market_date=agg.gex_by_strike.attrs.get("market_date") or market_date,
         option_data=None,
+        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+        spot_exposures_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
         note="Unusual Whales greek-exposure by strike",
     )

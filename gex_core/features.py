@@ -21,6 +21,8 @@ from gex_core.exports import (
     load_strike_series,
     load_surface_df,
 )
+from gex_core.extended_features import EXTENDED_FEATURE_DEFAULTS, apply_extended_defaults, extended_feature_names
+from gex_core.event_calendar import event_calendar_features
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -296,39 +298,52 @@ def compute_features_from_exports(
         features["zero_dte_ratio_delta"] = 0.0
         features["term_curvature_delta"] = 0.0
 
+    market_date = None
+    if "summary" in info:
+        import json
+
+        with info["summary"].open(encoding="utf-8") as f:
+            summary = json.load(f)
+        market_date = summary.get("market_date")
+        extended = summary.get("extended_features") or {}
+        features.update({k: safe_float(v) for k, v in extended.items()})
+    features.update(event_calendar_features(market_date))
+    if market_date:
+        features["market_date"] = market_date
+
+    for key, default in EXTENDED_FEATURE_DEFAULTS.items():
+        features.setdefault(key, default)
     return features
 
 
 def snapshot_feature_vector(row: dict[str, Any]) -> np.ndarray:
     """Scalar feature vector for KNN from a snapshot metrics dict."""
-    return np.array(
-        [
-            row["total_gex"],
-            row["pos_gex"],
-            row["neg_gex"],
-            row["gex_std"],
-            row["near_term_ratio"],
-            row.get("surface_peak", 0.0),
-            safe_float(row.get("call_wall"), 0.0),
-            safe_float(row.get("put_wall"), 0.0),
-            safe_float(row.get("gamma_flip"), 0.0),
-            safe_float(row.get("wall_spread"), safe_float(row.get("call_wall"), 0.0) - safe_float(row.get("put_wall"), 0.0)),
-            safe_float(row.get("flip_distance_pct"), 0.0),
-            safe_float(row.get("total_gex_momentum"), 0.0),
-            safe_float(row.get("flip_velocity"), 0.0),
-            safe_float(row.get("gex_concentration"), 0.0),
-            safe_float(row.get("cum_slope_at_spot"), 0.0),
-            safe_float(row.get("zero_dte_ratio"), 0.0),
-            safe_float(row.get("back_term_ratio"), 0.0),
-            safe_float(row.get("term_curvature"), 0.0),
-            safe_float(row.get("expiration_count"), 0.0),
-            # Market-context dimensions (causal; default 0 when unavailable).
-            safe_float(row.get("realized_vol"), 0.0),
-            safe_float(row.get("spot_return"), 0.0),
-            safe_float(row.get("front_term_ratio"), 0.0),
-        ],
-        dtype=float,
-    )
+    base = [
+        row["total_gex"],
+        row["pos_gex"],
+        row["neg_gex"],
+        row["gex_std"],
+        row["near_term_ratio"],
+        row.get("surface_peak", 0.0),
+        safe_float(row.get("call_wall"), 0.0),
+        safe_float(row.get("put_wall"), 0.0),
+        safe_float(row.get("gamma_flip"), 0.0),
+        safe_float(row.get("wall_spread"), safe_float(row.get("call_wall"), 0.0) - safe_float(row.get("put_wall"), 0.0)),
+        safe_float(row.get("flip_distance_pct"), 0.0),
+        safe_float(row.get("total_gex_momentum"), 0.0),
+        safe_float(row.get("flip_velocity"), 0.0),
+        safe_float(row.get("gex_concentration"), 0.0),
+        safe_float(row.get("cum_slope_at_spot"), 0.0),
+        safe_float(row.get("zero_dte_ratio"), 0.0),
+        safe_float(row.get("back_term_ratio"), 0.0),
+        safe_float(row.get("term_curvature"), 0.0),
+        safe_float(row.get("expiration_count"), 0.0),
+        safe_float(row.get("realized_vol"), 0.0),
+        safe_float(row.get("spot_return"), 0.0),
+        safe_float(row.get("front_term_ratio"), 0.0),
+    ]
+    extended = [safe_float(row.get(name), 0.0) for name in extended_feature_names()]
+    return np.array(base + extended, dtype=float)
 
 
 def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -366,4 +381,4 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "term_curvature_delta",
     ):
         metrics[key] = safe_float(metrics.get(key), 0.0)
-    return metrics
+    return apply_extended_defaults(metrics)

@@ -21,9 +21,13 @@ def _resp(status: int, json_payload=None, headers=None):
     return r
 
 
-@patch("gex_core.uw_loader.fetch_uw_spot", return_value=5000.0)
+@patch("gex_core.uw_loader.fetch_uw_greek_exposure_by_expiration", return_value=pd.Series(dtype=float))
+@patch(
+    "gex_core.uw_loader.fetch_uw_spot_exposures",
+    return_value=pd.DataFrame({"price": [5000.0], "strike": [5000.0]}),
+)
 @patch("gex_core.uw_loader.fetch_uw_greek_exposure")
-def test_fetch_uw_gex_aggregates(mock_greek, mock_spot):
+def test_fetch_uw_gex_aggregates(mock_greek, mock_spot_df, _mock_exp):
     mock_greek.return_value = pd.DataFrame(
         {
             "strike": [4900.0, 5000.0],

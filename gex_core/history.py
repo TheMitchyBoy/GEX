@@ -127,6 +127,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
     summary_path = files.get("summary")
     source = None
     spot = None
+    extended_features: dict = {}
     if summary_path and summary_path.exists():
         import json
 
@@ -134,6 +135,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
             summary = json.load(f)
         source = summary.get("data_source") or summary.get("source")
         spot = summary.get("spot") or summary.get("spot_price")
+        extended_features = summary.get("extended_features") or {}
 
     metrics = {
         "ts": ts,
@@ -158,7 +160,9 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
         "data_source": source,
         "spot": spot,
+        "extended_features": extended_features,
     }
+    metrics.update({k: float(v) for k, v in extended_features.items() if isinstance(v, (int, float))})
     return enrich_snapshot_metrics(metrics)
 
 
