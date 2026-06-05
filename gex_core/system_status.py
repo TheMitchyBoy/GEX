@@ -46,7 +46,7 @@ def build_system_status(ticker: str | None = None) -> dict:
         "export_age_minutes": age_min,
         "export_stale": stale,
         "history_depth": len(history),
-        "index_db": str(db_path()),
+        "index_db_present": db_path().exists(),
         "refresh_interval_minutes": DEFAULT_REFRESH_MINUTES,
         "model_overlay_active": n_train is not None and n_train >= MIN_OVERLAY_TRAIN_ROWS,
         "model_training_rows": n_train,
