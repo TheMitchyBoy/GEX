@@ -303,7 +303,11 @@ def ticker_page(ticker):
                 uw_agg.gex_by_strike,
                 ticker,
                 spot=uw_entry.get("spot"),
-                title="Market Maker Position (UW Live)",
+                title="Gamma Exposure Map (UW Live)",
+                cumulative_series=uw_agg.cumulative_gex,
+                gamma_flip=uw_entry.get("gamma_flip"),
+                call_wall=selected.get("call_wall"),
+                put_wall=selected.get("put_wall"),
             )
             current_strike_chart_json = make_positive_strike_chart(
                 uw_agg.gex_by_strike,
@@ -368,7 +372,11 @@ def ticker_page(ticker):
         selected.get("strike"),
         ticker,
         spot=csv_spot,
-        title="Market Maker Position (UW CSV)",
+        title="Gamma Exposure Map (UW CSV)",
+        cumulative_series=selected.get("cumulative"),
+        gamma_flip=selected.get("gamma_flip"),
+        call_wall=selected.get("call_wall"),
+        put_wall=selected.get("put_wall"),
     )
     current_profile_series = selected.get("strike")
 
@@ -378,7 +386,11 @@ def ticker_page(ticker):
             uw_agg.gex_by_strike,
             ticker,
             spot=uw_spot,
-            title="Live · Unusual Whales (latest API)",
+            title="Live Gamma Exposure Map · Unusual Whales",
+            cumulative_series=uw_agg.cumulative_gex,
+            gamma_flip=uw_entry.get("gamma_flip"),
+            call_wall=float(uw_agg.gex_by_strike.idxmax()) if len(uw_agg.gex_by_strike) else None,
+            put_wall=float(uw_agg.gex_by_strike.idxmin()) if len(uw_agg.gex_by_strike) else None,
         )
 
     prediction = None
