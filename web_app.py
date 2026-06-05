@@ -30,8 +30,10 @@ from gex_core.market_features import fetch_spx_price, fetch_spx_price_history
 from gex_core.intelligence import (
     build_gamma_analysis_panel,
     build_data_quality_panel,
+    build_model_accountability_panel,
     build_outcome_panel,
     build_strategy_assistant,
+    build_term_structure_panel,
     build_today_regime_snapshot,
     build_watchlist_rows,
     compute_confluence_overlay,
@@ -253,8 +255,10 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
             "has_history": False,
             "summary": None,
             "gamma_analysis": build_gamma_analysis_panel(selected),
+            "term_structure": build_term_structure_panel(selected),
             "alerts": [],
             "strategy_notes": [],
+            "model_accountability": build_model_accountability_panel(ticker, None, {}),
             "watchlist": [],
         }
     selected = _select_snapshot(history, selected_ts)
@@ -266,6 +270,11 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
         prediction = apply_flow_to_prediction(prediction, flow_overlay)
     except Exception:
         logger.exception("Flow overlay failed for %s", ticker)
+    try:
+        backtest = backtest_delta_sign_accuracy(ticker)
+    except Exception:
+        logger.exception("Backtest metrics failed for %s", ticker)
+        backtest = {}
     confluence = compute_confluence_overlay(selected, prediction, flow_overlay)
     today = build_today_regime_snapshot(selected, prediction)
     alerts = generate_alerts(history, selected, prediction)
@@ -277,8 +286,10 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
         "selected_ts": selected.get("ts"),
         "summary": today,
         "gamma_analysis": build_gamma_analysis_panel(selected, prediction),
+        "term_structure": build_term_structure_panel(selected, prediction),
         "prediction": _prediction_public_view(prediction),
         "probabilities": probs,
+        "model_accountability": build_model_accountability_panel(ticker, prediction, backtest),
         "confluence": confluence,
         "alerts": alerts,
         "strategy_notes": strategy_notes,
@@ -415,6 +426,8 @@ def ticker_page(ticker):
             strategy_notes=build_strategy_assistant(selected, None, None),
             data_quality=build_data_quality_panel(selected, history),
             outcome_panel=None,
+            term_structure=build_term_structure_panel(selected),
+            model_accountability=build_model_accountability_panel(ticker, None, {}),
             scenario=None,
             scenario_pct=0.0,
             replay_index=0,
@@ -504,6 +517,8 @@ def ticker_page(ticker):
             prediction = dict(prediction)
             prediction["backtest_sign_accuracy"] = backtest["accuracy"]
             prediction["backtest_n"] = backtest["n"]
+            prediction["backtest_mae_delta"] = backtest.get("mae_delta")
+            prediction["backtest_baseline_momentum_accuracy"] = backtest.get("baseline_momentum_accuracy")
             prediction["backtest_baseline_accuracy"] = backtest.get("baseline_accuracy")
             prediction["calibrated_confidence"] = calibrate_confidence(
                 safe_float(prediction.get("confidence"), 0.0),
@@ -512,6 +527,7 @@ def ticker_page(ticker):
             )
     except Exception:
         logger.exception("Backtest metrics failed for %s", ticker)
+        backtest = {}
 
     current_strike_chart_json = make_positive_strike_chart(
         current_profile_series,
@@ -544,6 +560,8 @@ def ticker_page(ticker):
     strategy_notes = build_strategy_assistant(selected, prediction_raw, confluence_overlay)
     data_quality = build_data_quality_panel(selected, history)
     outcome_panel = build_outcome_panel(history, selected.get("ts"))
+    term_structure = build_term_structure_panel(selected, prediction_raw)
+    model_accountability = build_model_accountability_panel(ticker, prediction_raw, backtest)
 
     scenario_pct = safe_float(request.args.get("scenario_pct"), 0.0)
     scenario = simulate_spot_scenario(selected, scenario_pct / 100.0) if scenario_pct else None
@@ -599,6 +617,8 @@ def ticker_page(ticker):
         strategy_notes=strategy_notes,
         data_quality=data_quality,
         outcome_panel=outcome_panel,
+        term_structure=term_structure,
+        model_accountability=model_accountability,
         scenario=scenario,
         scenario_pct=scenario_pct,
         replay_index=replay_index,

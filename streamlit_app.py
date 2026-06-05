@@ -18,7 +18,8 @@ import streamlit as st
 from gex_core.exports import find_exports_for_ticker, load_strike_series, parse_timestamp
 from gex_core.features import compute_features_from_exports, enrich_snapshot_metrics
 from gex_core.history import build_history as build_history_from_exports
-from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
+from gex_core.backtest_metrics import backtest_delta_sign_accuracy
+from gex_core.predict import apply_flow_to_prediction, load_flow_predictions, predict_next_snapshot, similar_setups
 from gex_core.tickers import PRIMARY_TICKER
 
 EXPORT_DIR = Path("data/exports")
@@ -182,21 +183,47 @@ def render_predictions(ticker: str, history: list[dict]):
         st.warning("Could not generate prediction.")
         return
 
+    backtest = backtest_delta_sign_accuracy(ticker)
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Predicted ΔGEX", f"{pred['predicted_delta_gex']:+.3f} Bn$")
     c2.metric("Predicted Total GEX", f"{pred['predicted_total_gex']:.3f} Bn$")
     c3.metric("Regime Flip Prob", f"{pred['regime_flip_probability'] * 100:.1f}%")
     c4.metric("Confidence", f"{pred['confidence'] * 100:.1f}%")
 
-    st.caption(f"Predicted regime: **{pred['predicted_regime']}** · flip: {pred['predicted_flip']:.2f}")
+    st.caption(
+        f"Predicted regime: **{pred['predicted_regime']}** · "
+        f"flip: {pred['predicted_flip']:.2f} · "
+        f"training snapshots: {pred.get('training_snapshot_count', 0)}"
+    )
+
+    term = pred.get("term_structure", {})
+    if term:
+        tc1, tc2, tc3 = st.columns(3)
+        tc1.metric("0DTE Share Forecast", f"{term.get('predicted_zero_dte_ratio', 0.0) * 100:+.1f}%")
+        tc2.metric("Near-Term Share Forecast", f"{term.get('predicted_near_term_ratio', 0.0) * 100:+.1f}%")
+        tc3.metric("Term Curvature Forecast", f"{term.get('predicted_term_curvature', 0.0):+.3f}")
+
+    if backtest.get("n"):
+        bt1, bt2, bt3 = st.columns(3)
+        bt1.metric("Walk-forward Sign", f"{backtest['accuracy'] * 100:.1f}%")
+        bt2.metric(
+            "Momentum Baseline",
+            f"{backtest['baseline_momentum_accuracy'] * 100:.1f}%"
+            if backtest.get("baseline_momentum_accuracy") is not None
+            else "N/A",
+        )
+        bt3.metric("ΔGEX MAE", f"{backtest['mae_delta']:.3f}" if backtest.get("mae_delta") is not None else "N/A")
 
     spot = float(history[-1].get("spot", 4800))
     flow = load_flow_predictions(FLOW_FEED_PATH, spot=spot)
     if flow["event_count"] > 0:
+        pred_with_flow = apply_flow_to_prediction(pred, flow)
         st.markdown("**Live flow overlay**")
-        fc1, fc2 = st.columns(2)
-        fc1.metric("Flow ΔGEX", f"{flow['predicted_flow_delta_gex_bn']:+.4f} Bn$")
-        fc2.metric("Combined forecast", f"{pred['predicted_total_gex'] + flow['predicted_flow_delta_gex_bn']:.3f} Bn$")
+        fc1, fc2, fc3 = st.columns(3)
+        fc1.metric("Raw Flow ΔGEX", f"{flow['predicted_flow_delta_gex_bn']:+.4f} Bn$")
+        fc2.metric("Flow Weight", f"{pred_with_flow['flow_blend_weight'] * 100:.0f}%")
+        fc3.metric("Combined forecast", f"{pred_with_flow['predicted_total_gex']:.3f} Bn$")
         if flow["top_signals"]:
             sig_df = pd.DataFrame(flow["top_signals"])
             st.dataframe(sig_df[["strike", "direction", "score", "recent_gex"]], use_container_width=True)

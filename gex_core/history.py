@@ -16,7 +16,7 @@ from gex_core.exports import (
     load_surface_df,
     parse_timestamp,
 )
-from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip
+from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip, term_structure_breakdown
 from gex_core.tickers import SUPPORTED_TICKERS
 
 
@@ -75,11 +75,10 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
     put_wall = float(strike.idxmin()) if len(strike) else None
     gamma_flip = estimate_gamma_flip(cumulative)
 
-    near_term = float(exp_vals.head(3).sum()) if len(exp_vals) else 0.0
-    term_total = float(exp_vals.sum()) if len(exp_vals) else 0.0
-    near_term_ratio = near_term / term_total if term_total else 0.0
-    front_term = float(exp_vals.iloc[0]) if len(exp_vals) else 0.0
-    front_term_ratio = front_term / term_total if term_total else 0.0
+    term_breakdown = term_structure_breakdown(
+        exp_vals,
+        snapshot_date=pd.Timestamp(parse_timestamp(ts)),
+    )
 
     summary_path = files.get("summary")
     source = None
@@ -110,8 +109,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         "call_wall": call_wall,
         "put_wall": put_wall,
         "gamma_flip": gamma_flip,
-        "near_term_ratio": near_term_ratio,
-        "front_term_ratio": front_term_ratio,
+        **term_breakdown,
         "surface_peak": surface_peak,
         "regime": "LONG gamma" if total_gex >= 0 else "SHORT gamma",
         "data_source": source,
