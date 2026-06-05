@@ -12,7 +12,8 @@ from gex_core.history import build_history, get_latest_ts
 from gex_core.models_manifest import load_manifest
 from gex_core.predict import MIN_OVERLAY_TRAIN_ROWS
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES
-from gex_core.storage import db_path, export_age_minutes, sync_ticker_exports
+from gex_core.export_diagnostics import summarize_export_state
+from gex_core.storage import db_path, export_age_minutes
 from gex_core.tickers import PRIMARY_TICKER
 
 
@@ -32,8 +33,9 @@ def build_system_status(ticker: str | None = None) -> dict:
     if age_min is not None and age_min > DEFAULT_REFRESH_MINUTES * 3:
         stale = True
 
+    export_state: dict = {}
     try:
-        sync_ticker_exports(ticker, EXPORT_DIR)
+        export_state = summarize_export_state(ticker)
     except Exception:
         pass
 
@@ -45,8 +47,12 @@ def build_system_status(ticker: str | None = None) -> dict:
         "latest_export_ts": latest_ts,
         "export_age_minutes": age_min,
         "export_stale": stale,
-        "history_depth": len(list_export_timestamps(ticker, EXPORT_DIR)),
+        "history_depth": export_state.get("catalog_timestamps", len(list_export_timestamps(ticker, EXPORT_DIR))),
         "history_loaded": len(history),
+        "strike_csv_on_disk": export_state.get("strike_csv_on_disk"),
+        "forecast_loadable": export_state.get("forecast_loadable"),
+        "export_index_stale": export_state.get("index_stale"),
+        "export_needs_backfill": export_state.get("needs_backfill"),
         "index_db_present": db_path().exists(),
         "refresh_interval_minutes": DEFAULT_REFRESH_MINUTES,
         "model_overlay_active": n_train is not None and n_train >= MIN_OVERLAY_TRAIN_ROWS,

@@ -14,4 +14,4 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "2", "--timeout", "120", "wsgi:app"]
+CMD ["bash", "scripts/start_web.sh"]
