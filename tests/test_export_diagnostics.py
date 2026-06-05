@@ -3,6 +3,41 @@ import json
 from gex_core.export_diagnostics import forecast_blocker_from_state, summarize_export_state
 
 
+def test_prediction_lookback_auto_widens(tmp_path, monkeypatch):
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    db = tmp_path / "index.db"
+    monkeypatch.setenv("GEX_INDEX_DB", str(db))
+    monkeypatch.setenv("GEX_PREDICTION_LOOKBACK_DAYS", "30")
+    monkeypatch.setenv("GEX_PREDICTION_LOOKBACK_FALLBACK_DAYS", "90")
+    monkeypatch.setattr("gex_core.exports.EXPORT_DIR", export_dir)
+    monkeypatch.setattr("gex_core.history.EXPORT_DIR", export_dir)
+    monkeypatch.setattr("gex_core.storage.EXPORT_DIR", export_dir)
+
+    for day in range(1, 32):
+        ts = f"2026-03-{day:02d}_120000"
+        (export_dir / f"SPX_gex_by_strike_{ts}.csv").write_text(
+            "strike,gex_bn_per_pct\n5000,1.0\n",
+            encoding="utf-8",
+        )
+        (export_dir / f"SPX_cumulative_gex_{ts}.csv").write_text(
+            "strike,cumulative_gex_bn_per_pct\n5000,1.0\n",
+            encoding="utf-8",
+        )
+    (export_dir / "SPX_gex_by_strike_2026-06-05_120000.csv").write_text(
+        "strike,gex_bn_per_pct\n5000,2.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "SPX_cumulative_gex_2026-06-05_120000.csv").write_text(
+        "strike,cumulative_gex_bn_per_pct\n5000,2.0\n",
+        encoding="utf-8",
+    )
+
+    from gex_core.export_diagnostics import prediction_lookback_days
+
+    assert prediction_lookback_days("SPX") == 90
+
+
 def test_forecast_blocker_when_csvs_missing_on_disk():
     msg = forecast_blocker_from_state(
         {

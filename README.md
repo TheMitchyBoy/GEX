@@ -142,9 +142,9 @@ python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 | `GEX_BACKFILL_INTERVAL_MINUTES` | `10` | Sample UW 1-minute API rows every N minutes |
 | `GEX_INTRADAY_BACKFILL_DAYS` | `90` | Default lookback for intraday backfill script |
 | `GEX_DAILY_BACKFILL_DAYS` | `90` | EOD strike backfill via `gex_backfill_intraday.py` |
-| `GEX_DASHBOARD_HISTORY_DAYS` | `30` | Recent snapshots for KNN / panels |
+| `GEX_DASHBOARD_HISTORY_DAYS` | `90` | Recent snapshots for KNN / panels |
 | `GEX_DASHBOARD_HISTORY_MAX` | `240` | Max strike CSVs loaded per dashboard request |
-| `GEX_PREDICTION_LOOKBACK_DAYS` | `30` | KNN / forecast training window on dashboard |
+| `GEX_PREDICTION_LOOKBACK_DAYS` | `90` | KNN / forecast training window on dashboard |
 | `GEX_TRAIN_LOOKBACK_DAYS` | `90` | Default lookback for `train_gex_model.py` |
 | `GEX_DASHBOARD_TIMELINE_DAYS` | `90` | Spot vs levels timeline from backfill index |
 | `GEX_SPX_PRICE_PERIOD` | `5d` | Yahoo Finance window for live SPX chart |

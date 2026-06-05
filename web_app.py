@@ -72,7 +72,7 @@ from gex_core.predict import (
 from gex_core.alert_dispatch import maybe_dispatch_alerts
 from gex_core.env_bootstrap import bootstrap_env, uw_api_configured, uw_api_key
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
-from gex_core.export_diagnostics import summarize_export_state
+from gex_core.export_diagnostics import prediction_lookback_days, summarize_export_state
 from gex_core.system_status import build_system_status
 from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
 
@@ -235,7 +235,7 @@ def _select_snapshot(history: list, requested_ts: str | None, ticker: str | None
 def _dashboard_history(ticker: str) -> list[dict]:
     return build_history(
         ticker,
-        lookback_days=int(os.environ.get("GEX_DASHBOARD_HISTORY_DAYS", "30")),
+        lookback_days=int(os.environ.get("GEX_DASHBOARD_HISTORY_DAYS", "90")),
         max_snapshots=int(os.environ.get("GEX_DASHBOARD_HISTORY_MAX", "240")),
         dedupe_identical_strikes=True,
     )
@@ -251,7 +251,7 @@ def _prediction_history(ticker: str) -> list[dict]:
     }
     return build_history(
         ticker,
-        lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
+        lookback_days=prediction_lookback_days(ticker),
         max_snapshots=int(os.environ.get("GEX_PREDICTION_HISTORY_MAX", "240")),
         dedupe_identical_strikes=dedupe,
     )
@@ -427,7 +427,7 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
         }
     selected = _select_snapshot(history, selected_ts, ticker=ticker)
     prediction_history = _prediction_history(ticker)
-    prediction_lookback = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30"))
+    prediction_lookback = prediction_lookback_days(ticker)
     prediction = predict_next_snapshot(prediction_history, lookback_days=prediction_lookback)
     flow_overlay = None
     spot_for_flow = safe_float(selected.get("spot"), 0.0) or 4800.0
@@ -703,7 +703,7 @@ def ticker_page(ticker):
     prediction = None
     flow_overlay = None
     prediction_history = _prediction_history(ticker)
-    prediction_lookback = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30"))
+    prediction_lookback = prediction_lookback_days(ticker)
     forecast_blocker = None
     try:
         prediction = predict_next_snapshot(prediction_history, lookback_days=prediction_lookback)
@@ -972,7 +972,7 @@ def _auto_dispatch_alerts(ticker: str) -> None:
     prediction_history = _prediction_history(ticker)
     prediction = predict_next_snapshot(
         prediction_history,
-        lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
+        lookback_days=prediction_lookback_days(ticker),
     )
     alerts = generate_alerts(history, selected, prediction)
     maybe_dispatch_alerts(ticker, alerts, manual=False)
