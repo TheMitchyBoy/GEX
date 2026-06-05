@@ -423,7 +423,9 @@ def ticker_page(ticker):
     )
     predicted_strike_chart_json = None
     if prediction:
-        knn_strike = prediction.get("knn_strike") or prediction.get("predicted_strike")
+        knn_strike = prediction.get("knn_strike")
+        if knn_strike is None:
+            knn_strike = prediction.get("predicted_strike")
         flow_strike = prediction.get("flow_strike")
         combined_strike = prediction.get("predicted_strike")
         if knn_strike is not None or combined_strike is not None:
