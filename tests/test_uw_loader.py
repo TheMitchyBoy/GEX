@@ -1,8 +1,24 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
+import requests
 
-from gex_core.uw_loader import _normalize_net_exposure, fetch_uw_gex, fetch_uw_greek_exposure
+from gex_core.uw_loader import _get, _normalize_net_exposure, fetch_uw_gex, fetch_uw_greek_exposure
+
+
+def _resp(status: int, json_payload=None, headers=None):
+    r = MagicMock(spec=requests.Response)
+    r.status_code = status
+    r.headers = headers or {}
+    r.json.return_value = json_payload if json_payload is not None else {"data": []}
+
+    def _raise():
+        if status >= 400:
+            raise requests.HTTPError(f"{status} error")
+
+    r.raise_for_status.side_effect = _raise
+    return r
 
 
 @patch("gex_core.uw_loader.fetch_uw_spot", return_value=5000.0)
@@ -73,3 +89,47 @@ def test_fetch_uw_greek_exposure_passes_historical_date(mock_get):
         date="2026-06-03",
     )
     assert df.attrs["market_date"] == "2026-06-03"
+
+
+@patch("gex_core.uw_loader.time.sleep", return_value=None)
+@patch("gex_core.uw_loader.requests.get")
+def test_get_retries_on_429_then_succeeds(mock_get, _sleep):
+    mock_get.side_effect = [
+        _resp(429, headers={"Retry-After": "0"}),
+        _resp(200, {"data": [{"strike": "1"}]}),
+    ]
+    data = _get("/api/x", api_key="k")
+    assert data == [{"strike": "1"}]
+    assert mock_get.call_count == 2
+
+
+@patch("gex_core.uw_loader.time.sleep", return_value=None)
+@patch("gex_core.uw_loader.requests.get")
+def test_get_retries_on_timeout_then_succeeds(mock_get, _sleep):
+    mock_get.side_effect = [
+        requests.Timeout("slow"),
+        _resp(200, {"data": [{"ok": 1}]}),
+    ]
+    data = _get("/api/x", api_key="k")
+    assert data == [{"ok": 1}]
+    assert mock_get.call_count == 2
+
+
+@patch("gex_core.uw_loader.time.sleep", return_value=None)
+@patch("gex_core.uw_loader.requests.get")
+def test_get_does_not_retry_on_403(mock_get, _sleep):
+    mock_get.return_value = _resp(403)
+    with pytest.raises(requests.HTTPError):
+        _get("/api/x", api_key="k")
+    assert mock_get.call_count == 1
+
+
+@patch("gex_core.uw_loader.time.sleep", return_value=None)
+@patch("gex_core.uw_loader.requests.get")
+def test_get_raises_after_exhausting_retries(mock_get, _sleep):
+    mock_get.return_value = _resp(503)
+    with pytest.raises(requests.HTTPError):
+        _get("/api/x", api_key="k")
+    # initial attempt + _MAX_RETRIES
+    from gex_core.uw_loader import _MAX_RETRIES
+    assert mock_get.call_count == _MAX_RETRIES + 1
