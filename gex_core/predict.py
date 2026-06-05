@@ -186,6 +186,7 @@ def forecast_blocker_message(
     *,
     lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
     export_timestamp_count: int | None = None,
+    strike_file_count: int | None = None,
 ) -> str | None:
     """Human-readable reason when ``predict_next_snapshot`` would return None."""
     ordered = sorted(history, key=lambda row: row["ts"])
@@ -196,15 +197,27 @@ def forecast_blocker_message(
         )
     if len(windowed) < MIN_KNN_SNAPSHOTS:
         export_hint = ""
-        if export_timestamp_count is not None and export_timestamp_count >= MIN_KNN_SNAPSHOTS:
+        on_disk = strike_file_count if strike_file_count is not None else export_timestamp_count
+        if (
+            export_timestamp_count is not None
+            and on_disk is not None
+            and export_timestamp_count > on_disk
+            and export_timestamp_count >= MIN_KNN_SNAPSHOTS
+        ):
             export_hint = (
-                f" ({export_timestamp_count} export timestamps are indexed, but only "
+                f" The SQLite index still listed {export_timestamp_count} timestamps, but only "
+                f"{on_disk} strike CSV files exist on disk (likely wiped by a redeploy without a "
+                f"persistent volume). Re-run intraday backfill or set GEX_STARTUP_BACKFILL=1."
+            )
+        elif export_timestamp_count is not None and export_timestamp_count >= MIN_KNN_SNAPSHOTS:
+            export_hint = (
+                f" ({export_timestamp_count} timestamps in the export catalog, but only "
                 f"{len(ordered)} load into the forecast window — check missing strike CSVs "
                 f"or raise GEX_PREDICTION_LOOKBACK_DAYS / GEX_PREDICTION_HISTORY_MAX.)"
             )
         return (
             f"Need at least {MIN_KNN_SNAPSHOTS} loadable snapshots in the forecast window; "
-            f"found {len(windowed)}{export_hint}"
+            f"found {len(windowed)}.{export_hint}"
         )
     enriched = [enrich_snapshot_metrics(h.copy()) for h in windowed]
     attach_market_features(enriched)

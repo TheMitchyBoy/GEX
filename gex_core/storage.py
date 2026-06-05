@@ -131,12 +131,55 @@ def list_indexed_timestamps(ticker: str, path: Path | None = None) -> list[str]:
     return []
 
 
+def strike_export_path(ticker: str, ts: str, export_dir: Path | None = None) -> Path:
+    export_dir = export_dir or EXPORT_DIR
+    return export_dir / f"{ticker.upper()}_gex_by_strike_{ts}.csv"
+
+
+def count_strike_exports_on_disk(ticker: str, export_dir: Path | None = None) -> int:
+    """Count strike CSV snapshots present on disk (ignores the SQLite index)."""
+    return len(scan_export_timestamps(ticker, export_dir or EXPORT_DIR))
+
+
+def prune_stale_index_entries(
+    ticker: str,
+    export_dir: Path | None = None,
+    path: Path | None = None,
+) -> int:
+    """Remove index rows whose strike CSV no longer exists on disk."""
+    export_dir = export_dir or EXPORT_DIR
+    ticker = ticker.upper()
+    on_disk = set(scan_export_timestamps(ticker, export_dir))
+    indexed = list_indexed_timestamps(ticker, path)
+    stale = [ts for ts in indexed if ts not in on_disk]
+    if not stale:
+        return 0
+    try:
+        with _connect(path) as conn:
+            conn.executemany(
+                "DELETE FROM snapshots WHERE ticker = ? AND ts = ?",
+                [(ticker, ts) for ts in stale],
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        logger.warning("SQLite prune_stale_index_entries failed: %s", exc)
+        return 0
+    logger.info(
+        "Pruned %d stale %s index entries (strike CSV missing under %s)",
+        len(stale),
+        ticker,
+        export_dir,
+    )
+    return len(stale)
+
+
 def sync_ticker_exports(ticker: str, export_dir: Path | None = None, path: Path | None = None) -> int:
-    """Index any export timestamps missing from the SQLite catalog."""
+    """Reconcile SQLite index with on-disk strike exports."""
     import json
 
     export_dir = export_dir or EXPORT_DIR
     ticker = ticker.upper()
+    prune_stale_index_entries(ticker, export_dir, path)
     existing = set(list_indexed_timestamps(ticker, path))
     timestamps = [ts for ts in scan_export_timestamps(ticker, export_dir) if ts not in existing]
     added = 0
