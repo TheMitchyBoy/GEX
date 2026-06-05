@@ -87,7 +87,7 @@
           {% if latest_ts %}
           <span class="small text-secondary mono">{{ latest_ts }} · every {{ refresh_minutes }}m</span>
           {% endif %}
-          <a class="btn btn-sm btn-outline-secondary" href="/">← All</a>
+          <a class="btn btn-sm btn-outline-secondary" href="/">← SPX Home</a>
           <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker, force_refresh=1) }}">Refresh</a>
         </div>
       </section>
@@ -132,8 +132,8 @@
           {% endif %}
           <button id="replayToggle" class="btn btn-sm btn-outline-info" type="button">Auto Replay</button>
           <span class="small text-secondary">Step {{ replay_index + 1 }} / {{ timestamps|length }}</span>
-          <a class="btn btn-sm btn-outline-secondary ms-auto" href="{{ url_for('api_latest_summary') }}?ticker={{ ticker }}">API summary</a>
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_widget', ticker=ticker) }}">Widget</a>
+          <a class="btn btn-sm btn-outline-secondary ms-auto" href="{{ url_for('api_latest_summary') }}">API summary</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_widget', ticker='SPX') }}">Widget</a>
         </div>
       </div>
       {% endif %}

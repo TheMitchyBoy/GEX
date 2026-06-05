@@ -98,63 +98,31 @@
         <div class="muted small">This deployment is locked to SPX only.</div>
       </section>
 
-      <section class="row g-3" id="tickerGrid">
-        {% if tickers %}
-          {% for row in tickers %}
-          <article class="col-12 col-md-6 col-xl-4 ticker-item" data-ticker="{{ row.ticker }}">
-            <div class="glass rounded-4 p-3 p-lg-4 h-100 ticker-card">
-              <div class="d-flex justify-content-between align-items-center mb-2">
-                <h2 class="h5 mb-0">{{ row.ticker }}</h2>
-                <span class="pill {{ 'pill-long' if 'LONG' in row.regime else 'pill-short' }}">{{ row.regime }}</span>
-              </div>
-              <div class="small muted">Snapshots: {{ row.history_count }}</div>
-              <div class="small muted mb-2">Latest: {{ row.latest_ts }}</div>
-              <div class="mb-1"><strong>Total GEX:</strong> {{ row.total_gex_text }}</div>
-              <div class="small muted mb-2">Flip distance: {{ row.flip_distance_text }}</div>
-              <div class="small muted mb-3">Confluence {{ row.confluence_text }} · Stability {{ row.stability_text }}</div>
-              <a class="btn btn-primary mt-auto w-100" href="{{ url_for('ticker_page', ticker=row.ticker) }}">Open SPX Experience</a>
-            </div>
-          </article>
-          {% endfor %}
-        {% else %}
-          <div class="col-12">
-            <div class="glass rounded-4 p-4">
-              <h2 class="h5">No exports yet</h2>
-              <p class="mb-0 muted">Run <code>python main.py --ticker SPX --no-show</code> to generate historical snapshots.</p>
-            </div>
-          </div>
-        {% endif %}
-      </section>
       {% if tickers %}
-      <section class="glass rounded-4 p-3 p-lg-4 mt-4">
-        <h2 class="h5 mb-3">SPX watchlist</h2>
-        <div class="table-responsive">
-          <table class="table table-dark table-striped table-hover align-middle mb-0">
-            <thead>
-              <tr>
-                <th>Ticker</th>
-                <th>Regime</th>
-                <th class="text-end">Net GEX</th>
-                <th class="text-end">Flip distance</th>
-                <th class="text-end">Confluence</th>
-                <th class="text-end">Stability</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for row in tickers %}
-              <tr>
-                <td class="fw-semibold">{{ row.ticker }}</td>
-                <td>{{ row.regime }}</td>
-                <td class="text-end mono">{{ row.total_gex_text }}</td>
-                <td class="text-end mono">{{ row.flip_distance_text }}</td>
-                <td class="text-end mono">{{ row.confluence_text }}</td>
-                <td class="text-end mono">{{ row.stability_text }}</td>
-                <td class="text-end"><a class="btn btn-sm btn-outline-light" href="{{ url_for('ticker_page', ticker=row.ticker) }}">Open</a></td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+      {% set row = tickers[0] %}
+      <section class="row g-3">
+        <article class="col-12 col-lg-8 col-xl-6">
+          <div class="glass rounded-4 p-3 p-lg-4 h-100 ticker-card">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h2 class="h5 mb-0">SPX</h2>
+              <span class="pill {{ 'pill-long' if 'LONG' in row.regime else 'pill-short' }}">{{ row.regime }}</span>
+            </div>
+            <div class="small muted">Snapshots: {{ row.history_count }}</div>
+            <div class="small muted mb-2">Latest: {{ row.latest_ts }}</div>
+            <div class="mb-1"><strong>Total GEX:</strong> {{ row.total_gex_text }}</div>
+            <div class="small muted mb-2">Flip distance: {{ row.flip_distance_text }}</div>
+            <div class="small muted mb-3">Confluence {{ row.confluence_text }} · Stability {{ row.stability_text }}</div>
+            <a class="btn btn-primary mt-auto w-100" href="{{ url_for('ticker_page', ticker='SPX') }}">Open SPX Dashboard</a>
+          </div>
+        </article>
+      </section>
+      {% else %}
+      <section class="row g-3">
+        <div class="col-12">
+          <div class="glass rounded-4 p-4">
+            <h2 class="h5">No SPX exports yet</h2>
+            <p class="mb-0 muted">Run <code>python main.py --ticker SPX --no-show</code> to generate SPX snapshots.</p>
+          </div>
         </div>
       </section>
       {% endif %}
