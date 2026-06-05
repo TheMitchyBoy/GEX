@@ -18,3 +18,6 @@ Future ideas:
 - Production UW flow websocket adapter (see `docs/LIVE_FEED.md`)
 - Parquet export format for large ML training sets
 - Multi-ticker support behind a feature flag when API quota allows
+
+See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) for a prioritized engineering
+backlog (security, correctness, reliability, performance, testing, ops, UX).
