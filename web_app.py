@@ -234,7 +234,7 @@ def _dashboard_history(ticker: str) -> list[dict]:
     return build_history(
         ticker,
         lookback_days=int(os.environ.get("GEX_DASHBOARD_HISTORY_DAYS", "30")),
-        max_snapshots=int(os.environ.get("GEX_DASHBOARD_HISTORY_MAX", "120")),
+        max_snapshots=int(os.environ.get("GEX_DASHBOARD_HISTORY_MAX", "240")),
     )
 
 
@@ -364,7 +364,10 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
             "watchlist": [],
         }
     selected = _select_snapshot(history, selected_ts, ticker=ticker)
-    prediction = predict_next_snapshot(history)
+    prediction = predict_next_snapshot(
+        history,
+        lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
+    )
     flow_overlay = None
     spot_for_flow = safe_float(selected.get("spot"), 0.0) or 4800.0
     try:
@@ -638,7 +641,10 @@ def ticker_page(ticker):
     prediction = None
     flow_overlay = None
     try:
-        prediction = predict_next_snapshot(history)
+        prediction = predict_next_snapshot(
+            history,
+            lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
+        )
     except Exception:
         logger.exception("Prediction failed for %s", ticker)
 
@@ -899,7 +905,10 @@ def _auto_dispatch_alerts(ticker: str) -> None:
     if not history:
         return
     selected = _select_snapshot(history, None)
-    prediction = predict_next_snapshot(history)
+    prediction = predict_next_snapshot(
+        history,
+        lookback_days=int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30")),
+    )
     alerts = generate_alerts(history, selected, prediction)
     maybe_dispatch_alerts(ticker, alerts, manual=False)
 

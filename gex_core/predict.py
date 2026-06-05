@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # Resolve relative to repo root so gunicorn/docker cwd does not break loading.
 MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
-DEFAULT_LOOKBACK_DAYS = 7
+DEFAULT_LOOKBACK_DAYS = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "30"))
 # Minimum snapshots needed for the KNN forecast at all. If the regime window is
 # too sparse we expand the pool rather than refusing to forecast (decouples the
 # regime window from the training-size requirement).

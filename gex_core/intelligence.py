@@ -241,7 +241,7 @@ def build_model_accountability_panel(
     raw_confidence = safe_float(prediction.get("raw_confidence"), confidence) if prediction else 0.0
 
     warnings: list[str] = []
-    if training_count and training_count < 30:
+    if training_count and training_count < 8:
         warnings.append("Recent training window is thin; confidence is sample-damped.")
     elif not training_count:
         warnings.append("No forecast was generated for this snapshot.")

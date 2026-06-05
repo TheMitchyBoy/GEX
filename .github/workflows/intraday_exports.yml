@@ -35,15 +35,23 @@ jobs:
           mkdir -p data/exports img
           python scripts/gex_refresh.py --tickers SPX --force
 
-      - name: Commit and push exports
+      - name: Retrain SPX overlay model
+        env:
+          GEX_TRAIN_LOOKBACK_DAYS: "90"
+          GEX_TRAIN_MAX_CV_FOLDS: "120"
+        run: |
+          set -euo pipefail
+          python scripts/train_gex_model.py --ticker SPX --lookback-days 90
+
+      - name: Commit and push exports and model
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/exports/*.csv data/exports/*.json 2>/dev/null || true
+          git add data/exports/*.csv data/exports/*.json models/SPX/manifest.json models/SPX_gex_delta_model.joblib 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "No export changes to commit"
+            echo "No export or model changes to commit"
           else
-            git commit -m "chore: intraday GEX exports [skip ci] $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git commit -m "chore: intraday GEX exports and model retrain [skip ci] $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             git push
           fi

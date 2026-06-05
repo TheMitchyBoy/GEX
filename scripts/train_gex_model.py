@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -35,7 +36,7 @@ LAG = 3
 # Wider default window than the original 7 days: a one-week window routinely
 # produced only 2-3 training rows. 30 days keeps the model regime-relevant while
 # giving the regressor enough samples to be meaningful.
-DEFAULT_LOOKBACK_DAYS = 30
+DEFAULT_LOOKBACK_DAYS = int(os.environ.get("GEX_TRAIN_LOOKBACK_DAYS", "90"))
 # Minimum folds before walk-forward CV metrics are reported.
 MIN_CV_FOLDS = 3
 
@@ -107,8 +108,13 @@ def walk_forward_cv(X_all: pd.DataFrame, y: pd.Series, min_train: int = 4) -> di
     trains on the past and predicts the next point, then expands. Reports mean
     out-of-sample MAE and sign accuracy across folds.
     """
+    max_folds = int(os.environ.get("GEX_TRAIN_MAX_CV_FOLDS", "120"))
+    start_at = min_train
+    if len(X_all) - min_train > max_folds:
+        start_at = len(X_all) - max_folds
+
     preds, actuals = [], []
-    for split_at in range(min_train, len(X_all)):
+    for split_at in range(start_at, len(X_all)):
         X_tr, y_tr = X_all.iloc[:split_at], y.iloc[:split_at]
         X_te, y_te = X_all.iloc[split_at : split_at + 1], y.iloc[split_at : split_at + 1]
         model, _ = _make_regressor(len(X_tr))
