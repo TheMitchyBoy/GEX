@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 import os
-from functools import lru_cache
+import time
 
 import pandas as pd
 import requests
@@ -49,6 +49,14 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.unusualwhales.com"
 _CLIENT_ID = "100001"
+
+# Request resilience. Transient UW failures (timeouts, rate limits, gateway
+# errors) should not abort an entire snapshot refresh. Retry a few times with
+# exponential backoff; configurable via env for ops tuning.
+_REQUEST_TIMEOUT = float(os.environ.get("UW_HTTP_TIMEOUT", "15"))
+_MAX_RETRIES = int(os.environ.get("UW_HTTP_MAX_RETRIES", "3"))
+_BACKOFF_BASE_SECONDS = float(os.environ.get("UW_HTTP_BACKOFF_SECONDS", "1.0"))
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 # UW greek-exposure values are in millions of dollars (M$).
 # Divide by 1e3 to convert M$ → Bn$ (our pipeline unit).
@@ -105,8 +113,24 @@ def _api_key(api_key: str | None = None) -> str:
     return key
 
 
+def _retry_after_seconds(resp: requests.Response, attempt: int) -> float:
+    """Backoff delay for a retryable response, honoring ``Retry-After`` if sent."""
+    header = resp.headers.get("Retry-After") if resp is not None else None
+    if header:
+        try:
+            return min(float(header), 30.0)
+        except ValueError:
+            pass
+    return _BACKOFF_BASE_SECONDS * (2 ** attempt)
+
+
 def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
-    """GET a UW API endpoint and return the ``data`` list."""
+    """GET a UW API endpoint and return the ``data`` list.
+
+    Retries transient failures (connection errors, timeouts, HTTP 429/5xx) with
+    exponential backoff so a single hiccup does not abort a snapshot refresh.
+    Non-retryable errors (e.g. 401/403/404) are raised immediately.
+    """
     key = _api_key(api_key)
     url = f"{_BASE_URL}{path}"
     headers = {
@@ -114,12 +138,44 @@ def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
         "UW-CLIENT-API-ID": _CLIENT_ID,
     }
     clean_params = {key: value for key, value in params.items() if value is not None}
-    resp = requests.get(url, headers=headers, params=clean_params or None, timeout=15)
-    resp.raise_for_status()
-    payload = resp.json()
-    if "error" in payload:
-        raise RuntimeError(f"UW API error for {path!r}: {payload['error']}")
-    return payload.get("data", [])
+
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                url, headers=headers, params=clean_params or None, timeout=_REQUEST_TIMEOUT
+            )
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                delay = _BACKOFF_BASE_SECONDS * (2 ** attempt)
+                logger.warning(
+                    "UW request %s failed (%s); retry %d/%d in %.1fs",
+                    path, type(exc).__name__, attempt + 1, _MAX_RETRIES, delay,
+                )
+                time.sleep(delay)
+                continue
+            raise
+
+        if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
+            delay = _retry_after_seconds(resp, attempt)
+            logger.warning(
+                "UW request %s returned %d; retry %d/%d in %.1fs",
+                path, resp.status_code, attempt + 1, _MAX_RETRIES, delay,
+            )
+            time.sleep(delay)
+            continue
+
+        resp.raise_for_status()
+        payload = resp.json()
+        if "error" in payload:
+            raise RuntimeError(f"UW API error for {path!r}: {payload['error']}")
+        return payload.get("data", [])
+
+    # Exhausted retries on a transient network error.
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"UW request {path!r} failed after {_MAX_RETRIES} retries")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
