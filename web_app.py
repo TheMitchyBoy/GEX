@@ -837,6 +837,6 @@ start_background_refresh()
 
 
 if __name__ == "__main__":
-    debug = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
+    debug_mode = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
     port = int(os.environ.get("PORT", "8080"))
-    APP.run(host="0.0.0.0", port=port, debug=debug)
+    APP.run(host="0.0.0.0", port=port, debug=debug_mode)
