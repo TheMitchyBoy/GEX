@@ -248,7 +248,7 @@ Configuration (environment variables):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UW_API_KEY` | (unset) | Unusual Whales API key (primary source) |
-| `GEX_REFRESH_INTERVAL_MINUTES` | `1` | Auto-refresh interval |
+| `GEX_REFRESH_INTERVAL_MINUTES` | `10` | Auto-refresh interval |
 | `GEX_DISABLE_SCHEDULER` | (unset) | Set to `1` to disable background refresh |
 | `GEX_DATA_FILTERS` | `1` | Set to `0` to skip option filters |
 | `GEX_MIN_OPEN_INTEREST` | `1` | Minimum open interest per contract |

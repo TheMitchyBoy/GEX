@@ -13,7 +13,7 @@ from gex_core.tickers import PRIMARY_TICKER, SUPPORTED_TICKERS, is_supported_tic
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICKERS = list(SUPPORTED_TICKERS)
-DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "1"))
+DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
 
 
 def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:
