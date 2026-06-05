@@ -338,6 +338,19 @@
           </div>
           {% endif %}
 
+          {% if spx_price_chart_json %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h2 class="h5 mb-0">SPX Price</h2>
+              {% if spx_current_price %}
+              <span class="pill">{{ '%.2f'|format(spx_current_price) }}</span>
+              {% endif %}
+            </div>
+            <p class="small text-secondary mb-2">Current SPX index price with gamma flip and wall levels for context.</p>
+            <div id="spxPriceChart"></div>
+          </div>
+          {% endif %}
+
           {% if timeline_chart_json %}
           <div class="glass rounded-4 p-3 mb-3">
             <h2 class="h5 mb-2">Spot vs Gamma Levels</h2>
@@ -644,6 +657,7 @@
       renderPlot("zeroDteMovement", {{ zero_dte_movement_chart_json|tojson }});
       renderPlot("currentStrike", {{ current_strike_chart_json|tojson }});
       renderPlot("predictedStrike", {{ predicted_strike_chart_json|tojson }});
+      renderPlot("spxPriceChart", {{ spx_price_chart_json|tojson }});
       renderPlot("timelineChart", {{ timeline_chart_json|tojson }});
       renderPlot("cumulativeChart", {{ cumulative_chart_json|tojson }});
       renderPlot("aiInsights", {{ ai_insights_json|tojson }});

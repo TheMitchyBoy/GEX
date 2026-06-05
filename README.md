@@ -227,6 +227,7 @@ The repository now includes two SPX-focused interactive interfaces for viewing G
   - Displays PNG snapshots from `img/`
 - **Flask website:** `web_app.py`
   - Includes a historical timeline selector to revisit older GEX snapshots
+  - Shows a **current SPX price chart** (live via Yahoo Finance when online, falling back to the saved snapshot spot series) annotated with gamma flip and wall levels
   - Leads with SPX gamma-analysis cards for regime, flip distance, wall proximity, gamma balance, and near-term concentration
   - Adds AI-like nearest-neighbor prediction for the next GEX update from current outlook
   - Surfaces similar historical setup matches and shows what happened on the next snapshot

@@ -83,6 +83,44 @@ def fetch_vix_level() -> float:
         return 0.0
 
 
+# yfinance symbol for the S&P 500 index (the SPX underlying).
+SPX_YF_SYMBOL = "^GSPC"
+
+
+def fetch_spx_price_history(
+    period: str = "5d",
+    interval: str = "30m",
+) -> list[dict[str, Any]] | None:
+    """Recent SPX price history as ``[{"ts": iso, "close": float}, ...]``.
+
+    Best-effort via ``yfinance``; returns ``None`` when offline or the optional
+    dependency is missing so callers can fall back to the snapshot spot series.
+    """
+    try:
+        import yfinance as yf
+
+        data = yf.Ticker(SPX_YF_SYMBOL).history(period=period, interval=interval)
+        if data is None or data.empty or "Close" not in data:
+            return None
+        closes = data["Close"].dropna()
+        points = [
+            {"ts": ts.isoformat(), "close": float(value)}
+            for ts, value in closes.items()
+        ]
+        return points or None
+    except Exception as exc:  # pragma: no cover - network/optional dep path
+        logger.debug("SPX price history unavailable: %s", exc)
+        return None
+
+
+def fetch_spx_price() -> float:
+    """Latest SPX index price; ``0.0`` when unavailable (offline)."""
+    points = fetch_spx_price_history(period="1d", interval="5m")
+    if points:
+        return float(points[-1]["close"])
+    return 0.0
+
+
 def attach_market_features(
     history: list[dict[str, Any]],
     *,

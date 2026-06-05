@@ -20,11 +20,13 @@ from gex_core.charts import (
     make_gex_profile_chart,
     make_positive_strike_chart,
     make_prediction_gamma_chart,
+    make_spx_price_chart,
     make_timeline_chart,
     safe_float,
 )
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import build_history, get_latest_ts, list_tickers, list_timestamps, ts_label
+from gex_core.market_features import fetch_spx_price, fetch_spx_price_history
 from gex_core.intelligence import (
     build_gamma_analysis_panel,
     build_data_quality_panel,
@@ -394,6 +396,8 @@ def ticker_page(ticker):
             predicted_strike_chart_json=None,
             uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
             uw_profile_json=None,
+            spx_price_chart_json=make_spx_price_chart(fetch_spx_price_history(), ticker=ticker),
+            spx_current_price=fetch_spx_price() or (uw_entry["spot"] if uw_entry else None),
             timestamps=[],
             selected_ts=None,
             timeline_chart_json=None,
@@ -433,6 +437,20 @@ def ticker_page(ticker):
 
     selected_spot = safe_float(selected.get("spot"), 0.0)
     csv_spot = selected_spot if selected_spot > 0 else (uw_spot if uw_spot else None)
+
+    # Current SPX price: live intraday feed when available, otherwise the saved
+    # snapshot spot series so the chart always renders.
+    spx_price_points = fetch_spx_price_history()
+    spx_current_price = fetch_spx_price() or (safe_float(uw_spot, 0.0) or csv_spot)
+    spx_price_chart_json = make_spx_price_chart(
+        spx_price_points,
+        history=history,
+        ticker=ticker,
+        gamma_flip=selected.get("gamma_flip"),
+        call_wall=selected.get("call_wall"),
+        put_wall=selected.get("put_wall"),
+    )
+
     profile_json = make_gex_profile_chart(
         selected.get("strike"),
         ticker,
@@ -550,6 +568,8 @@ def ticker_page(ticker):
         profile_json=profile_json,
         uw_profile_json=uw_profile_json,
         uw_fetched_at=uw_fetched_at,
+        spx_price_chart_json=spx_price_chart_json,
+        spx_current_price=spx_current_price,
         selected=selected,
         timestamps=timestamps,
         selected_ts=selected.get("ts"),

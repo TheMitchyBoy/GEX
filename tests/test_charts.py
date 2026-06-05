@@ -2,7 +2,11 @@ import json
 
 import pandas as pd
 
-from gex_core.charts import make_0dte_movement_chart, make_gex_profile_chart
+from gex_core.charts import (
+    make_0dte_movement_chart,
+    make_gex_profile_chart,
+    make_spx_price_chart,
+)
 
 
 def test_gex_profile_chart_uses_tight_spot_window_and_bar_width():
@@ -40,3 +44,30 @@ def test_0dte_movement_chart_compares_same_day_snapshots():
     assert bar["name"] == "ΔGEX since prior same-day snapshot"
     assert bar["y"] == [0.5, 1.0, -1.0]
     assert bar["width"] > 1
+
+
+def test_spx_price_chart_prefers_live_points():
+    points = [
+        {"ts": "2026-06-05T13:30:00", "close": 5000.0},
+        {"ts": "2026-06-05T14:00:00", "close": 5012.5},
+    ]
+    payload = json.loads(make_spx_price_chart(points, ticker="SPX"))
+    line = payload["data"][0]
+    assert line["y"] == [5000.0, 5012.5]
+    assert "live" in payload["layout"]["title"]["text"]
+    # Latest price annotated as current marker.
+    assert payload["data"][1]["y"] == [5012.5]
+
+
+def test_spx_price_chart_falls_back_to_snapshot_spots():
+    history = [
+        {"ts_label": "2026-06-04 00:00:00", "spot": 4990.0},
+        {"ts_label": "2026-06-05 00:00:00", "spot": 5010.0},
+    ]
+    payload = json.loads(make_spx_price_chart(None, history=history, ticker="SPX"))
+    assert payload["data"][0]["y"] == [4990.0, 5010.0]
+    assert "snapshots" in payload["layout"]["title"]["text"]
+
+
+def test_spx_price_chart_returns_none_without_data():
+    assert make_spx_price_chart(None, history=[]) is None

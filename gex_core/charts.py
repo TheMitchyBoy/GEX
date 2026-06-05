@@ -203,6 +203,94 @@ def make_timeline_chart(history, ticker: str) -> str | None:
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
+def make_spx_price_chart(
+    price_points: list[dict] | None,
+    history=None,
+    ticker: str = "SPX",
+    gamma_flip: float | None = None,
+    call_wall: float | None = None,
+    put_wall: float | None = None,
+) -> str | None:
+    """Current SPX price line.
+
+    Prefers live intraday prices (``price_points`` from yfinance); falls back to
+    the per-snapshot spot series when the market feed is unavailable so the chart
+    always renders. The most recent price is annotated as the current level.
+    """
+    x: list = []
+    y: list[float] = []
+    source = None
+    if price_points:
+        x = [p["ts"] for p in price_points]
+        y = [safe_float(p["close"], 0.0) for p in price_points]
+        source = "live"
+    elif history:
+        for row in history:
+            spot = safe_float(row.get("spot"), 0.0)
+            if spot > 0:
+                x.append(row.get("ts_label"))
+                y.append(spot)
+        source = "snapshots"
+    x = [xi for xi, yi in zip(x, y) if yi > 0]
+    y = [yi for yi in y if yi > 0]
+    if not y:
+        return None
+
+    current = y[-1]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x,
+        y=y,
+        mode="lines",
+        line=dict(color=_AMBER, width=2.4),
+        fill="tozeroy",
+        fillcolor="rgba(245,158,11,0.08)",
+        name="SPX price",
+        hovertemplate="%{x}<br>SPX %{y:.2f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[x[-1]],
+        y=[current],
+        mode="markers+text",
+        marker=dict(size=9, color=_AMBER, line=dict(color=_CHART_BG, width=1.5)),
+        text=[f"{current:,.2f}"],
+        textposition="middle left",
+        textfont=dict(color=_AMBER, size=13),
+        name="Current",
+        hovertemplate="Current SPX %{y:.2f}<extra></extra>",
+        showlegend=False,
+    ))
+
+    for level, label, color in (
+        (gamma_flip, "Flip", "#e2e8f0"),
+        (call_wall, "Call wall", _GREEN),
+        (put_wall, "Put wall", _RED),
+    ):
+        value = safe_float(level, 0.0)
+        if value and min(y) <= value <= max(y):
+            fig.add_hline(
+                y=value,
+                line=dict(color=color, dash="dot", width=1.2),
+                annotation_text=f"{label} {value:.0f}",
+                annotation_position="right",
+                annotation_font_color=color,
+            )
+
+    subtitle = "live · Yahoo Finance" if source == "live" else "from saved snapshots"
+    pad = max(5.0, (max(y) - min(y)) * 0.12)
+    _apply_base(
+        fig,
+        title=f"{ticker} · Current Price ({subtitle})",
+        height=320,
+        margin=dict(l=48, r=70, t=58, b=36),
+        xaxis=dict(title="Time", rangeslider=dict(visible=len(x) > 4, thickness=0.08)),
+        yaxis=dict(title="SPX price", zeroline=False, range=[min(y) - pad, max(y) + pad]),
+        hovermode="x unified",
+        showlegend=False,
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
 def make_cumulative_gex_chart(cumulative, ticker: str, gamma_flip=None) -> str | None:
     if cumulative is None or (hasattr(cumulative, "empty") and cumulative.empty):
         return None
