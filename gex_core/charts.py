@@ -129,15 +129,20 @@ def make_gex_profile_chart(
     strike_series: pd.Series | None,
     ticker: str,
     spot: float | None = None,
-    title: str = "GEX Profile",
-    window_pct: float = 0.10,
-    max_bars: int = 60,
+    title: str = "Gamma Exposure Map",
+    window_pct: float = 0.20,
+    max_bars: int = 220,
+    cumulative_series: pd.Series | None = None,
+    gamma_flip: float | None = None,
+    call_wall: float | None = None,
+    put_wall: float | None = None,
 ) -> str | None:
     if strike_series is None:
         return None
     strike = pd.Series(strike_series, dtype=float)
     if strike.empty:
         return None
+    strike = strike.sort_index()
     if spot is not None and spot > 0:
         lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
         window = strike.loc[(strike.index >= lo) & (strike.index <= hi)]
@@ -147,40 +152,101 @@ def make_gex_profile_chart(
         window = strike
     window = window.sort_index(ascending=True)
     if len(window) > max_bars:
-        keep = window.abs().sort_values(ascending=False).head(max_bars).index
+        step = max(1, len(window) // max_bars)
+        sampled = window.iloc[::step]
+        peaks = window.abs().sort_values(ascending=False).head(max(24, max_bars // 4))
+        keep = sampled.index.union(peaks.index)
+        for level in (spot, gamma_flip, call_wall, put_wall):
+            if level is None:
+                continue
+            try:
+                level_value = float(level)
+            except (TypeError, ValueError):
+                continue
+            nearest_idx = (window.index.to_series().astype(float) - level_value).abs().idxmin()
+            keep = keep.union(pd.Index([nearest_idx]))
         window = window.loc[keep].sort_index(ascending=True)
-    y_labels = [f"{int(s)}" for s in window.index]
-    x_values = window.values.tolist()
-    colors = [_GREEN if v >= 0 else _RED for v in x_values]
+
+    strikes = [float(s) for s in window.index]
+    gex_values = [float(v) for v in window.values]
+    colors = [_GREEN if v >= 0 else _RED for v in gex_values]
+
+    cumulative = (
+        pd.Series(cumulative_series, dtype=float).sort_index()
+        if cumulative_series is not None
+        else strike.cumsum()
+    )
+    cumulative_window = cumulative.reindex(window.index)
+    if cumulative_window.isna().any():
+        cumulative_window = strike.reindex(window.index).cumsum()
+
     fig = go.Figure(go.Bar(
-        x=x_values, y=y_labels, orientation="h", marker_color=colors, marker_line_width=0,
-        hovertemplate="Strike %{y}<br>GEX %{x:.3f} Bn$<extra></extra>",
+        name="Net GEX by strike",
+        x=strikes,
+        y=gex_values,
+        marker_color=colors,
+        marker_line_width=0,
+        opacity=0.86,
+        hovertemplate="Strike %{x:.0f}<br>Net GEX %{y:.3f} Bn$ / %<extra></extra>",
     ))
-    fig.add_vline(x=0, line_color="rgba(255,255,255,0.25)", line_width=1)
-    if spot is not None and spot > 0:
-        spot_label = f"{int(spot)}"
-        if spot_label in y_labels:
-            # add_hline breaks on categorical y-axes (Plotly TypeError); use shape instead.
-            fig.add_shape(
-                type="line",
-                xref="paper",
-                x0=0,
-                x1=1,
-                yref="y",
-                y0=spot_label,
-                y1=spot_label,
-                line=dict(color=_AMBER, dash="dash", width=1.5),
-            )
-            fig.add_annotation(
-                x=max(x_values) if x_values else 0,
-                y=spot_label,
-                text=f"Spot {int(spot)}",
-                showarrow=False,
-                font=dict(color=_AMBER, size=10),
-                xanchor="left",
-            )
-    _apply_base(fig, title=f"{ticker} · {title}", height=max(420, len(window) * 14),
-                xaxis_title="GEX (Bn$ / %)", bargap=0.18)
+    fig.add_trace(go.Scatter(
+        name="Cumulative GEX",
+        x=strikes,
+        y=[float(v) for v in cumulative_window.values],
+        yaxis="y2",
+        mode="lines",
+        line=dict(color=_BLUE, width=2.4),
+        hovertemplate="Strike %{x:.0f}<br>Cumulative %{y:.3f} Bn$ / %<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)", line_width=1)
+
+    x_min, x_max = min(strikes), max(strikes)
+
+    def _add_level(level: float | None, label: str, color: str, dash: str = "dash") -> None:
+        if level is None:
+            return
+        try:
+            value = float(level)
+        except (TypeError, ValueError):
+            return
+        if value < x_min or value > x_max:
+            return
+        fig.add_vline(
+            x=value,
+            line=dict(color=color, dash=dash, width=1.6),
+            annotation_text=f"{label} {value:.0f}",
+            annotation_position="top",
+            annotation_font_color=color,
+        )
+
+    _add_level(spot, "Spot", _AMBER)
+    _add_level(gamma_flip, "Flip", "#e2e8f0", "dot")
+    _add_level(call_wall, "Call wall", _GREEN, "dashdot")
+    _add_level(put_wall, "Put wall", _RED, "dashdot")
+
+    _apply_base(
+        fig,
+        title=f"{ticker} · {title}",
+        height=520,
+        margin=dict(l=48, r=58, t=72, b=52),
+        xaxis=dict(
+            title="SPX strike",
+            rangeslider=dict(visible=True, thickness=0.08),
+            showspikes=True,
+            spikecolor="rgba(255,255,255,0.25)",
+        ),
+        yaxis=dict(title="Net GEX (Bn$ / %)", zerolinecolor="rgba(255,255,255,0.20)"),
+        yaxis2=dict(
+            title="Cumulative GEX",
+            overlaying="y",
+            side="right",
+            gridcolor="rgba(255,255,255,0)",
+            zeroline=False,
+        ),
+        bargap=0.05,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 

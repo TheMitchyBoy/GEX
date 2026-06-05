@@ -257,12 +257,15 @@
       <section class="row g-3">
         <div class="col-12 col-xl-8">
           <div class="glass rounded-4 p-3 mb-3">
-            <h2 class="h5 mb-2">SPX Gamma Exposure Profile</h2>
-            <p class="small text-secondary mb-2">From UW CSV in <code>data/exports/</code>. Green = long gamma, red = short gamma by strike.</p>
+            <h2 class="h5 mb-2">SPX Gamma Exposure Map</h2>
+            <p class="small text-secondary mb-2">
+              Net GEX bars by strike with cumulative GEX overlay and spot, flip, call-wall, and put-wall markers.
+              Use the range slider to zoom across the SPX strike distribution.
+            </p>
             {% if profile_json %}
             <div id="profileChart"></div>
             {% else %}
-            <div class="text-secondary">No position profile data available.</div>
+            <div class="text-secondary">No gamma exposure map data available.</div>
             {% endif %}
           </div>
 
