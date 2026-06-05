@@ -57,6 +57,7 @@ from gex_core.predict import (
     similar_setups,
 )
 from gex_core.alert_dispatch import maybe_dispatch_alerts
+from gex_core.env_bootstrap import load_env_files, uw_api_configured, uw_api_key
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
 from gex_core.system_status import build_system_status
 from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
@@ -64,6 +65,8 @@ from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tick
 APP = Flask(__name__)
 app = APP
 logger = logging.getLogger(__name__)
+
+load_env_files()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Unusual Whales live data layer
@@ -76,10 +79,8 @@ _UW_CACHE_TTL = int(
         str(max(30, int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "1")) * 60)),
     )
 )  # keep cache aligned to refresh cadence by default
-_UW_API_KEY = os.environ.get("UW_API_KEY")
-_UW_ENABLED = bool(_UW_API_KEY)
 
-if not _UW_ENABLED:
+if not uw_api_configured():
     logger.warning(
         "UW_API_KEY is not set in this environment — live data is DISABLED. The "
         "dashboard will only show previously saved snapshots and forced refreshes "
@@ -123,7 +124,7 @@ def _classify_uw_error(exc: Exception) -> str:
 
 
 def _uw_failure_reason(ticker: str) -> str:
-    if not _UW_ENABLED:
+    if not uw_api_configured():
         return "not_configured"
     with _uw_lock:
         return _LAST_UW_ERROR.get(ticker.upper(), "error")
@@ -138,7 +139,7 @@ def _uw_cache_fresh(ticker: str) -> bool:
 
 def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
     """Fetch live UW GEX and run AI analysis; cache the result."""
-    if not _UW_ENABLED:
+    if not uw_api_configured():
         return None
     ticker = ticker.upper()
     if not force and _uw_cache_fresh(ticker):
@@ -148,7 +149,7 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
         from gex_core.ai_analyst import analyze_dealer_gamma
         from gex_core.features import estimate_gamma_flip
 
-        spot, agg = fetch_uw_gex(ticker, api_key=_UW_API_KEY)
+        spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
         gamma_flip = estimate_gamma_flip(agg.cumulative_gex)
         analysis = analyze_dealer_gamma(
             ticker=ticker, spot=spot,
@@ -179,7 +180,7 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
 
 def get_uw_data(ticker: str) -> dict | None:
     """Return cached UW data, refreshing if stale."""
-    if not _UW_ENABLED:
+    if not uw_api_configured():
         return None
     ticker = ticker.upper()
     with _uw_lock:
@@ -404,14 +405,17 @@ def ticker_page(ticker):
     if force_refresh:
         refreshed_csv = False
         refreshed_live = False
-        try:
-            refreshed_csv = refresh_ticker(ticker, force=True)
-        except Exception:
-            logger.exception("Force CSV refresh failed for %s", ticker)
-        try:
-            refreshed_live = refresh_uw_data(ticker, force=True) is not None
-        except Exception:
-            logger.exception("Force UW refresh failed for %s", ticker)
+        if not uw_api_configured():
+            logger.warning("Forced refresh skipped for %s — UW_API_KEY is not configured", ticker)
+        else:
+            try:
+                refreshed_csv = refresh_ticker(ticker, force=True)
+            except Exception:
+                logger.exception("Force CSV refresh failed for %s", ticker)
+            try:
+                refreshed_live = refresh_uw_data(ticker, force=True) is not None
+            except Exception:
+                logger.exception("Force UW refresh failed for %s", ticker)
         if refreshed_csv or refreshed_live:
             bootstrap_status = "ok"
         else:

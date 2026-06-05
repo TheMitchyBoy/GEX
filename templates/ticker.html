@@ -134,6 +134,12 @@
         </div>
       </section>
 
+      {% if system_status and not system_status.uw_api_configured and bootstrap_status not in ["ok", "stale", "failed", "error"] %}
+      <div class="alert alert-warning" role="alert">
+        Live data isn't configured on this server (<code>UW_API_KEY</code> is missing). Showing saved snapshots only.
+        Set <code>UW_API_KEY</code> in the service environment, <code>.env</code>, or <code>config/spx.env</code>.
+      </div>
+      {% endif %}
       {% if bootstrap_status == "ok" %}
       <div class="alert alert-success" role="alert">Snapshot refresh completed for {{ ticker }}.</div>
       {% elif bootstrap_status == "stale" %}

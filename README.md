@@ -167,7 +167,7 @@ shows **"Live data isn't configured on this server (UW_API_KEY is missing)"** an
 serves only saved snapshots. Fix by setting `UW_API_KEY` in the **service**
 environment:
 
-- **docker compose:** export `UW_API_KEY` in your shell or a `.env` file before `docker compose up` (the compose file passes it through).
+- **docker compose:** export `UW_API_KEY` in your shell or add it to `.env` / `config/spx.env` before `docker compose up` (compose loads those files automatically).
 - **Heroku/Procfile-style:** `heroku config:set UW_API_KEY=...` (or the platform's config UI).
 - **systemd/bare gunicorn:** add `UW_API_KEY=...` to the unit's `Environment=`/`EnvironmentFile=`.
 - **Cursor Cloud Agents:** add it under Dashboard → Cloud Agents → Secrets.

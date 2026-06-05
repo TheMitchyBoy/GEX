@@ -43,5 +43,40 @@ def test_classify_uw_error_categories():
 def test_uw_failure_reason_not_configured(monkeypatch):
     import web_app
 
-    monkeypatch.setattr(web_app, "_UW_ENABLED", False)
+    monkeypatch.setenv("UW_API_KEY", "")
     assert web_app._uw_failure_reason("SPX") == "not_configured"
+
+
+def test_force_refresh_without_uw_key_skips_fetch(monkeypatch):
+    import web_app
+
+    monkeypatch.setenv("UW_API_KEY", "")
+    calls = {"csv": 0, "uw": 0}
+
+    def _csv_refresh(*_a, **_k):
+        calls["csv"] += 1
+        return False
+
+    def _uw_refresh(*_a, **_k):
+        calls["uw"] += 1
+        return None
+
+    monkeypatch.setattr(web_app, "refresh_ticker", _csv_refresh)
+    monkeypatch.setattr(web_app, "refresh_uw_data", _uw_refresh)
+
+    client = web_app.APP.test_client()
+    response = client.get("/ticker/SPX/?force_refresh=1")
+
+    assert response.status_code == 200
+    assert calls == {"csv": 0, "uw": 0}
+    assert b"UW_API_KEY is missing" in response.data
+
+
+def test_persistent_banner_when_uw_not_configured(monkeypatch):
+    import web_app
+
+    monkeypatch.setenv("UW_API_KEY", "")
+    client = web_app.APP.test_client()
+    response = client.get("/ticker/SPX/")
+    assert response.status_code == 200
+    assert b"Showing saved snapshots only" in response.data
