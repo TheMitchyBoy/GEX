@@ -118,12 +118,18 @@ def term_structure_breakdown(
     back = float(exp.tail(max(1, near_term_buckets)).sum())
     denom = total if total != 0 else abs_total
 
+    # Front-term = net GEX of the single nearest-dated expiration. This is
+    # distinct from ``zero_dte`` (same calendar-day expirations only): on days
+    # without a same-day expiry the two diverge, so it carries independent
+    # signal in the feature vector.
+    front_term = float(exp.iloc[0]) if not exp.empty else 0.0
+
     return {
         "term_total_gex_bn": total,
         "zero_dte_gex_bn": zero_dte,
         "zero_dte_ratio": zero_dte / denom if denom else 0.0,
-        "front_term_gex_bn": zero_dte,
-        "front_term_ratio": zero_dte / denom if denom else 0.0,
+        "front_term_gex_bn": front_term,
+        "front_term_ratio": front_term / denom if denom else 0.0,
         "near_term_gex_bn": near,
         "near_term_ratio": near / denom if denom else 0.0,
         "back_term_gex_bn": back,
