@@ -346,6 +346,7 @@ def ticker_page(ticker):
         return _spx_redirect()
     bootstrap_status = request.args.get("bootstrap")
     force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
+    force_refresh_failed = False
     if force_refresh:
         refreshed_csv = False
         refreshed_live = False
@@ -357,9 +358,19 @@ def ticker_page(ticker):
             refreshed_live = refresh_uw_data(ticker, force=True) is not None
         except Exception:
             logger.exception("Force UW refresh failed for %s", ticker)
-        bootstrap_status = "ok" if (refreshed_csv or refreshed_live) else "failed"
+        if refreshed_csv or refreshed_live:
+            bootstrap_status = "ok"
+        else:
+            # Distinguish "no data at all" (hard failure) from "couldn't fetch
+            # fresh data but a cached snapshot exists" (soft, stale). The latter
+            # is downgraded once we confirm history is available below.
+            force_refresh_failed = True
+            bootstrap_status = "failed"
 
     history = build_history(ticker)
+
+    if force_refresh_failed and history:
+        bootstrap_status = "stale"
 
     if not history:
         selected = {
@@ -770,8 +781,11 @@ def _auto_dispatch_alerts(ticker: str) -> None:
 
 
 def _scheduled_refresh():
+    # Staleness-gated (not force=True): when a manual/page refresh already wrote
+    # a fresh snapshot this interval, skip the redundant UW fetch. This avoids
+    # burning the UW per-minute/daily request budget on duplicate pulls.
     try:
-        refresh_tickers(REFRESH_TICKERS, force=True)
+        refresh_tickers(REFRESH_TICKERS)
     except Exception:
         logger.exception("Scheduled GEX refresh failed")
         return

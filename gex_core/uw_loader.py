@@ -124,6 +124,21 @@ def _retry_after_seconds(resp: requests.Response, attempt: int) -> float:
     return _BACKOFF_BASE_SECONDS * (2 ** attempt)
 
 
+def _log_rate_limit(resp: requests.Response, path: str) -> None:
+    """Log UW rate-limit/quota headers so throttling is visible in service logs."""
+    if resp is None:
+        return
+    daily = resp.headers.get("x-uw-daily-req-count")
+    daily_limit = resp.headers.get("x-uw-token-req-limit")
+    per_min_remaining = resp.headers.get("x-uw-req-per-minute-remaining")
+    per_min_reset = resp.headers.get("x-uw-req-per-minute-reset")
+    if any(v is not None for v in (daily, daily_limit, per_min_remaining, per_min_reset)):
+        logger.warning(
+            "UW rate-limit on %s: status=%s daily=%s/%s per_minute_remaining=%s reset_ms=%s",
+            path, resp.status_code, daily, daily_limit, per_min_remaining, per_min_reset,
+        )
+
+
 def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
     """GET a UW API endpoint and return the ``data`` list.
 
@@ -157,14 +172,16 @@ def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
                 continue
             raise
 
-        if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
-            delay = _retry_after_seconds(resp, attempt)
-            logger.warning(
-                "UW request %s returned %d; retry %d/%d in %.1fs",
-                path, resp.status_code, attempt + 1, _MAX_RETRIES, delay,
-            )
-            time.sleep(delay)
-            continue
+        if resp.status_code in _RETRYABLE_STATUS:
+            _log_rate_limit(resp, path)
+            if attempt < _MAX_RETRIES:
+                delay = _retry_after_seconds(resp, attempt)
+                logger.warning(
+                    "UW request %s returned %d; retry %d/%d in %.1fs",
+                    path, resp.status_code, attempt + 1, _MAX_RETRIES, delay,
+                )
+                time.sleep(delay)
+                continue
 
         resp.raise_for_status()
         payload = resp.json()
