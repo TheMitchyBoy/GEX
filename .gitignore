@@ -2,7 +2,10 @@ __pycache__/
 *.pyc
 data/.gex_scheduler.lock
 data/live_flow_state.json
-models/
+models/*
+!models/SPX_gex_delta_model.joblib
+!models/SPX/
+!models/SPX/manifest.json
 .venv/
 venv/
 __pycache__/

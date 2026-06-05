@@ -19,6 +19,7 @@ class GexFetchResult:
     source: str
     spot: float
     aggregates: GexAggregates
+    market_date: str | None = None
     option_data: pd.DataFrame | None = None
     data_quality: Any | None = None
     note: str = ""
@@ -28,6 +29,7 @@ def fetch_gex_data(
     ticker: str,
     *,
     uw_api_key: str | None = None,
+    market_date: str | None = None,
     **_ignored,
 ) -> GexFetchResult:
     """
@@ -45,12 +47,13 @@ def fetch_gex_data(
         )
 
     ticker = ticker.upper()
-    spot, agg = fetch_uw_gex(ticker, api_key=api_key)
+    spot, agg = fetch_uw_gex(ticker, api_key=api_key, date=market_date)
     return GexFetchResult(
         ticker=ticker,
         source=SOURCE_UW,
         spot=spot,
         aggregates=agg,
+        market_date=agg.gex_by_strike.attrs.get("market_date") or market_date,
         option_data=None,
         note="Unusual Whales greek-exposure by strike",
     )

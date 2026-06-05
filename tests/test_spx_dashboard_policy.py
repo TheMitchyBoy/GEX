@@ -29,14 +29,14 @@ def test_list_tickers_filters_non_spx_exports(tmp_path):
 def test_refresh_tickers_falls_back_to_spx(monkeypatch):
     calls = []
 
-    def fake_refresh_ticker(ticker, force=False):
-        calls.append((ticker, force))
+    def fake_refresh_ticker(ticker, force=False, market_date=None):
+        calls.append((ticker, force, market_date))
         return True
 
     monkeypatch.setattr("gex_core.refresh.refresh_ticker", fake_refresh_ticker)
 
     assert refresh_tickers(["SPY", "NVDA"], force=True) == {"SPX": True}
-    assert calls == [("SPX", True)]
+    assert calls == [("SPX", True, None)]
 
 
 def test_gamma_analysis_panel_computes_key_spx_distances():

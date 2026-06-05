@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -144,9 +145,19 @@ def build_history(ticker: str, export_dir: Path | None = None) -> list[dict]:
             metrics["ticker"] = ticker
             snapshots.append(metrics)
         except Exception as exc:
-            import logging
             logging.getLogger(__name__).warning(
                 "Skipping snapshot %s for %s: %s", ts, ticker, exc
             )
     snapshots.sort(key=lambda row: row["ts"])
-    return snapshots
+    deduped = []
+    for row in snapshots:
+        if deduped and row.get("strike") is not None and row["strike"].equals(deduped[-1].get("strike")):
+            logging.getLogger(__name__).info(
+                "Skipping duplicate snapshot %s for %s; strike profile matches %s",
+                row["ts"],
+                ticker,
+                deduped[-1]["ts"],
+            )
+            continue
+        deduped.append(row)
+    return deduped

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,11 @@ import numpy as np
 import pandas as pd
 
 from gex_core.features import enrich_snapshot_metrics, safe_float, snapshot_feature_vector
+from gex_core.exports import parse_timestamp
+from gex_core.models_manifest import load_manifest
 
 MODELS_DIR = Path("models")
+DEFAULT_LOOKBACK_DAYS = 7
 
 
 def _zscore_matrix(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -85,7 +89,25 @@ def prepare_training_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]
     return rows
 
 
-def predict_next_snapshot(history: list[dict[str, Any]], k: int = 4) -> dict[str, Any] | None:
+def select_recent_history(
+    history: list[dict[str, Any]],
+    lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+) -> list[dict[str, Any]]:
+    """Return snapshots inside the recent regime window, sorted by timestamp."""
+    ordered = sorted(history, key=lambda row: row["ts"])
+    if not ordered or not lookback_days or lookback_days <= 0:
+        return ordered
+    latest = parse_timestamp(ordered[-1]["ts"])
+    cutoff = latest - timedelta(days=lookback_days)
+    return [row for row in ordered if parse_timestamp(row["ts"]) >= cutoff]
+
+
+def predict_next_snapshot(
+    history: list[dict[str, Any]],
+    k: int = 4,
+    lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+) -> dict[str, Any] | None:
+    history = select_recent_history(history, lookback_days=lookback_days)
     if len(history) < 4:
         return None
 
@@ -117,8 +139,9 @@ def predict_next_snapshot(history: list[dict[str, Any]], k: int = 4) -> dict[str
         surface_vectors=surface_vectors,
         query_surface=query_surface,
     )
+    preds["total_gex"] = current["total_gex"] + preds["delta_gex"]
 
-    model_preds = _predict_from_trained_models(current, enriched)
+    model_preds = _predict_from_trained_models(current, enriched, lookback_days=lookback_days)
     if model_preds:
         preds["delta_gex"] = 0.5 * preds["delta_gex"] + 0.5 * model_preds.get("delta_gex", preds["delta_gex"])
         preds["total_gex"] = current["total_gex"] + preds["delta_gex"]
@@ -158,11 +181,12 @@ def predict_next_snapshot(history: list[dict[str, Any]], k: int = 4) -> dict[str
         "confidence": confidence,
         "neighbors": neighbors,
         "model_overlay": model_preds,
+        "training_snapshot_count": len(enriched),
+        "training_window_days": lookback_days,
     }
 
 
 def _ts_label(ts: str) -> str:
-    from gex_core.exports import parse_timestamp
     return parse_timestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -179,7 +203,12 @@ def _regime_flip_probability(train: list[dict], nn_idx: list[int], current_total
     return float(base_prob)
 
 
-def similar_setups(history: list[dict[str, Any]], top_n: int = 5) -> list[dict[str, Any]]:
+def similar_setups(
+    history: list[dict[str, Any]],
+    top_n: int = 5,
+    lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+) -> list[dict[str, Any]]:
+    history = select_recent_history(history, lookback_days=lookback_days)
     if len(history) < 3:
         return []
 
@@ -227,9 +256,28 @@ def similar_setups(history: list[dict[str, Any]], top_n: int = 5) -> list[dict[s
     return results
 
 
-def _predict_from_trained_models(current: dict, history: list[dict]) -> dict[str, Any] | None:
+def _manifest_allows_overlay(ticker: str, current_ts: str, lookback_days: int | None) -> bool:
+    manifest = load_manifest(ticker)
+    if not manifest:
+        return False
+    training_end = manifest.get("training_end_ts")
+    if not training_end or not lookback_days or lookback_days <= 0:
+        return bool(training_end)
+    try:
+        return parse_timestamp(current_ts) - parse_timestamp(training_end) <= timedelta(days=lookback_days)
+    except Exception:
+        return False
+
+
+def _predict_from_trained_models(
+    current: dict,
+    history: list[dict],
+    lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+) -> dict[str, Any] | None:
     ticker = current.get("ticker", "SPX")
     result: dict[str, Any] = {}
+    if not _manifest_allows_overlay(ticker, current["ts"], lookback_days):
+        return None
 
     xgb_path = MODELS_DIR / f"{ticker}_gex_delta_model.joblib"
     if xgb_path.exists():
@@ -272,25 +320,38 @@ def _predict_from_trained_models(current: dict, history: list[dict]) -> dict[str
 
 
 def _snapshot_to_feature_dict(row: dict) -> dict[str, float]:
-    return {
+    strike = row.get("strike", pd.Series(dtype=float))
+    mag = strike.abs().sort_values(ascending=False) if len(strike) else pd.Series(dtype=float)
+    features = {
         "total_gex_bn": row["total_gex"],
         "pos_gex_bn": row["pos_gex"],
         "neg_gex_bn": row["neg_gex"],
         "gex_mean_bn": row.get("abs_mean", 0.0),
         "gex_std_bn": row["gex_std"],
+        "call_wall": safe_float(row.get("call_wall"), 0.0),
+        "put_wall": safe_float(row.get("put_wall"), 0.0),
+        "wall_spread": safe_float(row.get("wall_spread"), 0.0),
+        "gex_concentration": safe_float(row.get("gex_concentration"), 0.0),
+        "gex_com": safe_float(row.get("gex_com"), safe_float(row.get("spot"), 0.0)),
         "term_total_gex_bn": row.get("term_total_gex_bn", 0.0),
         "near_term_gex_bn": row.get("near_term_gex_bn", 0.0),
         "near_term_ratio": row["near_term_ratio"],
+        "back_term_gex_bn": row.get("back_term_gex_bn", 0.0),
+        "term_curvature": row.get("term_curvature", 0.0),
         "surface_mean_m": 0.0,
         "surface_std_m": 0.0,
+        "surface_max_m": row.get("surface_peak", 0.0),
         "surface_peak": row.get("surface_peak", 0.0),
         "gamma_flip": safe_float(row.get("gamma_flip"), 0.0),
-        "wall_spread": safe_float(row.get("wall_spread"), 0.0),
         "flip_distance_pct": safe_float(row.get("flip_distance_pct"), 0.0),
+        "cum_slope_at_spot": safe_float(row.get("cum_slope_at_spot"), 0.0),
         "total_gex_momentum": safe_float(row.get("total_gex_momentum"), 0.0),
         "flip_velocity": safe_float(row.get("flip_velocity"), 0.0),
-        "gex_concentration": safe_float(row.get("gex_concentration"), 0.0),
+        "near_term_ratio_delta": safe_float(row.get("near_term_ratio_delta"), 0.0),
     }
+    for i in range(5):
+        features[f"top_gex_{i + 1}"] = float(mag.iloc[i]) if i < len(mag) else 0.0
+    return features
 
 
 def _build_model_row(current: dict, history: list[dict], feat_cols: list[str]) -> np.ndarray | None:

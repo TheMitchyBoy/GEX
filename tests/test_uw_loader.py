@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from gex_core.uw_loader import _normalize_net_exposure, fetch_uw_gex
+from gex_core.uw_loader import _normalize_net_exposure, fetch_uw_gex, fetch_uw_greek_exposure
 
 
 @patch("gex_core.uw_loader.fetch_uw_spot", return_value=5000.0)
@@ -52,3 +52,24 @@ def test_normalize_net_exposure_uses_signed_put_sum_when_puts_negative():
         put_col="put_gamma_oi",
     )
     assert list(result) == [4.0, 5.0, 3.0]
+
+
+@patch("gex_core.uw_loader._get")
+def test_fetch_uw_greek_exposure_passes_historical_date(mock_get):
+    mock_get.return_value = [
+        {
+            "date": "2026-06-03",
+            "strike": "5000",
+            "call_gex": "2000",
+            "put_gex": "-1000",
+        }
+    ]
+
+    df = fetch_uw_greek_exposure("SPX", api_key="test-key", date="2026-06-03")
+
+    mock_get.assert_called_once_with(
+        "/api/stock/SPX/greek-exposure/strike",
+        api_key="test-key",
+        date="2026-06-03",
+    )
+    assert df.attrs["market_date"] == "2026-06-03"

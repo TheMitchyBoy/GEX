@@ -8,6 +8,7 @@ Saves model to models/{ticker}_gex_delta_model.joblib
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -16,7 +17,6 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -26,23 +26,49 @@ try:
 except Exception:
     XGBOOST_AVAILABLE = False
 
-from gex_core.exports import EXPORT_DIR, find_exports_for_ticker, parse_timestamp
+from gex_core.exports import EXPORT_DIR, find_exports_for_ticker, load_strike_series, parse_timestamp
 from gex_core.features import compute_features_from_exports
 
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(exist_ok=True)
 LAG = 3
+DEFAULT_LOOKBACK_DAYS = 7
 
 
-def build_dataset(ticker: str) -> pd.DataFrame:
+def _summary_spot(info: dict[str, Path]) -> float | None:
+    summary_path = info.get("summary")
+    if not summary_path or not summary_path.exists():
+        return None
+    with summary_path.open(encoding="utf-8") as f:
+        summary = json.load(f)
+    spot = summary.get("spot") or summary.get("spot_price")
+    return float(spot) if spot is not None else None
+
+
+def _recent_timestamps(timestamps: list[str], lookback_days: int | None) -> list[str]:
+    if not timestamps or not lookback_days or lookback_days <= 0:
+        return timestamps
+    parsed = pd.to_datetime([parse_timestamp(ts) for ts in timestamps])
+    cutoff = parsed.max() - pd.Timedelta(days=lookback_days)
+    return [ts for ts, ts_dt in zip(timestamps, parsed) if ts_dt >= cutoff]
+
+
+def build_dataset(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS) -> pd.DataFrame:
     exports = find_exports_for_ticker(ticker)
     timestamps = sorted(ts for ts, k in exports.items() if "gex_by_strike" in k)
+    timestamps = _recent_timestamps(timestamps, lookback_days)
     rows = []
     prev_feats = None
+    prev_strike = None
     for ts in timestamps:
         info = exports[ts]
-        feats = compute_features_from_exports(info, prev_features=prev_feats)
+        strike_path = info.get("gex_by_strike")
+        strike = load_strike_series(strike_path) if strike_path else None
+        if prev_strike is not None and strike is not None and strike.equals(prev_strike):
+            continue
+        feats = compute_features_from_exports(info, spot=_summary_spot(info), prev_features=prev_feats)
         prev_feats = feats
+        prev_strike = strike
         row = {"ts": ts, "ts_dt": parse_timestamp(ts)}
         row.update(feats)
         rows.append(row)
@@ -57,11 +83,19 @@ def build_dataset(ticker: str) -> pd.DataFrame:
     return df
 
 
-def train_model(ticker: str):
-    print(f"Building ΔGEX dataset for {ticker}...")
-    df = build_dataset(ticker)
-    if df.empty or len(df) < 4:
-        print("Not enough export history. Need at least 4 snapshots.")
+def _chronological_split(X_all: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    test_size = max(1, int(np.ceil(len(X_all) * 0.2)))
+    if len(X_all) - test_size < 2:
+        test_size = 1
+    split_at = len(X_all) - test_size
+    return X_all.iloc[:split_at], X_all.iloc[split_at:], y.iloc[:split_at], y.iloc[split_at:]
+
+
+def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
+    print(f"Building ΔGEX dataset for {ticker} over the last {lookback_days or 'all'} days...")
+    df = build_dataset(ticker, lookback_days=lookback_days)
+    if df.empty or len(df) < 3:
+        print("Not enough export history. Need at least 4 recent snapshots.")
         return
 
     feature_cols = [
@@ -72,22 +106,21 @@ def train_model(ticker: str):
     feature_df = df[feature_cols].fillna(0)
 
     X_lagged = []
-    for lag in range(LAG + 1):
+    effective_lag = min(LAG, max(0, len(feature_df) - 4))
+    for lag in range(effective_lag + 1):
         shifted = feature_df.shift(lag).copy()
         shifted.columns = [f"{c}_lag{lag}" for c in shifted.columns]
         X_lagged.append(shifted)
     X_all = pd.concat(X_lagged, axis=1).dropna()
     y = df.loc[X_all.index, "target_delta_gex"]
 
-    if len(X_all) < 4:
+    if len(X_all) < 3:
         print("Not enough lagged samples.")
         return
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_all, y, test_size=0.2, random_state=42
-    )
+    X_train, X_test, y_train, y_test = _chronological_split(X_all, y)
 
-    model_choice = "xgb" if XGBOOST_AVAILABLE else "linear"
+    model_choice = "xgb" if XGBOOST_AVAILABLE and len(X_train) >= 10 else "linear"
     print(f"Training ΔGEX regressor: {model_choice}")
 
     if XGBOOST_AVAILABLE:
@@ -99,7 +132,8 @@ def train_model(ticker: str):
     preds = reg.predict(X_test)
     sign_acc = np.mean(np.sign(preds) == np.sign(y_test.values))
     print(f"Test MAE:  {mean_absolute_error(y_test, preds):.4f} Bn$ / %")
-    print(f"Test R²:   {r2_score(y_test, preds):.4f}")
+    test_r2 = r2_score(y_test, preds) if len(y_test) > 1 else float("nan")
+    print(f"Test R²:   {test_r2:.4f}" if not np.isnan(test_r2) else "Test R²:   N/A")
     print(f"Sign acc:  {sign_acc:.3f}")
 
     model_path = MODELS_DIR / f"{ticker}_gex_delta_model.joblib"
@@ -113,9 +147,16 @@ def train_model(ticker: str):
         model_type=model_choice,
         metrics={
             "test_mae": float(mean_absolute_error(y_test, preds)),
-            "test_r2": float(r2_score(y_test, preds)),
+            "test_r2": None if np.isnan(test_r2) else float(test_r2),
             "sign_accuracy": float(sign_acc),
             "n_train": int(len(X_train)),
+        },
+        extra={
+            "training_start_ts": str(df["ts"].iloc[0]),
+            "training_end_ts": str(df["ts"].iloc[-1]),
+            "lookback_days": lookback_days,
+            "lag": effective_lag,
+            "n_snapshots": int(len(df) + 1),
         },
     )
 
@@ -123,5 +164,6 @@ def train_model(ticker: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ticker", required=True)
+    parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     args = parser.parse_args()
-    train_model(args.ticker.upper())
+    train_model(args.ticker.upper(), lookback_days=args.lookback_days)
