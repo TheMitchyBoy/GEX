@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
+import socket
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
@@ -739,6 +742,41 @@ def build_watchlist_rows(tickers: list[str]) -> list[dict]:
     return sorted(rows, key=lambda row: abs(row.get("total_gex", 0.0)), reverse=True)
 
 
+def validate_webhook_url(url: str) -> tuple[bool, str]:
+    """Validate a webhook URL against SSRF abuse.
+
+    Requires HTTPS and rejects hosts that resolve to private, loopback,
+    link-local, or otherwise non-public addresses (e.g. cloud metadata
+    endpoints like ``169.254.169.254``). Set ``GEX_ALERT_ALLOW_INSECURE=1``
+    to permit ``http`` and private targets for local testing.
+    """
+    allow_insecure = os.environ.get("GEX_ALERT_ALLOW_INSECURE", "").lower() in {"1", "true", "yes"}
+    parsed = urlparse(url)
+    if parsed.scheme not in {"https"} and not (allow_insecure and parsed.scheme == "http"):
+        return False, "Webhook URL must use https."
+    host = parsed.hostname
+    if not host:
+        return False, "Webhook URL has no host."
+    if allow_insecure:
+        return True, "ok"
+    try:
+        addrinfos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror as exc:
+        return False, f"Webhook host did not resolve: {exc}"
+    for info in addrinfos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False, f"Webhook host resolves to non-public address {ip}."
+    return True, "ok"
+
+
 def dispatch_alerts_to_webhook(ticker: str, alerts: list[dict]) -> tuple[bool, str]:
     """Dispatch alerts to webhook if configured."""
     url = os.environ.get("GEX_ALERT_WEBHOOK_URL")
@@ -746,6 +784,9 @@ def dispatch_alerts_to_webhook(ticker: str, alerts: list[dict]) -> tuple[bool, s
         return False, "GEX_ALERT_WEBHOOK_URL not configured."
     if not alerts:
         return False, "No alerts to dispatch."
+    ok, reason = validate_webhook_url(url)
+    if not ok:
+        return False, f"Webhook URL rejected: {reason}"
     payload = {
         "ticker": ticker,
         "alert_count": len(alerts),

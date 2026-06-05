@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import secrets
 import threading
 import time
 from datetime import datetime, timezone
@@ -583,11 +584,20 @@ def ticker_page(ticker):
     scenario_pct = safe_float(request.args.get("scenario_pct"), 0.0)
     scenario = simulate_spot_scenario(selected, scenario_pct / 100.0) if scenario_pct else None
 
-    alert_dispatch_status = maybe_dispatch_alerts(
-        ticker,
-        alert_feed,
-        manual=request.args.get("dispatch_alerts") == "1",
-    )
+    # Auto-dispatch runs only from the background scheduler (see
+    # ``_auto_dispatch_alerts``); page renders never trigger webhooks. Manual
+    # dispatch over HTTP requires a valid admin token to prevent unauthenticated
+    # callers (links, crawlers, CSRF) from firing the webhook.
+    alert_dispatch_status = None
+    if request.args.get("dispatch_alerts") == "1":
+        if _manual_dispatch_authorized(request):
+            alert_dispatch_status = maybe_dispatch_alerts(ticker, alert_feed, manual=True)
+        else:
+            alert_dispatch_status = {
+                "ok": False,
+                "message": "Manual dispatch requires a valid admin token (set GEX_ADMIN_TOKEN).",
+                "dispatched": False,
+            }
 
     system_status = build_system_status(ticker)
     latest_raw = get_latest_ts(ticker)
@@ -734,11 +744,42 @@ _scheduler: BackgroundScheduler | None = None
 _scheduler_lock_path = Path(os.environ.get("GEX_SCHEDULER_LOCK", "data/.gex_scheduler.lock"))
 
 
+def _manual_dispatch_authorized(req) -> bool:
+    """Authorize a manual webhook dispatch request via the admin token.
+
+    Dispatch is disabled by default: without ``GEX_ADMIN_TOKEN`` set, no HTTP
+    caller can trigger the webhook. When configured, the token must be supplied
+    via the ``admin_token`` query arg or ``X-Admin-Token`` header.
+    """
+    token = os.environ.get("GEX_ADMIN_TOKEN")
+    if not token:
+        return False
+    provided = req.args.get("admin_token") or req.headers.get("X-Admin-Token") or ""
+    return bool(provided) and secrets.compare_digest(provided, token)
+
+
+def _auto_dispatch_alerts(ticker: str) -> None:
+    """Generate alerts and run auto-dispatch. Background scheduler only."""
+    history = build_history(ticker)
+    if not history:
+        return
+    selected = _select_snapshot(history, None)
+    prediction = predict_next_snapshot(history)
+    alerts = generate_alerts(history, selected, prediction)
+    maybe_dispatch_alerts(ticker, alerts, manual=False)
+
+
 def _scheduled_refresh():
     try:
         refresh_tickers(REFRESH_TICKERS, force=True)
     except Exception:
         logger.exception("Scheduled GEX refresh failed")
+        return
+    for ticker in REFRESH_TICKERS:
+        try:
+            _auto_dispatch_alerts(ticker)
+        except Exception:
+            logger.exception("Auto-dispatch failed for %s", ticker)
 
 
 def _acquire_scheduler_lock() -> bool:
@@ -796,4 +837,6 @@ start_background_refresh()
 
 
 if __name__ == "__main__":
-    APP.run(host="0.0.0.0", port=8501, debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
+    port = int(os.environ.get("PORT", "8080"))
+    APP.run(host="0.0.0.0", port=port, debug=debug)
