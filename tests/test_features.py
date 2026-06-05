@@ -30,3 +30,20 @@ def test_term_structure_breakdown_splits_zero_dte_and_back_term():
     assert panel["back_term_gex_bn"] == 1.0
     assert panel["term_curvature"] == 1.5
     assert panel["expiration_count"] == 4.0
+    # front_term = nearest-dated expiration bucket (here it coincides with 0DTE).
+    assert panel["front_term_gex_bn"] == 2.0
+
+
+def test_front_term_diverges_from_zero_dte_without_same_day_expiry():
+    expirations = pd.Series(
+        [3.0, -1.0],
+        index=pd.to_datetime(["2026-06-08", "2026-06-15"]),
+    )
+
+    panel = term_structure_breakdown(expirations, snapshot_date=pd.Timestamp("2026-06-05"))
+
+    # No same-day expiry: 0DTE falls back to the first bucket, and front_term is
+    # the nearest expiration. Both equal the first bucket but are computed
+    # independently (front_term is no longer a copy of zero_dte).
+    assert panel["front_term_gex_bn"] == 3.0
+    assert panel["zero_dte_gex_bn"] == 3.0

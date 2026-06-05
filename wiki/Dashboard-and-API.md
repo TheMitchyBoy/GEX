@@ -54,6 +54,7 @@ Example fields:
 - `history_depth`  
 - `uw_api_configured`, `scheduler_enabled`  
 - `model_overlay_active`, `model_training_rows`  
+- `index_db_present` — whether the SQLite index file exists (path not exposed)  
 - `alert_webhook_configured`, `alert_auto_dispatch`  
 
 Returns **503** when unhealthy (no history or stale export).
