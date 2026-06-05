@@ -35,6 +35,24 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
     return key, value
 
 
+def sync_env_files_from_process(target: Path | None = None) -> str | None:
+    """Persist ``UW_API_KEY`` from the process env into ``.env`` when missing on disk."""
+    key = uw_api_key()
+    if not key:
+        return None
+    path = target or (_REPO_ROOT / ".env")
+    if path.is_file():
+        existing = path.read_text(encoding="utf-8")
+        for line in existing.splitlines():
+            parsed = _parse_env_line(line)
+            if parsed and parsed[0] == "UW_API_KEY" and parsed[1].strip():
+                return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"UW_API_KEY={key}\n", encoding="utf-8")
+    path.chmod(0o600)
+    return str(path)
+
+
 def load_env_files(paths: tuple[Path, ...] | None = None) -> list[str]:
     """Populate ``os.environ`` from env files without clobbering existing keys."""
     loaded: list[str] = []
