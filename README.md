@@ -120,7 +120,7 @@ The prediction stack (`gex_core.predict`) combines:
 Train models:
 
 ```bash
-python scripts/train_gex_model.py --ticker SPX --lookback-days 7
+python scripts/train_gex_model.py --ticker SPX --lookback-days 90
 python scripts/train_gex_lstm.py --ticker SPX --seq-len 8 --epochs 50
 python scripts/backtest_gex_prediction.py --ticker SPX
 ```
@@ -143,7 +143,9 @@ python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 | `GEX_INTRADAY_BACKFILL_DAYS` | `90` | Default lookback for intraday backfill script |
 | `GEX_DAILY_BACKFILL_DAYS` | `90` | EOD strike backfill via `gex_backfill_intraday.py` |
 | `GEX_DASHBOARD_HISTORY_DAYS` | `30` | Recent snapshots for KNN / panels |
-| `GEX_DASHBOARD_HISTORY_MAX` | `120` | Max strike CSVs loaded per dashboard request |
+| `GEX_DASHBOARD_HISTORY_MAX` | `240` | Max strike CSVs loaded per dashboard request |
+| `GEX_PREDICTION_LOOKBACK_DAYS` | `30` | KNN / forecast training window on dashboard |
+| `GEX_TRAIN_LOOKBACK_DAYS` | `90` | Default lookback for `train_gex_model.py` |
 | `GEX_DASHBOARD_TIMELINE_DAYS` | `90` | Spot vs levels timeline from backfill index |
 | `GEX_SPX_PRICE_PERIOD` | `5d` | Yahoo Finance window for live SPX chart |
 | `GEX_SPX_PRICE_INTERVAL` | `15m` | Yahoo Finance bar size for live SPX chart |
