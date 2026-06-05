@@ -3,11 +3,14 @@ services:
     build: .
     ports:
       - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+      - path: config/spx.env
+        required: false
     environment:
-      # UW_API_KEY must be present in your shell or a local .env file, otherwise
-      # the container starts with an empty key and live data is disabled (the
-      # dashboard will show "Live data isn't configured" and only serve saved
-      # snapshots). e.g.: `export UW_API_KEY=...` or add it to a .env file.
+      # UW_API_KEY must be present in your shell, .env, or config/spx.env —
+      # otherwise live data is disabled and the dashboard serves saved snapshots.
       - UW_API_KEY=${UW_API_KEY:-}
       - GEX_REFRESH_INTERVAL_MINUTES=1
       - GEX_DISABLE_SCHEDULER=0
@@ -18,6 +21,11 @@ services:
   refresh:
     build: .
     command: python scripts/gex_refresh.py --force
+    env_file:
+      - path: .env
+        required: false
+      - path: config/spx.env
+        required: false
     environment:
       - UW_API_KEY=${UW_API_KEY:-}
     volumes:
