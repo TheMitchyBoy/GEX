@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ ticker }} · Market Maker Position</title>
+    <title>{{ ticker }} · Gamma Analysis Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
@@ -38,6 +38,29 @@
         font-weight: 600;
         font-family: ui-monospace, monospace;
       }
+      .metric-note {
+        color: var(--muted);
+        font-size: .76rem;
+        line-height: 1.35;
+      }
+      .gamma-card {
+        height: 100%;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+      }
+      .gamma-score {
+        font-size: 2rem;
+        line-height: 1;
+        font-weight: 700;
+        font-family: ui-monospace, monospace;
+      }
+      .level-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: .75rem;
+        padding: .45rem 0;
+        border-bottom: 1px solid rgba(255,255,255,.06);
+      }
+      .level-row:last-child { border-bottom: 0; }
       .pill {
         border-radius: 4px;
         font-size: .7rem;
@@ -80,14 +103,14 @@
     <main class="container py-4">
       <section class="glass rounded-4 p-3 mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
-          <h1 class="h4 mb-1">{{ ticker }} · Market Maker Position</h1>
+          <h1 class="h4 mb-1">{{ ticker }} · Gamma Analysis Dashboard</h1>
           <div class="small text-secondary">Data: <span class="mono">{{ data_source }}</span></div>
         </div>
         <div class="d-flex align-items-center gap-2">
           {% if latest_ts %}
           <span class="small text-secondary mono">{{ latest_ts }} · every {{ refresh_minutes }}m</span>
           {% endif %}
-          <a class="btn btn-sm btn-outline-secondary" href="/">← All</a>
+          <a class="btn btn-sm btn-outline-secondary" href="/">SPX Home</a>
           <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker, force_refresh=1) }}">Refresh</a>
         </div>
       </section>
@@ -103,6 +126,99 @@
       <div class="alert {{ 'alert-success' if alert_dispatch_status.ok else 'alert-warning' }}" role="alert">
         {{ alert_dispatch_status.message }}
       </div>
+      {% endif %}
+
+      {% if gamma_analysis %}
+      <section class="row g-3 mb-3">
+        <div class="col-12 col-lg-3">
+          <div class="glass rounded-4 p-3 gamma-card">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <div>
+                <div class="metric-label">Gamma Regime</div>
+                <div class="metric-value {% if 'LONG' in gamma_analysis.regime %}text-success{% elif 'SHORT' in gamma_analysis.regime %}text-danger{% endif %}">
+                  {{ gamma_analysis.regime }}
+                </div>
+              </div>
+              <span class="pill {{ 'pill-long' if gamma_analysis.risk_label == 'low' else 'pill-short' if gamma_analysis.risk_label == 'high' else '' }}">{{ gamma_analysis.risk_label|upper }}</span>
+            </div>
+            <div class="gamma-score {% if gamma_analysis.total_gex >= 0 %}text-success{% else %}text-danger{% endif %}">
+              {{ '%+.2f'|format(gamma_analysis.total_gex) }}
+            </div>
+            <div class="metric-note">Net GEX Bn$ / %. {{ gamma_analysis.hedging_tone }}</div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-3">
+          <div class="glass rounded-4 p-3 gamma-card">
+            <div class="metric-label">Spot vs Gamma Flip</div>
+            <div class="metric-value">
+              {% if gamma_analysis.flip %}
+                {{ '%+.0f'|format(gamma_analysis.spot_minus_flip_pts) }} pts
+              {% else %}
+                N/A
+              {% endif %}
+            </div>
+            <div class="metric-note">
+              {% if gamma_analysis.flip %}
+                Spot {{ 'above' if gamma_analysis.spot_minus_flip_pts > 0 else 'below' if gamma_analysis.spot_minus_flip_pts < 0 else 'at' }} flip {{ '%.0f'|format(gamma_analysis.gamma_flip) }}
+                ({{ '%.2f'|format(gamma_analysis.flip.abs_distance_pct * 100) }}% away).
+              {% else %}
+                Gamma flip is unavailable for this snapshot.
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-3">
+          <div class="glass rounded-4 p-3 gamma-card">
+            <div class="metric-label">Nearest Wall</div>
+            <div class="metric-value">
+              {% if gamma_analysis.nearest_wall %}
+                {{ gamma_analysis.nearest_wall_name }} {{ '%.0f'|format(gamma_analysis.nearest_wall.level) }}
+              {% else %}
+                N/A
+              {% endif %}
+            </div>
+            <div class="metric-note">
+              {% if gamma_analysis.nearest_wall %}
+                {{ '%.0f'|format(gamma_analysis.nearest_wall.abs_distance_pts) }} pts from spot; wall spread
+                {{ '%.0f'|format(gamma_analysis.wall_spread) if gamma_analysis.wall_spread is not none else 'N/A' }} pts.
+              {% else %}
+                Call/put wall levels are unavailable.
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-3">
+          <div class="glass rounded-4 p-3 gamma-card">
+            <div class="metric-label">Gamma Balance</div>
+            <div class="metric-value">{{ '%+.0f'|format(gamma_analysis.net_ratio * 100) }}%</div>
+            <div class="metric-note">
+              +GEX {{ '%.2f'|format(gamma_analysis.positive_gex) }} · -GEX {{ '%.2f'|format(gamma_analysis.negative_gex) }} Bn$ / %.
+              Near-term share {{ '%.1f'|format(gamma_analysis.near_term_ratio * 100) }}%.
+            </div>
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="glass rounded-4 p-3">
+            <div class="row g-3">
+              <div class="col-12 col-lg-4">
+                <div class="metric-label">Gamma risk score</div>
+                <div class="metric-value">{{ '%.1f'|format(gamma_analysis.risk_score) }} / 100</div>
+                <div class="metric-note">Combines regime, flip proximity, wall proximity, and near-term concentration.</div>
+              </div>
+              <div class="col-12 col-lg-4">
+                <div class="metric-label">Structure concentration</div>
+                <div class="metric-value">{{ '%.1f'|format(gamma_analysis.concentration * 100) }}%</div>
+                <div class="metric-note">Share of absolute strike gamma concentrated in the largest strikes.</div>
+              </div>
+              <div class="col-12 col-lg-4">
+                <div class="metric-label">Cumulative slope at spot</div>
+                <div class="metric-value">{{ '%+.4f'|format(gamma_analysis.cumulative_slope_at_spot) }}</div>
+                <div class="metric-note">Local sensitivity of cumulative GEX around current SPX spot.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
       {% endif %}
 
       {% if not has_history %}
@@ -141,8 +257,8 @@
       <section class="row g-3">
         <div class="col-12 col-xl-8">
           <div class="glass rounded-4 p-3 mb-3">
-            <h2 class="h5 mb-2">Market Maker Position</h2>
-            <p class="small text-secondary mb-2">From UW CSV in <code>data/exports/</code>. Green = long gamma, red = short.</p>
+            <h2 class="h5 mb-2">SPX Gamma Exposure Profile</h2>
+            <p class="small text-secondary mb-2">From UW CSV in <code>data/exports/</code>. Green = long gamma, red = short gamma by strike.</p>
             {% if profile_json %}
             <div id="profileChart"></div>
             {% else %}
@@ -217,7 +333,7 @@
           {% endif %}
 
           <div class="glass rounded-4 p-3">
-            <h2 class="h5 mb-2">Positive GEX Focus</h2>
+            <h2 class="h5 mb-2">Positive Gamma Strike Focus</h2>
             {% if current_strike_chart_json %}
             <div id="currentStrike"></div>
             {% else %}

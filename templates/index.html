@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>GEX Nexus</title>
+    <title>SPX Gamma Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
       :root {
@@ -61,17 +61,6 @@
       .pill-short { color: #fecdd3; background: rgba(190,24,93,0.24); border: 1px solid rgba(244,63,94,0.35); }
       .ticker-card { transition: transform .2s ease, border-color .2s ease; }
       .ticker-card:hover { transform: translateY(-3px); border-color: rgba(96,165,250,0.55); }
-      .search-input {
-        background: rgba(15, 23, 42, 0.75);
-        color: var(--txt);
-        border: 1px solid var(--line);
-      }
-      .search-input:focus {
-        background: rgba(15, 23, 42, 0.95);
-        color: var(--txt);
-        border-color: rgba(96,165,250,0.6);
-        box-shadow: 0 0 0 0.2rem rgba(59,130,246,0.16);
-      }
       .mono { font-family: ui-monospace, monospace; }
     </style>
   </head>
@@ -84,24 +73,23 @@
         <div class="d-flex flex-wrap justify-content-between gap-3 align-items-start">
           <div>
             <div class="d-flex align-items-center gap-2 mb-2">
-              <span class="chip">GEX NEXUS</span>
-              <span class="chip">AI Pattern Engine</span>
+              <span class="chip">SPX ONLY</span>
+              <span class="chip">Gamma Analysis</span>
             </div>
-            <h1 class="display-6 mb-2 title-grad">Ultra-modern Gamma Command Center</h1>
-            <p class="muted mb-0">Explore timeline states, AI analog forecasts, and similar setup intelligence per ticker.</p>
+            <h1 class="display-6 mb-2 title-grad">SPX Gamma Command Center</h1>
+            <p class="muted mb-0">Monitor dealer gamma regime, flip distance, wall proximity, and SPX-specific hedging pressure.</p>
           </div>
           <a class="btn btn-outline-light" href="/">Refresh</a>
         </div>
       </section>
 
       <section class="glass rounded-4 p-3 p-lg-4 mb-4">
-        <div class="row g-3 align-items-center">
-          <div class="col-lg-8">
-            <input id="tickerFilter" class="form-control search-input" placeholder="Filter ticker cards (e.g. SPX, NVDA)">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div>
+            <div class="h6 mb-1">Single-symbol dashboard</div>
+            <div class="muted small">All dashboard routes, widgets, APIs, and scheduled refreshes are focused on SPX.</div>
           </div>
-          <div class="col-lg-4 text-lg-end muted small">
-            {{ tickers|length }} ticker{{ '' if tickers|length == 1 else 's' }} with snapshot history
-          </div>
+          <a class="btn btn-primary" href="{{ url_for('ticker_page', ticker='SPX') }}">Open SPX Gamma Dashboard</a>
         </div>
       </section>
 
@@ -119,7 +107,7 @@
               <div class="mb-1"><strong>Total GEX:</strong> {{ row.total_gex_text }}</div>
               <div class="small muted mb-2">Flip distance: {{ row.flip_distance_text }}</div>
               <div class="small muted mb-3">Confluence {{ row.confluence_text }} · Stability {{ row.stability_text }}</div>
-              <a class="btn btn-primary mt-auto w-100" href="{{ url_for('ticker_page', ticker=row.ticker) }}">Open {{ row.ticker }} Experience</a>
+              <a class="btn btn-primary mt-auto w-100" href="{{ url_for('ticker_page', ticker=row.ticker) }}">Open {{ row.ticker }} Gamma Dashboard</a>
             </div>
           </article>
           {% endfor %}
@@ -127,14 +115,14 @@
           <div class="col-12">
             <div class="glass rounded-4 p-4">
               <h2 class="h5">No exports yet</h2>
-              <p class="mb-0 muted">Run <code>python main.py --ticker SPX --no-show</code> to generate historical snapshots.</p>
+              <p class="mb-0 muted">Run <code>python main.py --ticker SPX --no-show</code> to generate SPX historical snapshots.</p>
             </div>
           </div>
         {% endif %}
       </section>
       {% if tickers %}
       <section class="glass rounded-4 p-3 p-lg-4 mt-4">
-        <h2 class="h5 mb-3">Multi-ticker watchlist</h2>
+        <h2 class="h5 mb-3">SPX gamma snapshot</h2>
         <div class="table-responsive">
           <table class="table table-dark table-striped table-hover align-middle mb-0">
             <thead>
@@ -166,17 +154,5 @@
       </section>
       {% endif %}
     </main>
-
-    <script>
-      const filter = document.getElementById('tickerFilter');
-      const cards = [...document.querySelectorAll('.ticker-item')];
-      filter?.addEventListener('input', () => {
-        const q = filter.value.trim().toUpperCase();
-        cards.forEach((card) => {
-          const ticker = card.dataset.ticker || '';
-          card.style.display = ticker.includes(q) ? '' : 'none';
-        });
-      });
-    </script>
   </body>
 </html>

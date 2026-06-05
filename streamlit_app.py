@@ -19,6 +19,7 @@ from gex_core.exports import find_exports_for_ticker, load_strike_series, parse_
 from gex_core.features import compute_features_from_exports, enrich_snapshot_metrics
 from gex_core.history import build_history as build_history_from_exports
 from gex_core.predict import load_flow_predictions, predict_next_snapshot, similar_setups
+from gex_core.tickers import PRIMARY_TICKER
 
 EXPORT_DIR = Path("data/exports")
 IMG_DIR = Path("img")
@@ -30,9 +31,9 @@ def find_available_tickers(export_dir: Path):
     tickers = set()
     for f in export_dir.glob("*.csv"):
         parts = f.name.split("_")
-        if parts:
-            tickers.add(parts[0])
-    return sorted(tickers)
+        if parts and parts[0].upper() == PRIMARY_TICKER:
+            tickers.add(PRIMARY_TICKER)
+    return [PRIMARY_TICKER] if PRIMARY_TICKER in tickers else []
 
 
 def latest_file_for(pattern: str, directory: Path):
@@ -417,16 +418,16 @@ def render_ai_insights(analysis) -> None:
 
 
 def main():
-    st.set_page_config(page_title="GEX · Dealer Intelligence", layout="wide")
+    st.set_page_config(page_title="SPX · Gamma Intelligence", layout="wide")
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
     tickers_from_exports = find_available_tickers(EXPORT_DIR)
-    ticker = st.sidebar.selectbox(
-        "Ticker", options=tickers_from_exports if tickers_from_exports else ["SPX"], index=0
-    )
-    custom = st.sidebar.text_input("Or enter ticker manually", value="")
-    if custom.strip():
-        ticker = custom.strip().upper()
+    ticker = PRIMARY_TICKER
+    st.sidebar.markdown("### SPX Gamma Dashboard")
+    if tickers_from_exports:
+        st.sidebar.caption("Using SPX exports from data/exports.")
+    else:
+        st.sidebar.caption("No SPX exports found yet; live data will show when UW_API_KEY is configured.")
 
     uw_enabled = bool(os.environ.get("UW_API_KEY"))
     if uw_enabled:
@@ -467,7 +468,7 @@ def main():
     # ── Header ────────────────────────────────────────────────────────────────
     hdr_col, spot_col = st.columns([3, 1])
     with hdr_col:
-        st.title(f"{ticker} · Dealer Gamma Intelligence")
+        st.title(f"{ticker} · SPX Gamma Intelligence")
     with spot_col:
         if uw_spot:
             st.metric("Live Spot (UW)", f"${uw_spot:,.2f}")

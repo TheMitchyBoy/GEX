@@ -219,14 +219,15 @@ This generates the same-day (0DTE) surface plot and exports the data without ope
 
 ## Dashboard & Website
 
-The repository now includes two interactive interfaces for viewing GEX output:
+The repository now includes two SPX-focused interactive interfaces for viewing GEX output:
 
 - **Streamlit dashboard:** `streamlit_app.py`
-  - Visualizes the latest CSV exports from `data/exports`
+  - Visualizes the latest SPX CSV exports from `data/exports`
   - Shows interactive heatmaps and 3D scatter plots
   - Displays PNG snapshots from `img/`
 - **Flask website:** `web_app.py`
   - Includes a historical timeline selector to revisit older GEX snapshots
+  - Leads with SPX gamma-analysis cards for regime, flip distance, wall proximity, gamma balance, and near-term concentration
   - Adds AI-like nearest-neighbor prediction for the next GEX update from current outlook
   - Surfaces similar historical setup matches and shows what happened on the next snapshot
 
@@ -247,7 +248,6 @@ Configuration (environment variables):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UW_API_KEY` | (unset) | Unusual Whales API key (primary source) |
-| `GEX_DEFAULT_TICKERS` | `SPX` | Tickers refreshed on a schedule |
 | `GEX_REFRESH_INTERVAL_MINUTES` | `1` | Auto-refresh interval |
 | `GEX_DISABLE_SCHEDULER` | (unset) | Set to `1` to disable background refresh |
 | `GEX_DATA_FILTERS` | `1` | Set to `0` to skip option filters |

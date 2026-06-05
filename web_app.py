@@ -24,6 +24,7 @@ from gex_core.charts import (
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import build_history, get_latest_ts, list_tickers, list_timestamps, ts_label
 from gex_core.intelligence import (
+    build_gamma_analysis_panel,
     build_data_quality_panel,
     build_outcome_panel,
     build_strategy_assistant,
@@ -41,7 +42,8 @@ from gex_core.predict import (
     predict_next_snapshot,
     similar_setups,
 )
-from gex_core.refresh import DEFAULT_REFRESH_MINUTES, DEFAULT_TICKERS, refresh_ticker, refresh_tickers
+from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
+from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
 
 APP = Flask(__name__)
 app = APP
@@ -119,12 +121,13 @@ def get_uw_data(ticker: str) -> dict | None:
 
 IMG_DIR = Path("img")
 FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
-REFRESH_TICKERS = DEFAULT_TICKERS
+REFRESH_TICKERS = supported_tickers()
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
 
 def find_available_tickers(export_dir: Path | None = None):
-    return list_tickers(export_dir)
+    tickers = list_tickers(export_dir)
+    return tickers if PRIMARY_TICKER in tickers else supported_tickers()
 
 
 def _uw_live_enabled() -> bool:
@@ -159,13 +162,32 @@ def _prediction_public_view(prediction: dict | None) -> dict | None:
     }
 
 
+def _spx_redirect(**extra):
+    args = request.args.to_dict(flat=True)
+    args.update(extra)
+    return redirect(url_for("ticker_page", ticker=PRIMARY_TICKER, **args))
+
+
 def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
+    ticker = PRIMARY_TICKER
     history = build_history(ticker)
     if not history:
+        selected = {
+            "regime": "N/A",
+            "total_gex": 0.0,
+            "pos_gex": 0.0,
+            "neg_gex": 0.0,
+            "call_wall": None,
+            "put_wall": None,
+            "gamma_flip": None,
+            "spot": None,
+            "near_term_ratio": 0.0,
+        }
         return {
             "ticker": ticker,
             "has_history": False,
             "summary": None,
+            "gamma_analysis": build_gamma_analysis_panel(selected),
             "alerts": [],
             "strategy_notes": [],
             "watchlist": [],
@@ -189,6 +211,7 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
         "has_history": True,
         "selected_ts": selected.get("ts"),
         "summary": today,
+        "gamma_analysis": build_gamma_analysis_panel(selected, prediction),
         "prediction": _prediction_public_view(prediction),
         "probabilities": probs,
         "confluence": confluence,
@@ -226,6 +249,8 @@ def index():
 @APP.route("/ticker/<ticker>/")
 def ticker_page(ticker):
     ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        return _spx_redirect()
     bootstrap_status = request.args.get("bootstrap")
     force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
     if force_refresh:
@@ -248,10 +273,13 @@ def ticker_page(ticker):
             "ts_label": "No snapshot history available yet",
             "regime": "N/A",
             "total_gex": 0.0,
+            "pos_gex": 0.0,
+            "neg_gex": 0.0,
             "call_wall": None,
             "put_wall": None,
             "gamma_flip": None,
             "spot": None,
+            "near_term_ratio": 0.0,
         }
         uw_entry = get_uw_data(ticker)
         profile_json = None
@@ -262,10 +290,13 @@ def ticker_page(ticker):
                 {
                     "regime": "LONG gamma" if uw_agg.total_gex_bn >= 0 else "SHORT gamma",
                     "total_gex": float(uw_agg.total_gex_bn),
+                    "pos_gex": float(uw_agg.gex_by_strike[uw_agg.gex_by_strike > 0].sum()),
+                    "neg_gex": float(uw_agg.gex_by_strike[uw_agg.gex_by_strike < 0].sum()),
                     "call_wall": float(uw_agg.gex_by_strike.idxmax()) if len(uw_agg.gex_by_strike) else None,
                     "put_wall": float(uw_agg.gex_by_strike.idxmin()) if len(uw_agg.gex_by_strike) else None,
                     "gamma_flip": uw_entry.get("gamma_flip"),
                     "spot": uw_entry.get("spot"),
+                    "near_term_ratio": 0.0,
                 }
             )
             profile_json = make_gex_profile_chart(
@@ -304,6 +335,7 @@ def ticker_page(ticker):
             spot_distance_to_flip=None,
             ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
             today_regime=build_today_regime_snapshot(selected, None),
+            gamma_analysis=build_gamma_analysis_panel(selected),
             alert_feed=[],
             forecast_probs=None,
             confluence_overlay=compute_confluence_overlay(selected, None, None),
@@ -445,6 +477,7 @@ def ticker_page(ticker):
         spot_distance_to_flip=spot_dist,
         ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
         today_regime=today_regime,
+        gamma_analysis=build_gamma_analysis_panel(selected, prediction_raw),
         alert_feed=alert_feed,
         forecast_probs=forecast_probs,
         confluence_overlay=confluence_overlay,
@@ -463,6 +496,8 @@ def ticker_page(ticker):
 @APP.post("/ticker/<ticker>/bootstrap")
 def bootstrap_ticker_history(ticker):
     ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        return _spx_redirect()
     try:
         ok = refresh_ticker(ticker, force=True)
     except Exception:
@@ -475,14 +510,14 @@ def bootstrap_ticker_history(ticker):
 
 @APP.get("/api/latest-summary")
 def api_latest_summary():
-    ticker = request.args.get("ticker", "SPX").upper()
+    ticker = PRIMARY_TICKER
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     return jsonify(payload)
 
 
 @APP.get("/api/signals")
 def api_signals():
-    ticker = request.args.get("ticker", "SPX").upper()
+    ticker = PRIMARY_TICKER
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     return jsonify(
         {
@@ -504,7 +539,7 @@ def api_watchlist():
 
 @APP.get("/widget/<ticker>")
 def ticker_widget(ticker: str):
-    ticker = ticker.upper()
+    ticker = PRIMARY_TICKER
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     summary = payload.get("summary") or {}
     confluence = payload.get("confluence") or {"score": 0.0, "label": "low"}
