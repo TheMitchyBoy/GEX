@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from gex_core.env_bootstrap import uw_api_configured
+from gex_core.env_bootstrap import uw_api_key_diagnostics
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import build_history, get_latest_ts
 from gex_core.models_manifest import load_manifest
@@ -27,7 +27,6 @@ def build_system_status(ticker: str | None = None) -> dict:
         n_train = (manifest.get("metrics") or {}).get("n_train")
 
     scheduler_disabled = os.environ.get("GEX_DISABLE_SCHEDULER", "").lower() in {"1", "true", "yes"}
-    uw_configured = uw_api_configured()
 
     stale = False
     if age_min is not None and age_min > DEFAULT_REFRESH_MINUTES * 3:
@@ -41,7 +40,7 @@ def build_system_status(ticker: str | None = None) -> dict:
     return {
         "ticker": ticker,
         "healthy": bool(history) and not stale,
-        "uw_api_configured": uw_configured,
+        **uw_api_key_diagnostics(),
         "scheduler_enabled": not scheduler_disabled,
         "latest_export_ts": latest_ts,
         "export_age_minutes": age_min,

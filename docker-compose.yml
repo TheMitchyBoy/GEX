@@ -9,9 +9,8 @@ services:
       - path: config/spx.env
         required: false
     environment:
-      # UW_API_KEY must be present in your shell, .env, or config/spx.env —
-      # otherwise live data is disabled and the dashboard serves saved snapshots.
-      - UW_API_KEY=${UW_API_KEY:-}
+      # Pass host UW_API_KEY only when set; do not default to blank (that blocks .env load).
+      - UW_API_KEY
       - GEX_REFRESH_INTERVAL_MINUTES=1
       - GEX_DISABLE_SCHEDULER=0
     volumes:
@@ -21,13 +20,13 @@ services:
   refresh:
     build: .
     command: python scripts/gex_refresh.py --force
+    environment:
+      - UW_API_KEY
     env_file:
       - path: .env
         required: false
       - path: config/spx.env
         required: false
-    environment:
-      - UW_API_KEY=${UW_API_KEY:-}
     volumes:
       - ./data:/app/data
       - ./data/exports:/app/data/exports

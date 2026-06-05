@@ -36,9 +36,29 @@ def test_sync_env_files_from_process_writes_missing_env(monkeypatch, tmp_path):
 
     written = env_bootstrap.sync_env_files_from_process(target)
 
-    assert written == str(target)
+    assert written == [str(target)]
     assert target.read_text(encoding="utf-8") == "UW_API_KEY=persisted-key\n"
     assert (target.stat().st_mode & 0o777) == 0o600
+
+
+def test_load_env_files_overrides_blank_env_placeholder(monkeypatch, tmp_path):
+    monkeypatch.setenv("UW_API_KEY", "")
+    env_file = tmp_path / ".env"
+    env_file.write_text("UW_API_KEY=file-key\n")
+
+    env_bootstrap.load_env_files((env_file,))
+
+    assert env_bootstrap.uw_api_key() == "file-key"
+
+
+def test_blank_env_placeholder_blocks_until_file_load(monkeypatch, tmp_path):
+    monkeypatch.setenv("UW_API_KEY", "")
+    env_file = tmp_path / ".env"
+    env_file.write_text("UW_API_KEY=file-key\n")
+
+    assert env_bootstrap.uw_api_configured() is False
+    env_bootstrap.load_env_files((env_file,))
+    assert env_bootstrap.uw_api_configured() is True
 
 
 def test_bootstrap_env_syncs_then_loads(monkeypatch, tmp_path):
@@ -59,5 +79,5 @@ def test_sync_env_files_from_process_skips_existing_key(monkeypatch, tmp_path):
     target = tmp_path / ".env"
     target.write_text("UW_API_KEY=existing-key\n", encoding="utf-8")
 
-    assert env_bootstrap.sync_env_files_from_process(target) is None
+    assert env_bootstrap.sync_env_files_from_process(target) == []
     assert target.read_text(encoding="utf-8") == "UW_API_KEY=existing-key\n"

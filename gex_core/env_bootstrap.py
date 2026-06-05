@@ -37,30 +37,50 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
 
 def bootstrap_env(paths: tuple[Path, ...] | None = None) -> list[str]:
     """Sync process secrets to disk, then load env files into ``os.environ``."""
-    sync_env_files_from_process()
+    targets = paths or _DEFAULT_ENV_FILES
+    for path in targets:
+        sync_env_files_from_process(path)
     return load_env_files(paths)
 
 
-def sync_env_files_from_process(target: Path | None = None) -> str | None:
-    """Persist ``UW_API_KEY`` from the process env into ``.env`` when missing on disk."""
+def _env_value_missing(key: str) -> bool:
+    value = os.environ.get(key)
+    return value is None or not str(value).strip()
+
+
+def _file_has_uw_key(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parsed = _parse_env_line(line)
+        if parsed and parsed[0] == "UW_API_KEY" and parsed[1].strip():
+            return True
+    return False
+
+
+def sync_env_files_from_process(target: Path | None = None) -> list[str]:
+    """Persist ``UW_API_KEY`` from the process env into local env files when missing."""
     key = uw_api_key()
     if not key:
-        return None
-    path = target or (_REPO_ROOT / ".env")
-    if path.is_file():
-        existing = path.read_text(encoding="utf-8")
-        for line in existing.splitlines():
-            parsed = _parse_env_line(line)
-            if parsed and parsed[0] == "UW_API_KEY" and parsed[1].strip():
-                return None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"UW_API_KEY={key}\n", encoding="utf-8")
-    path.chmod(0o600)
-    return str(path)
+        return []
+    targets = (target,) if target is not None else _DEFAULT_ENV_FILES
+    written: list[str] = []
+    for path in targets:
+        if _file_has_uw_key(path):
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"UW_API_KEY={key}\n", encoding="utf-8")
+        path.chmod(0o600)
+        written.append(str(path))
+    return written
 
 
 def load_env_files(paths: tuple[Path, ...] | None = None) -> list[str]:
-    """Populate ``os.environ`` from env files without clobbering existing keys."""
+    """Populate ``os.environ`` from env files.
+
+    Existing non-blank environment variables win. Blank placeholders like
+    ``UW_API_KEY=`` from docker compose are treated as unset so file values load.
+    """
     loaded: list[str] = []
     for path in paths or _DEFAULT_ENV_FILES:
         if not path.is_file():
@@ -70,7 +90,7 @@ def load_env_files(paths: tuple[Path, ...] | None = None) -> list[str]:
             if parsed is None:
                 continue
             key, value = parsed
-            if key not in os.environ:
+            if _env_value_missing(key):
                 os.environ[key] = value
         loaded.append(str(path))
     return loaded
@@ -84,3 +104,25 @@ def uw_api_key() -> str | None:
 
 def uw_api_configured() -> bool:
     return uw_api_key() is not None
+
+
+def uw_api_key_diagnostics() -> dict:
+    """Non-secret diagnostics for why live UW data is or is not available."""
+    env_present = "UW_API_KEY" in os.environ
+    env_blank = env_present and _env_value_missing("UW_API_KEY")
+    file_hits = [str(path) for path in _DEFAULT_ENV_FILES if path.is_file()]
+    source = "none"
+    if uw_api_configured():
+        if env_present and not env_blank:
+            source = "environment"
+        elif file_hits:
+            source = "file"
+        else:
+            source = "unknown"
+    return {
+        "uw_api_configured": uw_api_configured(),
+        "uw_api_key_source": source,
+        "uw_api_env_present": env_present,
+        "uw_api_env_blank": env_blank,
+        "uw_api_env_files_present": file_hits,
+    }
