@@ -35,6 +35,12 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
     return key, value
 
 
+def bootstrap_env(paths: tuple[Path, ...] | None = None) -> list[str]:
+    """Sync process secrets to disk, then load env files into ``os.environ``."""
+    sync_env_files_from_process()
+    return load_env_files(paths)
+
+
 def sync_env_files_from_process(target: Path | None = None) -> str | None:
     """Persist ``UW_API_KEY`` from the process env into ``.env`` when missing on disk."""
     key = uw_api_key()

@@ -1,5 +1,5 @@
 {
-  "install": "pip install -r requirements.txt",
+  "install": "pip install -r requirements.txt && python3 -c \"from gex_core.env_bootstrap import bootstrap_env; bootstrap_env()\"",
   "start": "bash scripts/start_web.sh",
   "ports": [
     {

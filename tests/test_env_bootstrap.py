@@ -41,6 +41,19 @@ def test_sync_env_files_from_process_writes_missing_env(monkeypatch, tmp_path):
     assert (target.stat().st_mode & 0o777) == 0o600
 
 
+def test_bootstrap_env_syncs_then_loads(monkeypatch, tmp_path):
+    monkeypatch.delenv("UW_API_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(env_bootstrap, "_REPO_ROOT", tmp_path)
+    monkeypatch.setenv("UW_API_KEY", "bootstrap-key")
+
+    loaded = env_bootstrap.bootstrap_env((env_file,))
+
+    assert loaded == [str(env_file)]
+    assert env_bootstrap.uw_api_key() == "bootstrap-key"
+    assert env_file.read_text(encoding="utf-8") == "UW_API_KEY=bootstrap-key\n"
+
+
 def test_sync_env_files_from_process_skips_existing_key(monkeypatch, tmp_path):
     monkeypatch.setenv("UW_API_KEY", "new-key")
     target = tmp_path / ".env"

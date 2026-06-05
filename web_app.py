@@ -57,7 +57,7 @@ from gex_core.predict import (
     similar_setups,
 )
 from gex_core.alert_dispatch import maybe_dispatch_alerts
-from gex_core.env_bootstrap import load_env_files, uw_api_configured, uw_api_key
+from gex_core.env_bootstrap import bootstrap_env, uw_api_configured, uw_api_key
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
 from gex_core.system_status import build_system_status
 from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
@@ -66,7 +66,7 @@ APP = Flask(__name__)
 app = APP
 logger = logging.getLogger(__name__)
 
-load_env_files()
+bootstrap_env()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Unusual Whales live data layer

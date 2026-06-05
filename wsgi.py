@@ -1,8 +1,7 @@
 """Production WSGI entrypoint (gunicorn wsgi:app)."""
 
-from gex_core.env_bootstrap import load_env_files, sync_env_files_from_process
+from gex_core.env_bootstrap import bootstrap_env
 
-sync_env_files_from_process()
-load_env_files()
+bootstrap_env()
 
 from web_app import APP as app

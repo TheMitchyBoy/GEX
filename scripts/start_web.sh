@@ -3,10 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python3 - <<'PY'
-from gex_core.env_bootstrap import load_env_files, sync_env_files_from_process
+from gex_core.env_bootstrap import bootstrap_env
 
-sync_env_files_from_process()
-load_env_files()
+bootstrap_env()
 PY
 
 exec python3 -m gunicorn \
