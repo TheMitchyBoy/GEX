@@ -17,10 +17,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish wiki pages
-        uses: Andrew-Chen-Wang/github-wiki-action@v4
-        with:
-          path: wiki
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "docs: sync wiki from main"
-          strategy: init
+      - name: Push wiki to GitHub Wiki git repository
+        env:
+          WIKI_DIR: wiki
+          WIKI_REPO: ${{ github.repository }}.wiki
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          cd "$workdir"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp -r "$GITHUB_WORKSPACE/$WIKI_DIR"/. .
+          git add -A
+          git commit -m "docs: sync wiki from ${GITHUB_SHA}"
+          git branch -M master
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${WIKI_REPO}.git"
+          git push -f origin master
