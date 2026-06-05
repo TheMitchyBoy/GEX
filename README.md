@@ -305,6 +305,39 @@ python scripts/train_gex_model.py --ticker SPX --lookback-days 7
 python scripts/train_gex_lstm.py --ticker SPX --seq-len 8 --epochs 50 --batch-size 16
 ```
 
+## Forecasting Enhancements
+
+The prediction stack adds several reliability-focused upgrades on top of the
+weighted-KNN core:
+
+- **Prediction intervals** — every ΔGEX / total-GEX forecast now ships with an
+  empirical band (`predicted_delta_gex_low/high`) derived from the weighted
+  spread of nearest-neighbor outcomes, so point estimates are no longer shown
+  without uncertainty.
+- **Calibrated confidence** — raw distance-based confidence is blended with the
+  rolling walk-forward sign-accuracy (shrunk toward 0.5 by sample size) via
+  `gex_core.calibration.calibrate_confidence`, and shown next to the raw value.
+- **Fitted relationships, not magic numbers** — the ΔGEX→expected-move scalar
+  (previously a hard-coded `0.00035`) is fit by least squares on history, and
+  the close-above-flip probability is anchored on the empirical base rate.
+- **Market-context features** — causal realized volatility, spot returns, and a
+  front-expiry (0DTE) ratio feed the KNN regime vector; the strike-similarity
+  window widens automatically in higher-volatility regimes. VIX is fetched when
+  online and degrades silently to neutral offline.
+- **Regime-conditional blending** — the trained-model overlay weight adapts to
+  the detected volatility regime (`gex_core.regime`) instead of a fixed 50/50,
+  and the overlay is gated by a minimum training-row count.
+- **Structural attribution** — the last observed ΔGEX is decomposed into a
+  spot-driven component and a residual (time/vol/flow) using the cumulative-GEX
+  slope, wiring decomposition into the live forecast (`gex_core.structural`).
+- **Multi-horizon forecasts** — `predict_multi_horizon` produces 1- and 3-step
+  ΔGEX projections.
+- **Honest validation** — trainers report rolling-origin walk-forward CV
+  (`scripts/train_gex_model.py`), the LSTM writes a manifest with staleness /
+  sample gates, and `scripts/backtest_gex_prediction.py` now also reports flip
+  level MAE and forward price-direction accuracy. Dashboard backtest metrics
+  invalidate automatically when new exports land.
+
 ## Scheduled Daily Exports
 
 A GitHub Actions workflow is configured to run `main.py` daily for `SPX` and commit updated CSV exports to `data/exports`.

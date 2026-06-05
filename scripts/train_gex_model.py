@@ -32,7 +32,12 @@ from gex_core.features import compute_features_from_exports
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(exist_ok=True)
 LAG = 3
-DEFAULT_LOOKBACK_DAYS = 7
+# Wider default window than the original 7 days: a one-week window routinely
+# produced only 2-3 training rows. 30 days keeps the model regime-relevant while
+# giving the regressor enough samples to be meaningful.
+DEFAULT_LOOKBACK_DAYS = 30
+# Minimum folds before walk-forward CV metrics are reported.
+MIN_CV_FOLDS = 3
 
 
 def _summary_spot(info: dict[str, Path]) -> float | None:
@@ -91,6 +96,38 @@ def _chronological_split(X_all: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFram
     return X_all.iloc[:split_at], X_all.iloc[split_at:], y.iloc[:split_at], y.iloc[split_at:]
 
 
+def _make_regressor(n_train_rows: int):
+    if XGBOOST_AVAILABLE and n_train_rows >= 10:
+        return xgb.XGBRegressor(n_estimators=100, max_depth=4, n_jobs=4, random_state=42), "xgb"
+    return LinearRegression(), "linear"
+
+
+def walk_forward_cv(X_all: pd.DataFrame, y: pd.Series, min_train: int = 4) -> dict:
+    """Rolling-origin (expanding window) one-step-ahead cross-validation.
+
+    Far more honest on small samples than a single 80/20 split: every fold
+    trains on the past and predicts the next point, then expands. Reports mean
+    out-of-sample MAE and sign accuracy across folds.
+    """
+    preds, actuals = [], []
+    for split_at in range(min_train, len(X_all)):
+        X_tr, y_tr = X_all.iloc[:split_at], y.iloc[:split_at]
+        X_te, y_te = X_all.iloc[split_at : split_at + 1], y.iloc[split_at : split_at + 1]
+        model, _ = _make_regressor(len(X_tr))
+        model.fit(X_tr, y_tr)
+        preds.append(float(model.predict(X_te)[0]))
+        actuals.append(float(y_te.iloc[0]))
+    if len(preds) < MIN_CV_FOLDS:
+        return {"cv_folds": len(preds), "cv_mae": None, "cv_sign_accuracy": None}
+    preds_arr = np.asarray(preds)
+    actuals_arr = np.asarray(actuals)
+    return {
+        "cv_folds": len(preds),
+        "cv_mae": float(mean_absolute_error(actuals_arr, preds_arr)),
+        "cv_sign_accuracy": float(np.mean(np.sign(preds_arr) == np.sign(actuals_arr))),
+    }
+
+
 def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
     print(f"Building ΔGEX dataset for {ticker} over the last {lookback_days or 'all'} days...")
     df = build_dataset(ticker, lookback_days=lookback_days)
@@ -120,13 +157,18 @@ def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
 
     X_train, X_test, y_train, y_test = _chronological_split(X_all, y)
 
-    model_choice = "xgb" if XGBOOST_AVAILABLE and len(X_train) >= 10 else "linear"
+    reg, model_choice = _make_regressor(len(X_train))
     print(f"Training ΔGEX regressor: {model_choice}")
 
-    if XGBOOST_AVAILABLE:
-        reg = xgb.XGBRegressor(n_estimators=100, max_depth=4, n_jobs=4, random_state=42)
+    cv_metrics = walk_forward_cv(X_all, y)
+    if cv_metrics["cv_sign_accuracy"] is not None:
+        print(
+            f"Walk-forward CV ({cv_metrics['cv_folds']} folds): "
+            f"MAE {cv_metrics['cv_mae']:.4f} Bn$ / %, "
+            f"sign acc {cv_metrics['cv_sign_accuracy']:.3f}"
+        )
     else:
-        reg = LinearRegression()
+        print("Walk-forward CV: not enough folds to report.")
 
     reg.fit(X_train, y_train)
     preds = reg.predict(X_test)
@@ -150,6 +192,9 @@ def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
             "test_r2": None if np.isnan(test_r2) else float(test_r2),
             "sign_accuracy": float(sign_acc),
             "n_train": int(len(X_train)),
+            "cv_folds": cv_metrics["cv_folds"],
+            "cv_mae": cv_metrics["cv_mae"],
+            "cv_sign_accuracy": cv_metrics["cv_sign_accuracy"],
         },
         extra={
             "training_start_ts": str(df["ts"].iloc[0]),
@@ -164,6 +209,7 @@ def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ticker", required=True)
-    parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
+    parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS,
+                        help="Training window in days (default 30; use 0 for all history).")
     args = parser.parse_args()
     train_model(args.ticker.upper(), lookback_days=args.lookback_days)

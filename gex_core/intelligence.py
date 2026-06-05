@@ -11,9 +11,23 @@ import numpy as np
 import pandas as pd
 import requests
 
+from gex_core.calibration import (
+    expected_directional_move_pct as _fitted_move_pct,
+    fit_close_above_flip_rate,
+)
 from gex_core.features import safe_float
 from gex_core.history import build_history
 from gex_core.models_manifest import load_manifest
+
+# Spot-scenario sensitivities. These remain heuristics, but are now named and
+# documented rather than buried magic numbers. ``LOCAL_GEX_SENSITIVITY`` is the
+# fraction of the local strike-GEX change that propagates to total GEX under a
+# spot shift; ``FLIP_SHIFT_SENSITIVITY`` is how far the flip migrates per unit
+# spot move.
+LOCAL_GEX_SENSITIVITY = 0.65
+FLIP_SHIFT_SENSITIVITY = 0.35
+# Geometry vs empirical-base-rate blend for the close-above-flip probability.
+FLIP_GEOMETRY_WEIGHT = 0.65
 
 
 def _sigmoid(value: float) -> float:
@@ -353,9 +367,15 @@ def compute_forecast_probabilities(
     flip_prob = safe_float(prediction.get("regime_flip_probability"), 0.0)
     distance = 0.0 if not spot else (spot - pred_flip) / max(abs(spot), 1.0)
 
-    # Start from spot-vs-flip geometry and blend with model certainty.
-    above_flip = _sigmoid(distance * 24.0)
-    above_flip = (0.65 * above_flip) + (0.35 * (1.0 - (flip_prob * 0.5)))
+    # Start from spot-vs-flip geometry and blend with model certainty, then
+    # anchor on the empirical close-above-flip base rate when we have enough
+    # history to estimate it (replaces the un-calibrated fixed blend).
+    geometry = _sigmoid(distance * 24.0)
+    base_rate = fit_close_above_flip_rate(history)
+    if base_rate is not None:
+        above_flip = FLIP_GEOMETRY_WEIGHT * geometry + (1.0 - FLIP_GEOMETRY_WEIGHT) * base_rate
+    else:
+        above_flip = (0.65 * geometry) + (0.35 * (1.0 - (flip_prob * 0.5)))
     above_flip = min(0.99, max(0.01, above_flip))
     below_flip = 1.0 - above_flip
 
@@ -366,7 +386,10 @@ def compute_forecast_probabilities(
         if s0 > 0 and s1 > 0:
             spot_moves.append((s1 - s0) / s0)
     expected_abs_move_pct = float(sum(abs(x) for x in spot_moves) / len(spot_moves)) if spot_moves else 0.0
-    expected_directional_move_pct = safe_float(prediction.get("predicted_delta_gex"), 0.0) * 0.00035
+    # Fitted ΔGEX -> forward-return slope instead of the hard-coded 0.00035.
+    expected_directional_move_pct = _fitted_move_pct(
+        safe_float(prediction.get("predicted_delta_gex"), 0.0), history
+    )
 
     return {
         "prob_close_above_flip": above_flip,
@@ -374,6 +397,7 @@ def compute_forecast_probabilities(
         "prob_regime_flip": flip_prob,
         "expected_abs_move_pct": expected_abs_move_pct,
         "expected_directional_move_pct": expected_directional_move_pct,
+        "flip_base_rate": base_rate,
         "confidence": confidence,
     }
 
@@ -456,12 +480,12 @@ def simulate_spot_scenario(selected: dict, spot_shift_pct: float) -> dict | None
     vals = strike_series.to_numpy(dtype=float)
     local_now = float(np.interp(spot, idx, vals))
     local_new = float(np.interp(new_spot, idx, vals))
-    projected_total = total + ((local_new - local_now) * 0.65)
+    projected_total = total + ((local_new - local_now) * LOCAL_GEX_SENSITIVITY)
 
     gamma_flip = selected.get("gamma_flip")
     projected_flip = None
     if gamma_flip is not None:
-        projected_flip = safe_float(gamma_flip) - (spot_shift_pct * spot * 0.35)
+        projected_flip = safe_float(gamma_flip) - (spot_shift_pct * spot * FLIP_SHIFT_SENSITIVITY)
 
     window = max(spot * 0.02, 1.0)
     local_band = strike_series.loc[(strike_series.index >= new_spot - window) & (strike_series.index <= new_spot + window)]

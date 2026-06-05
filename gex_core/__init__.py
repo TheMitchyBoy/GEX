@@ -27,9 +27,18 @@ from gex_core.pipeline import (
 from gex_core.predict import (
     apply_flow_to_prediction,
     load_flow_predictions,
+    predict_multi_horizon,
     predict_next_snapshot,
     similar_setups,
 )
+from gex_core.calibration import (
+    calibrate_confidence,
+    expected_directional_move_pct,
+    fit_move_per_delta_gex,
+)
+from gex_core.market_features import attach_market_features, realized_volatility
+from gex_core.regime import classify_regime, model_blend_weight
+from gex_core.structural import attribute_last_move, structural_forward_delta
 
 __all__ = [
     "GammaAnalysis",
@@ -42,7 +51,17 @@ __all__ = [
     "GexDecomposition",
     "apply_flow_to_prediction",
     "aggregate_gex",
+    "attach_market_features",
     "attach_signed_gex",
+    "attribute_last_move",
+    "calibrate_confidence",
+    "classify_regime",
+    "expected_directional_move_pct",
+    "fit_move_per_delta_gex",
+    "model_blend_weight",
+    "predict_multi_horizon",
+    "realized_volatility",
+    "structural_forward_delta",
     "clean_option_data",
     "compute_features_from_exports",
     "decompose_from_snapshots",

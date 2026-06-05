@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
+from gex_core.calibration import calibrate_confidence
 from gex_core.charts import (
     make_ai_insights_chart,
     make_0dte_movement_chart,
@@ -500,6 +501,12 @@ def ticker_page(ticker):
             prediction["backtest_n"] = backtest["n"]
             prediction["backtest_mae_delta"] = backtest.get("mae_delta")
             prediction["backtest_baseline_momentum_accuracy"] = backtest.get("baseline_momentum_accuracy")
+            prediction["backtest_baseline_accuracy"] = backtest.get("baseline_accuracy")
+            prediction["calibrated_confidence"] = calibrate_confidence(
+                safe_float(prediction.get("confidence"), 0.0),
+                backtest.get("accuracy"),
+                backtest.get("n", 0) or 0,
+            )
     except Exception:
         logger.exception("Backtest metrics failed for %s", ticker)
         backtest = {}

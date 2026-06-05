@@ -82,6 +82,8 @@ def term_structure_breakdown(
             "term_total_gex_bn": 0.0,
             "zero_dte_gex_bn": 0.0,
             "zero_dte_ratio": 0.0,
+            "front_term_gex_bn": 0.0,
+            "front_term_ratio": 0.0,
             "near_term_gex_bn": 0.0,
             "near_term_ratio": 0.0,
             "back_term_gex_bn": 0.0,
@@ -113,6 +115,8 @@ def term_structure_breakdown(
         "term_total_gex_bn": total,
         "zero_dte_gex_bn": zero_dte,
         "zero_dte_ratio": zero_dte / denom if denom else 0.0,
+        "front_term_gex_bn": zero_dte,
+        "front_term_ratio": zero_dte / denom if denom else 0.0,
         "near_term_gex_bn": near,
         "near_term_ratio": near / denom if denom else 0.0,
         "back_term_gex_bn": back,
@@ -168,6 +172,22 @@ def extract_surface_vector(
         bins[bi] += v
     norm = np.linalg.norm(bins)
     return bins / norm if norm > 1e-12 else bins
+
+
+def adaptive_surface_window(realized_vol: float, base_pct: float = 0.05) -> float:
+    """Widen the strike window in higher-volatility regimes.
+
+    In calm regimes the relevant gamma clusters tightly around spot; in stressed
+    regimes far-OTM gamma matters more, so the cosine-similarity window should
+    expand. Clamped to a sane [base, 3x] range.
+    """
+    rv = safe_float(realized_vol, 0.0)
+    if rv <= 0:
+        return base_pct
+    # Map per-step realized vol (~0.002-0.02 typical for indices) onto a widening
+    # multiplier of roughly 1x-3x.
+    scale = 1.0 + min(2.0, rv * 100.0)
+    return float(min(base_pct * 3.0, base_pct * scale))
 
 
 def compute_features_from_exports(
@@ -288,6 +308,10 @@ def snapshot_feature_vector(row: dict[str, Any]) -> np.ndarray:
             safe_float(row.get("zero_dte_ratio"), 0.0),
             safe_float(row.get("back_term_ratio"), 0.0),
             safe_float(row.get("term_curvature"), 0.0),
+            # Market-context dimensions (causal; default 0 when unavailable).
+            safe_float(row.get("realized_vol"), 0.0),
+            safe_float(row.get("spot_return"), 0.0),
+            safe_float(row.get("front_term_ratio"), 0.0),
         ],
         dtype=float,
     )
@@ -309,12 +333,15 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         (safe_float(gamma_flip) - spot) / spot if gamma_flip is not None and spot > 0 else 0.0
     )
     metrics["cum_slope_at_spot"] = cumulative_slope_at_spot(cumulative, spot) if len(cumulative) and spot > 0 else 0.0
-    metrics["surface_vector"] = extract_surface_vector(strike, spot)
+    window_pct = adaptive_surface_window(metrics.get("realized_vol", 0.0))
+    metrics["surface_vector"] = extract_surface_vector(strike, spot, window_pct=window_pct)
     metrics["spot"] = spot
     for key in (
         "term_total_gex_bn",
         "zero_dte_gex_bn",
         "zero_dte_ratio",
+        "front_term_gex_bn",
+        "front_term_ratio",
         "near_term_gex_bn",
         "near_term_ratio",
         "back_term_gex_bn",
