@@ -286,6 +286,8 @@ def predict_next_snapshot(
         predicted_strike = predicted_strike.add(strike_series * float(weight), fill_value=0.0)
 
     delta_low, delta_high = intervals.get("delta_gex", (preds["delta_gex"], preds["delta_gex"]))
+    neighbor_deltas = targets["delta_gex"][nn_idx]
+    neighbor_typical_abs_error = float(np.mean(np.abs(neighbor_deltas - preds["delta_gex"])))
     attribution = attribute_last_move(enriched)
     structural_delta = structural_forward_delta(enriched)
 
@@ -307,6 +309,8 @@ def predict_next_snapshot(
         "predicted_delta_gex_high": delta_high,
         "predicted_total_gex_low": current["total_gex"] + delta_low,
         "predicted_total_gex_high": current["total_gex"] + delta_high,
+        "neighbor_typical_abs_error": neighbor_typical_abs_error,
+        "neighbor_mae_delta_gex": neighbor_typical_abs_error,
         "regime_detail": regime,
         "overlay_weight": overlay_weight if model_preds else 0.0,
         "structural_delta_gex": structural_delta,

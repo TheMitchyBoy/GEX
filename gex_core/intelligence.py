@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+from gex_core.alert_config import load_alert_config
 from gex_core.calibration import (
     expected_directional_move_pct as _fitted_move_pct,
     fit_close_above_flip_rate,
@@ -18,6 +19,7 @@ from gex_core.calibration import (
 from gex_core.features import safe_float
 from gex_core.history import build_history
 from gex_core.models_manifest import load_manifest
+from gex_core.predict import MIN_OVERLAY_TRAIN_ROWS
 
 # Spot-scenario sensitivities. These remain heuristics, but are now named and
 # documented rather than buried magic numbers. ``LOCAL_GEX_SENSITIVITY`` is the
@@ -246,11 +248,19 @@ def build_model_accountability_panel(
             warnings.append("Recent confidence and realized accuracy are materially different.")
     else:
         warnings.append("Walk-forward validation has too few samples.")
-    if manifest and safe_float((manifest.get("metrics") or {}).get("n_train"), 0.0) < 10:
-        warnings.append("Stored trained model has very few training rows; KNN/history remains primary.")
+    n_manifest_train = safe_float((manifest.get("metrics") or {}).get("n_train"), 0.0) if manifest else 0.0
+    overlay_active = n_manifest_train >= MIN_OVERLAY_TRAIN_ROWS
+    if manifest and not overlay_active:
+        warnings.append(
+            f"Trained overlay inactive ({int(n_manifest_train)} rows; need {MIN_OVERLAY_TRAIN_ROWS}+). KNN remains primary."
+        )
 
+    backtest_acc = backtest.get("accuracy")
     return {
         "model_type": manifest.get("model_type") if manifest else None,
+        "overlay_active": overlay_active,
+        "overlay_min_train_rows": MIN_OVERLAY_TRAIN_ROWS,
+        "manifest_train_rows": int(n_manifest_train) if manifest else 0,
         "trained_at_utc": manifest.get("trained_at_utc") if manifest else None,
         "training_start_ts": manifest.get("training_start_ts") if manifest else None,
         "training_end_ts": manifest.get("training_end_ts") if manifest else None,
@@ -261,6 +271,7 @@ def build_model_accountability_panel(
         "raw_confidence": raw_confidence,
         "confidence_breakdown": prediction.get("confidence_breakdown", {}) if prediction else {},
         "backtest": backtest,
+        "backtest_sign_accuracy": backtest_acc,
         "warnings": warnings,
     }
 
@@ -269,9 +280,13 @@ def generate_alerts(
     history: list[dict],
     selected: dict,
     prediction: dict | None = None,
-    wall_shift_threshold: float = 20.0,
+    wall_shift_threshold: float | None = None,
 ) -> list[dict]:
     """Compute rule-based alerts for regime and structure changes."""
+    cfg = load_alert_config()
+    wall_shift_threshold = (
+        wall_shift_threshold if wall_shift_threshold is not None else cfg.wall_shift_threshold
+    )
     alerts: list[dict] = []
     idx = _selected_index(history, selected.get("ts"))
     prev = history[idx - 1] if idx > 0 else None
@@ -316,7 +331,7 @@ def generate_alerts(
 
         near_ratio_prev = safe_float(prev.get("near_term_ratio"), 0.0)
         near_ratio_cur = safe_float(selected.get("near_term_ratio"), 0.0)
-        if (near_ratio_cur - near_ratio_prev) >= 0.12:
+        if (near_ratio_cur - near_ratio_prev) >= cfg.near_term_spike_threshold:
             alerts.append(
                 {
                     "severity": "medium",
@@ -330,7 +345,7 @@ def generate_alerts(
         confidence = safe_float(prediction.get("confidence"), 0.0)
         delta = safe_float(prediction.get("predicted_delta_gex"), 0.0)
         total = abs(safe_float(selected.get("total_gex"), 0.0))
-        if flip_prob >= 0.55:
+        if flip_prob >= cfg.regime_flip_prob_threshold:
             alerts.append(
                 {
                     "severity": "high" if flip_prob >= 0.7 else "medium",
@@ -338,7 +353,7 @@ def generate_alerts(
                     "detail": f"Model estimates {flip_prob * 100:.1f}% chance of regime transition.",
                 }
             )
-        if abs(delta) > max(3.0, total * 0.25):
+        if abs(delta) > max(cfg.large_delta_gex_bn, total * cfg.large_delta_gex_ratio):
             alerts.append(
                 {
                     "severity": "medium",

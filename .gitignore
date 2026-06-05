@@ -5,6 +5,8 @@ __pycache__/
 !data/exports/*.json
 !models/**/manifest.json
 data/.gex_scheduler.lock
+data/.alert_dispatch_state.json
+data/gex_index.db
 data/live_flow_state.json
 models/*
 !models/SPX_gex_delta_model.joblib

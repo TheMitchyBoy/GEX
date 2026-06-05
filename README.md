@@ -31,7 +31,7 @@ Unusual Whales API
                                             └─ scripts/train_*   (model overlay)
 ```
 
-All persistence is **file-based** — there is no database. Each refresh writes a matched set of files sharing a timestamp suffix under `data/exports/`.
+Persistence is **file-based** with an optional **SQLite index** (`data/gex_index.db`) for fast history lookups. Each refresh writes a matched set of files sharing a timestamp suffix under `data/exports/`.
 
 ## Installation
 
@@ -141,12 +141,38 @@ python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 | `GEX_DATA_FILTERS` | `1` | Set `0` to skip option filters |
 | `GEX_MIN_OPEN_INTEREST` | `1` | Minimum OI per contract |
 | `GEX_MAX_STRIKE_DISTANCE_PCT` | `0.35` | Max strike distance from spot |
+| `GEX_FLOW_FEED` | `data/flow_sample.jsonl` | JSONL flow file for live overlay |
+| `GEX_ALERT_WEBHOOK_URL` | off | Webhook URL for alert dispatch |
+| `GEX_ALERT_AUTO_DISPATCH` | off | Auto-dispatch high-severity alerts |
+| `GEX_INDEX_DB` | `data/gex_index.db` | SQLite export index path |
 
-See [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md) and [config/spx.env.example](config/spx.env.example) for SPX filter presets.
+See [docs/DATA_QUALITY.md](docs/DATA_QUALITY.md), [docs/LIVE_FEED.md](docs/LIVE_FEED.md), and [config/spx.env.example](config/spx.env.example).
+
+Train ML overlays (optional):
+
+```bash
+pip install -r requirements-ml.txt
+python scripts/train_gex_model.py --ticker SPX
+```
+
+## Health & ops
+
+```bash
+curl -s localhost:8080/health | jq
+```
+
+Compact aged strike CSVs (keeps summaries + cumulative):
+
+```bash
+python scripts/gex_compact_exports.py --ticker SPX --keep-full-days 14
+```
 
 ## Scheduled exports
 
-GitHub Actions runs `main.py` daily for SPX and commits updated exports (`.github/workflows/daily_exports.yml`).
+- Daily: `.github/workflows/daily_exports.yml`
+- Intraday (weekdays): `.github/workflows/intraday_exports.yml`
+
+See [ROADMAP.md](ROADMAP.md) for planned work.
 
 ## Project layout
 
@@ -157,7 +183,8 @@ GitHub Actions runs `main.py` daily for SPX and commits updated exports (`.githu
 | `streamlit_app.py` | Streamlit explorer |
 | `gex_core/` | Core library (fetch, history, features, predict) |
 | `live/` | Real-time flow ingest |
-| `scripts/` | Refresh, training, backtest, decomposition |
+| `scripts/` | Refresh, training, backtest, compaction |
+| `gex_core/storage.py` | SQLite export index |
 | `data/exports/` | Timestamped snapshot store |
 | `models/` | Trained overlay models + manifests |
 

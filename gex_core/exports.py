@@ -8,8 +8,8 @@ Each UW refresh writes a matched set of files sharing a timestamp suffix::
     {TICKER}_gex_surface_{ts}.csv      (when surface data is present)
     {TICKER}_summary_{ts}.json
 
-``{ts}`` is ``YYYY-MM-DD_HHMMSS``. Dashboards and models discover history by
-globbing these patterns — there is no database layer.
+``{ts}`` is ``YYYY-MM-DD_HHMMSS``. Dashboards discover history by globbing these
+patterns; an optional SQLite index (``gex_core.storage``) accelerates lookups.
 """
 
 from __future__ import annotations

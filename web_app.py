@@ -46,7 +46,6 @@ from gex_core.intelligence import (
     build_watchlist_rows,
     compute_confluence_overlay,
     compute_forecast_probabilities,
-    dispatch_alerts_to_webhook,
     generate_alerts,
     simulate_spot_scenario,
 )
@@ -56,7 +55,9 @@ from gex_core.predict import (
     predict_next_snapshot,
     similar_setups,
 )
+from gex_core.alert_dispatch import maybe_dispatch_alerts
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
+from gex_core.system_status import build_system_status
 from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
 
 APP = Flask(__name__)
@@ -307,6 +308,13 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
     }
 
 
+@APP.get("/health")
+def health():
+    status = build_system_status(PRIMARY_TICKER)
+    code = 200 if status.get("healthy") else 503
+    return jsonify(status), code
+
+
 @APP.route("/")
 def index():
     tickers = find_available_tickers(EXPORT_DIR)
@@ -442,6 +450,7 @@ def ticker_page(ticker):
             prev_ts=None,
             next_ts=None,
             alert_dispatch_status=None,
+            system_status=build_system_status(ticker),
         )
 
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
@@ -574,11 +583,13 @@ def ticker_page(ticker):
     scenario_pct = safe_float(request.args.get("scenario_pct"), 0.0)
     scenario = simulate_spot_scenario(selected, scenario_pct / 100.0) if scenario_pct else None
 
-    alert_dispatch_status = None
-    if request.args.get("dispatch_alerts") == "1":
-        dispatched, message = dispatch_alerts_to_webhook(ticker, alert_feed)
-        alert_dispatch_status = {"ok": dispatched, "message": message}
+    alert_dispatch_status = maybe_dispatch_alerts(
+        ticker,
+        alert_feed,
+        manual=request.args.get("dispatch_alerts") == "1",
+    )
 
+    system_status = build_system_status(ticker)
     latest_raw = get_latest_ts(ticker)
     csv_source = selected.get("data_source") or "unusual_whales"
     data_source = f"Unusual Whales CSV · {selected['ts_label']} ({csv_source})"
@@ -633,6 +644,7 @@ def ticker_page(ticker):
         prev_ts=prev_ts,
         next_ts=next_ts,
         alert_dispatch_status=alert_dispatch_status,
+        system_status=system_status,
     )
 
 
@@ -686,12 +698,16 @@ def ticker_widget(ticker: str):
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     summary = payload.get("summary") or {}
     confluence = payload.get("confluence") or {"score": 0.0, "label": "low"}
+    theme = request.args.get("theme", "dark")
+    compact = request.args.get("compact", "0") == "1"
     return render_template(
         "widget.html",
         ticker=ticker,
         summary=summary,
         confluence=confluence,
         updated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        theme=theme,
+        compact=compact,
     )
 
 

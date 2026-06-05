@@ -605,6 +605,10 @@ def plot_cumulative_gex(
 def export_analytics_csv(
     ticker, gex_by_strike, cumulative_gex, gex_by_expiration, surface_data, summary, export_dir, timestamp=None
 ) -> str:
+    from gex_core.export_metadata import build_export_metadata
+    from gex_core.history import clear_history_cache
+    from gex_core.storage import upsert_snapshot
+
     export_dir = Path(export_dir)
     export_dir.mkdir(parents=True, exist_ok=True)
     timestamp = timestamp or datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -612,13 +616,41 @@ def export_analytics_csv(
     if summary is not None and "data_source" not in summary:
         summary["data_source"] = "unusual_whales"
 
-    gex_by_strike.rename("gex_bn_per_pct").to_csv(export_dir / f"{ticker}_gex_by_strike_{timestamp}.csv")
+    if summary is not None:
+        meta = build_export_metadata(
+            ticker,
+            market_date=summary.get("market_date"),
+            spot=float(summary.get("spot") or summary.get("spot_price") or 0.0),
+            total_gex_bn=float(summary.get("total_gex_bn_per_pct", 0.0)),
+            regime=str(summary.get("net_gamma_regime", "N/A")),
+            data_quality=summary.get("data_quality"),
+        )
+        summary = {**meta, **summary}
+
+    strike_path = export_dir / f"{ticker}_gex_by_strike_{timestamp}.csv"
+    gex_by_strike.rename("gex_bn_per_pct").to_csv(strike_path)
     cumulative_gex.rename("cumulative_gex_bn_per_pct").to_csv(export_dir / f"{ticker}_cumulative_gex_{timestamp}.csv")
     gex_by_expiration.rename("gex_bn_per_pct").to_csv(export_dir / f"{ticker}_gex_by_expiration_{timestamp}.csv")
     if surface_data is not None and not surface_data.empty:
         surface_data.to_csv(export_dir / f"{ticker}_gex_surface_{timestamp}.csv", index=False)
-    with (export_dir / f"{ticker}_summary_{timestamp}.json").open("w", encoding="utf-8") as f:
+    summary_path = export_dir / f"{ticker}_summary_{timestamp}.json"
+    with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
+
+    try:
+        upsert_snapshot(
+            ticker.upper(),
+            timestamp,
+            market_date=summary.get("market_date") if summary else None,
+            spot=float(summary.get("spot")) if summary and summary.get("spot") is not None else None,
+            total_gex=float(summary.get("total_gex_bn_per_pct")) if summary else None,
+            regime=str(summary.get("net_gamma_regime")) if summary else None,
+            summary_path=str(summary_path),
+            strike_path=str(strike_path),
+        )
+        clear_history_cache()
+    except Exception:
+        pass
 
     print(f"Saved CSV exports to: {export_dir}")
     return timestamp

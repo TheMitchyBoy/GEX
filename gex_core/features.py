@@ -315,6 +315,7 @@ def snapshot_feature_vector(row: dict[str, Any]) -> np.ndarray:
             safe_float(row.get("zero_dte_ratio"), 0.0),
             safe_float(row.get("back_term_ratio"), 0.0),
             safe_float(row.get("term_curvature"), 0.0),
+            safe_float(row.get("expiration_count"), 0.0),
             # Market-context dimensions (causal; default 0 when unavailable).
             safe_float(row.get("realized_vol"), 0.0),
             safe_float(row.get("spot_return"), 0.0),

@@ -69,6 +69,15 @@ def refresh_ticker(ticker: str, force: bool = False, market_date: str | None = N
         logger.exception("GEX refresh failed for %s", ticker)
         return False
 
+    try:
+        from gex_core.backtest_metrics import clear_cache as clear_backtest_cache
+        from gex_core.history import clear_history_cache
+
+        clear_history_cache()
+        clear_backtest_cache()
+    except Exception:
+        pass
+
     after = get_latest_ts(ticker)
     if market_date:
         saved = has_snapshot_for_market_date(ticker, market_date)

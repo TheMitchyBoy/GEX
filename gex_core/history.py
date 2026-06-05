@@ -1,4 +1,4 @@
-"""Build snapshot history from CSV exports (no database).
+"""Build snapshot history from CSV exports with optional SQLite index.
 
 ``build_history`` joins strike, cumulative, expiration, surface, and summary
 files into a chronologically sorted list of snapshot dicts. That list is the
@@ -10,6 +10,7 @@ panels. Enrichment (gamma flip, term structure, concentration) happens in
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -26,12 +27,38 @@ from gex_core.exports import (
 from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip, term_structure_breakdown
 from gex_core.tickers import SUPPORTED_TICKERS
 
+_HISTORY_CACHE: dict[tuple[str, str, str, int], list[dict]] = {}
+
+
+def _history_cache_key(ticker: str, export_dir: Path | None) -> tuple[str, str, str, int]:
+    export_dir = export_dir or EXPORT_DIR
+    files = collect_snapshot_files(ticker.upper(), export_dir)
+    if not files:
+        return (ticker.upper(), str(export_dir.resolve()), "", 0)
+    return (ticker.upper(), str(export_dir.resolve()), max(files.keys()), len(files))
+
+
+def clear_history_cache() -> None:
+    _HISTORY_CACHE.clear()
+    build_history_cached.cache_clear()
+
+
+@lru_cache(maxsize=8)
+def build_history_cached(ticker: str, export_dir_str: str, sig_ts: str, sig_n: int) -> tuple:
+    """LRU-cached history builder; returns tuple for hashability."""
+    return tuple(_build_history_impl(ticker, Path(export_dir_str)))
+
 
 def ts_label(ts: str) -> str:
     return parse_timestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_latest_ts(ticker: str, export_dir: Path | None = None) -> str | None:
+    from gex_core.storage import latest_timestamp
+
+    ts = latest_timestamp(ticker, export_dir)
+    if ts:
+        return ts
     exports = find_exports_for_ticker(ticker, export_dir)
     if not exports:
         return None
@@ -39,6 +66,16 @@ def get_latest_ts(ticker: str, export_dir: Path | None = None) -> str | None:
 
 
 def list_timestamps(ticker: str, export_dir: Path | None = None) -> list[str]:
+    from gex_core.storage import list_indexed_timestamps, sync_ticker_exports
+
+    export_dir = export_dir or EXPORT_DIR
+    try:
+        sync_ticker_exports(ticker, export_dir)
+        indexed = list_indexed_timestamps(ticker)
+        if indexed:
+            return indexed
+    except Exception as exc:
+        logging.getLogger(__name__).debug("Index timestamp list unavailable: %s", exc)
     return sorted(collect_snapshot_files(ticker, export_dir).keys())
 
 
@@ -144,7 +181,7 @@ def collect_snapshot_files(ticker: str, export_dir: Path | None = None) -> dict[
     return filtered
 
 
-def build_history(ticker: str, export_dir: Path | None = None) -> list[dict]:
+def _build_history_impl(ticker: str, export_dir: Path) -> list[dict]:
     ticker = ticker.upper()
     snapshots = []
     for ts, files in collect_snapshot_files(ticker, export_dir).items():
@@ -169,3 +206,14 @@ def build_history(ticker: str, export_dir: Path | None = None) -> list[dict]:
             continue
         deduped.append(row)
     return deduped
+
+
+def build_history(ticker: str, export_dir: Path | None = None) -> list[dict]:
+    export_dir = export_dir or EXPORT_DIR
+    key = _history_cache_key(ticker, export_dir)
+    if key in _HISTORY_CACHE:
+        return _HISTORY_CACHE[key]
+    cached = build_history_cached(key[0], key[1], key[2], key[3])
+    history = list(cached)
+    _HISTORY_CACHE[key] = history
+    return history

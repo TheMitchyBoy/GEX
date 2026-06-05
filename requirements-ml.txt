@@ -1,0 +1,4 @@
+# Optional ML training / LSTM overlay (not required for dashboard or KNN forecast)
+-r requirements.txt
+xgboost>=1.7.5
+tensorflow>=2.12.0

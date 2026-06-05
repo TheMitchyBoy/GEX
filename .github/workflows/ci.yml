@@ -26,5 +26,31 @@ jobs:
         run: pytest -q
 
       - name: Backtest prediction (SPX exports)
+        run: python scripts/backtest_gex_prediction.py --ticker SPX
+
+      - name: Backtest quality gates
+        env:
+          GEX_BACKTEST_MIN_ACCURACY: "0.30"
+          GEX_BACKTEST_MIN_SAMPLES: "4"
         run: |
-          python scripts/backtest_gex_prediction.py --ticker SPX || true
+          python - <<'PY'
+          import os
+          import sys
+          from gex_core.backtest_metrics import backtest_delta_sign_accuracy
+
+          bt = backtest_delta_sign_accuracy("SPX")
+          n = bt.get("n") or 0
+          min_n = int(os.environ.get("GEX_BACKTEST_MIN_SAMPLES", "4"))
+          if n < min_n:
+              print(f"Skip accuracy gate: only {n} walk-forward samples (need {min_n})")
+              sys.exit(0)
+          acc = bt.get("accuracy")
+          floor = float(os.environ.get("GEX_BACKTEST_MIN_ACCURACY", "0.30"))
+          if acc is None:
+              print("No backtest accuracy computed")
+              sys.exit(1)
+          print(f"Walk-forward sign accuracy: {acc:.3f} (n={n}, floor={floor})")
+          if acc < floor:
+              print(f"FAIL: sign accuracy {acc:.3f} below floor {floor}")
+              sys.exit(1)
+          PY

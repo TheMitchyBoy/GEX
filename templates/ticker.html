@@ -116,10 +116,16 @@
         <div>
           <h1 class="h4 mb-1">{{ ticker }} · Gamma Analysis Dashboard</h1>
           <div class="small text-secondary">Data: <span class="mono">{{ data_source }}</span></div>
+          <div id="liveStatusBanner" class="small mono text-secondary mt-1"></div>
         </div>
         <div class="d-flex align-items-center gap-2">
           {% if latest_ts %}
           <span class="small text-secondary mono">{{ latest_ts }} · every {{ refresh_minutes }}m</span>
+          {% endif %}
+          {% if system_status %}
+          <span class="small mono {{ 'text-warning' if system_status.export_stale else 'text-success' }}">
+            export {{ '%.0f'|format(system_status.export_age_minutes) if system_status.export_age_minutes is not none else '?' }}m ago
+          </span>
           {% endif %}
           <a class="btn btn-sm btn-outline-secondary" href="/">SPX Home</a>
           <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ticker_page', ticker=ticker, force_refresh=1) }}">Refresh</a>
@@ -601,8 +607,15 @@
             {% if model_accountability.backtest and model_accountability.backtest.n %}
             <div class="small text-secondary mt-2 mono">
               Walk-forward n={{ model_accountability.backtest.n }} ·
+              sign acc {{ '%.1f'|format(model_accountability.backtest.accuracy * 100) if model_accountability.backtest.accuracy is not none else 'N/A' }}% ·
               MAE {{ '%.3f'|format(model_accountability.backtest.mae_delta) if model_accountability.backtest.mae_delta is not none else 'N/A' }} ·
-              confidence gap {{ '%.1f'|format(model_accountability.backtest.confidence_accuracy_gap * 100) if model_accountability.backtest.confidence_accuracy_gap is not none else 'N/A' }} pts.
+              gap {{ '%.1f'|format(model_accountability.backtest.confidence_accuracy_gap * 100) if model_accountability.backtest.confidence_accuracy_gap is not none else 'N/A' }} pts.
+            </div>
+            {% endif %}
+            {% if model_accountability.overlay_active is defined %}
+            <div class="small text-secondary mono">
+              Overlay {{ 'active' if model_accountability.overlay_active else 'inactive' }}
+              ({{ model_accountability.manifest_train_rows }}/{{ model_accountability.overlay_min_train_rows }} train rows)
             </div>
             {% endif %}
             {% if model_accountability.warnings %}
@@ -651,15 +664,28 @@
             {% endif %}
           </div>
 
+          {% if flow_overlay and flow_overlay.event_count %}
+          <div class="glass rounded-4 p-3 mb-3">
+            <h2 class="h6 mb-2">Live Flow Overlay</h2>
+            <div class="small mono text-secondary mb-2">
+              {{ flow_overlay.event_count }} events · ΔGEX {{ '%+.4f'|format(flow_overlay.predicted_flow_delta_gex_bn) }} Bn$
+            </div>
+            {% if prediction and prediction.neighbor_typical_abs_error is defined %}
+            <div class="small text-secondary">Typical neighbor error ±{{ '%.3f'|format(prediction.neighbor_typical_abs_error) }} Bn$</div>
+            {% endif %}
+          </div>
+          {% endif %}
+
           <div class="glass rounded-4 p-3 mb-3">
             <h2 class="h6 mb-2">Scenario Simulator</h2>
             <form method="get" class="row g-2 align-items-center">
               <input type="hidden" name="ts" value="{{ selected_ts }}">
-              <div class="col-7">
-                <input class="form-control form-control-sm mono" type="number" step="0.1" name="scenario_pct" value="{{ scenario_pct }}" placeholder="Spot shift %">
+              <div class="col-12">
+                <input class="form-range" type="range" min="-3" max="3" step="0.1" name="scenario_pct" value="{{ scenario_pct or 0 }}" oninput="this.nextElementSibling.value = this.value + '%'">
+                <output class="small mono text-secondary">{{ scenario_pct or 0 }}%</output>
               </div>
-              <div class="col-5 d-grid">
-                <button class="btn btn-sm btn-outline-light" type="submit">Simulate</button>
+              <div class="col-12 d-grid">
+                <button class="btn btn-sm btn-outline-light" type="submit">Simulate spot shift</button>
               </div>
             </form>
             {% if scenario %}
@@ -748,14 +774,24 @@
       renderPlot("cumulativeChart", {{ cumulative_chart_json|tojson }});
       renderPlot("aiInsights", {{ ai_insights_json|tojson }});
 
-      const autoRefreshMinutes = Number({{ refresh_minutes|tojson }});
-      if (autoRefreshMinutes > 0) {
-        window.setTimeout(() => {
-          const url = new URL(window.location.href);
-          url.searchParams.delete("force_refresh");
-          window.location.href = url.toString();
-        }, autoRefreshMinutes * 60 * 1000);
+      const pollMs = Math.max(30000, Number({{ refresh_minutes|tojson }}) * 60 * 1000);
+      async function pollSummary() {
+        try {
+          const ts = new URL(window.location.href).searchParams.get("ts");
+          const apiUrl = ts ? `/api/latest-summary?ts=${encodeURIComponent(ts)}` : "/api/latest-summary";
+          const resp = await fetch(apiUrl);
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const banner = document.getElementById("liveStatusBanner");
+          if (banner && data.summary) {
+            banner.textContent = `Live · ${data.summary.regime} · GEX ${(data.summary.total_gex || 0).toFixed(3)} Bn$`;
+          }
+        } catch (err) {
+          console.debug("pollSummary", err);
+        }
       }
+      pollSummary();
+      window.setInterval(pollSummary, pollMs);
 
       const replayTimestamps = {{ timestamps|tojson }};
       let replayIndex = {{ replay_index|tojson }};
