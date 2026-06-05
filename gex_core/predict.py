@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,25 @@ import pandas as pd
 from gex_core.features import enrich_snapshot_metrics, safe_float, snapshot_feature_vector
 from gex_core.exports import parse_timestamp
 from gex_core.models_manifest import load_manifest
+from gex_core.market_features import attach_market_features
+from gex_core.regime import classify_regime, model_blend_weight
+from gex_core.structural import attribute_last_move, structural_forward_delta
+
+logger = logging.getLogger(__name__)
 
 MODELS_DIR = Path("models")
 DEFAULT_LOOKBACK_DAYS = 7
+# Minimum snapshots needed for the KNN forecast at all. If the regime window is
+# too sparse we expand the pool rather than refusing to forecast (decouples the
+# regime window from the training-size requirement).
+MIN_KNN_SNAPSHOTS = 4
+# Minimum training rows in the manifest before the trained-model overlay is
+# allowed to influence the blend. Below this, the supervised model is noise.
+MIN_OVERLAY_TRAIN_ROWS = 8
+# Exponential recency decay for KNN neighbor weighting (per snapshot step).
+RECENCY_DECAY = 0.92
+# z-multiplier for the reported prediction interval (~68% band at 1.0).
+INTERVAL_Z = 1.0
 
 
 def _zscore_matrix(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -34,7 +51,8 @@ def _weighted_knn_predict(
     surface_vectors: list[np.ndarray] | None = None,
     query_surface: np.ndarray | None = None,
     surface_weight: float = 0.35,
-) -> tuple[dict[str, float], list[int], np.ndarray, float]:
+    recency_weights: np.ndarray | None = None,
+) -> tuple[dict[str, float], list[int], np.ndarray, float, dict[str, tuple[float, float]]]:
     z_train, mean, std = _zscore_matrix(train_features)
     z_query = (query - mean) / std
     distances = np.linalg.norm(z_train - z_query, axis=1)
@@ -49,15 +67,25 @@ def _weighted_knn_predict(
     nn_idx = np.argsort(distances)[:k]
     nn_dist = distances[nn_idx]
     weights = 1.0 / (nn_dist + 1e-6)
+    # Recency weighting: more recent analogs get more say so the forecast tracks
+    # the prevailing regime instead of treating all neighbors as equally current.
+    if recency_weights is not None and len(recency_weights) == len(distances):
+        weights = weights * recency_weights[nn_idx]
     weights = weights / weights.sum()
 
     predictions = {}
+    intervals: dict[str, tuple[float, float]] = {}
     for key, targets in train_targets.items():
-        predictions[key] = float(np.sum(weights * targets[nn_idx]))
+        point = float(np.sum(weights * targets[nn_idx]))
+        predictions[key] = point
+        # Weighted standard deviation of neighbor targets -> empirical band.
+        var = float(np.sum(weights * (targets[nn_idx] - point) ** 2))
+        std_t = var ** 0.5
+        intervals[key] = (point - INTERVAL_Z * std_t, point + INTERVAL_Z * std_t)
 
     avg_dist = float(nn_dist.mean())
     confidence = max(0.0, min(1.0, 1.0 / (1.0 + avg_dist)))
-    return predictions, list(nn_idx), weights, confidence
+    return predictions, list(nn_idx), weights, confidence, intervals
 
 
 def prepare_training_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -92,14 +120,24 @@ def prepare_training_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]
 def select_recent_history(
     history: list[dict[str, Any]],
     lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+    min_snapshots: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return snapshots inside the recent regime window, sorted by timestamp."""
+    """Return snapshots inside the recent regime window, sorted by timestamp.
+
+    ``min_snapshots`` decouples the regime window from the training-size
+    requirement: if the time window yields fewer than ``min_snapshots`` rows,
+    the window is expanded to include the most recent ``min_snapshots`` rows so
+    the forecaster is not starved of data on sparse histories.
+    """
     ordered = sorted(history, key=lambda row: row["ts"])
     if not ordered or not lookback_days or lookback_days <= 0:
         return ordered
     latest = parse_timestamp(ordered[-1]["ts"])
     cutoff = latest - timedelta(days=lookback_days)
-    return [row for row in ordered if parse_timestamp(row["ts"]) >= cutoff]
+    windowed = [row for row in ordered if parse_timestamp(row["ts"]) >= cutoff]
+    if min_snapshots and len(windowed) < min_snapshots:
+        return ordered[-min_snapshots:]
+    return windowed
 
 
 def predict_next_snapshot(
@@ -107,14 +145,28 @@ def predict_next_snapshot(
     k: int = 4,
     lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
 ) -> dict[str, Any] | None:
-    history = select_recent_history(history, lookback_days=lookback_days)
-    if len(history) < 4:
+    windowed = select_recent_history(history, lookback_days=lookback_days)
+    # Decouple regime window from minimum data: expand the pool only when the
+    # time window is too sparse to forecast at all.
+    if len(windowed) < MIN_KNN_SNAPSHOTS:
+        windowed = select_recent_history(
+            history, lookback_days=lookback_days, min_snapshots=MIN_KNN_SNAPSHOTS
+        )
+    if len(windowed) < MIN_KNN_SNAPSHOTS:
         return None
 
-    enriched = [enrich_snapshot_metrics(h.copy()) for h in history]
+    enriched = [enrich_snapshot_metrics(h.copy()) for h in windowed]
+    # Causal market-context features (realized vol / spot return) for the regime
+    # vector and surface-window adaptation.
+    attach_market_features(enriched)
     train = prepare_training_rows(enriched)
     if len(train) < 3:
         return None
+
+    # Drop the most recent transition from the neighbor pool: it is essentially
+    # the current momentum echo and inflates self-similarity (lookahead-ish
+    # leakage). Only when enough samples remain to keep KNN meaningful.
+    knn_train = train[:-1] if len(train) > 4 else train
 
     current = enriched[-1]
     prev = enriched[-2] if len(enriched) > 1 else None
@@ -122,53 +174,72 @@ def predict_next_snapshot(
         current["total_gex_momentum"] = current["total_gex"] - prev["total_gex"]
         current["flip_velocity"] = safe_float(current["gamma_flip"]) - safe_float(prev.get("gamma_flip"), 0.0)
 
-    x_train = np.vstack([row["features"] for row in train])
+    x_train = np.vstack([row["features"] for row in knn_train])
     x_now = snapshot_feature_vector(current)
-    surface_vectors = [row["surface_vector"] for row in train]
+    surface_vectors = [row["surface_vector"] for row in knn_train]
     query_surface = current.get("surface_vector", np.zeros(32))
 
+    # Recency weights: newest training rows weighted most heavily.
+    n_train = len(knn_train)
+    recency_weights = np.array(
+        [RECENCY_DECAY ** (n_train - 1 - i) for i in range(n_train)], dtype=float
+    )
+
     targets = {
-        "total_gex": np.array([row["target_total_gex"] for row in train]),
-        "delta_gex": np.array([row["target_delta_gex"] for row in train]),
-        "flip": np.array([row["target_flip"] for row in train]),
-        "near_term_ratio": np.array([row["target_near_term_ratio"] for row in train]),
+        "total_gex": np.array([row["target_total_gex"] for row in knn_train]),
+        "delta_gex": np.array([row["target_delta_gex"] for row in knn_train]),
+        "flip": np.array([row["target_flip"] for row in knn_train]),
+        "near_term_ratio": np.array([row["target_near_term_ratio"] for row in knn_train]),
     }
 
-    preds, nn_idx, nn_weights, confidence = _weighted_knn_predict(
+    preds, nn_idx, nn_weights, confidence, intervals = _weighted_knn_predict(
         x_train, targets, x_now, k=k,
         surface_vectors=surface_vectors,
         query_surface=query_surface,
+        recency_weights=recency_weights,
     )
+    knn_delta = preds["delta_gex"]
     preds["total_gex"] = current["total_gex"] + preds["delta_gex"]
 
+    regime = classify_regime(enriched)
+    overlay_weight = model_blend_weight(regime.get("volatility", "unknown"))
     model_preds = _predict_from_trained_models(current, enriched, lookback_days=lookback_days)
     if model_preds:
-        preds["delta_gex"] = 0.5 * preds["delta_gex"] + 0.5 * model_preds.get("delta_gex", preds["delta_gex"])
+        # Regime-conditional blend instead of a fixed 50/50 split.
+        preds["delta_gex"] = (1.0 - overlay_weight) * preds["delta_gex"] + overlay_weight * model_preds.get(
+            "delta_gex", preds["delta_gex"]
+        )
         preds["total_gex"] = current["total_gex"] + preds["delta_gex"]
-        confidence = 0.5 * confidence + 0.5 * model_preds.get("confidence", confidence)
+        confidence = (1.0 - overlay_weight) * confidence + overlay_weight * model_preds.get(
+            "confidence", confidence
+        )
 
     neighbors = []
     for rank, i in enumerate(nn_idx, start=1):
-        src = next(row for row in enriched if row["ts"] == train[i]["ts"])
+        src = next(row for row in enriched if row["ts"] == knn_train[i]["ts"])
         neighbors.append(
             {
                 "rank": rank,
                 "snapshot": src["ts_label"],
-                "next_snapshot": _ts_label(train[i]["next_ts"]),
+                "next_snapshot": _ts_label(knn_train[i]["next_ts"]),
                 "distance": float(np.linalg.norm(x_train[i] - x_now)),
-                "next_total_gex": float(train[i]["target_total_gex"]),
-                "next_delta_gex": float(train[i]["target_delta_gex"]),
+                "next_total_gex": float(knn_train[i]["target_total_gex"]),
+                "next_delta_gex": float(knn_train[i]["target_delta_gex"]),
             }
         )
 
-    regime_flip_prob = _regime_flip_probability(train, nn_idx, current["total_gex"])
+    regime_flip_prob = _regime_flip_probability(knn_train, nn_idx, current["total_gex"])
     predicted_strike = pd.Series(dtype=float)
     for weight, idx in zip(nn_weights, nn_idx):
-        strike_series = train[idx].get("target_strike")
+        strike_series = knn_train[idx].get("target_strike")
         if strike_series is None:
             continue
         strike_series = pd.Series(strike_series, dtype=float)
         predicted_strike = predicted_strike.add(strike_series * float(weight), fill_value=0.0)
+
+    delta_low, delta_high = intervals.get("delta_gex", (preds["delta_gex"], preds["delta_gex"]))
+    attribution = attribute_last_move(enriched)
+    structural_delta = structural_forward_delta(enriched)
 
     return {
         "predicted_total_gex": preds["total_gex"],
@@ -179,11 +250,71 @@ def predict_next_snapshot(
         "predicted_strike": predicted_strike if not predicted_strike.empty else None,
         "regime_flip_probability": regime_flip_prob,
         "confidence": confidence,
+        "knn_delta_gex": knn_delta,
+        "predicted_delta_gex_low": delta_low,
+        "predicted_delta_gex_high": delta_high,
+        "predicted_total_gex_low": current["total_gex"] + delta_low,
+        "predicted_total_gex_high": current["total_gex"] + delta_high,
+        "regime_detail": regime,
+        "overlay_weight": overlay_weight if model_preds else 0.0,
+        "structural_delta_gex": structural_delta,
+        "last_move_attribution": attribution,
         "neighbors": neighbors,
         "model_overlay": model_preds,
         "training_snapshot_count": len(enriched),
         "training_window_days": lookback_days,
     }
+
+
+def predict_multi_horizon(
+    history: list[dict[str, Any]],
+    horizons: tuple[int, ...] = (1, 3),
+    k: int = 4,
+    lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+) -> dict[int, dict[str, Any]]:
+    """Forecast ΔGEX at several snapshot horizons (h steps ahead).
+
+    Horizon 1 reuses :func:`predict_next_snapshot`. Longer horizons use a KNN on
+    h-step-ahead targets so the dashboard can show how the regime is expected to
+    evolve beyond the immediate next update.
+    """
+    results: dict[int, dict[str, Any]] = {}
+    base = predict_next_snapshot(history, k=k, lookback_days=lookback_days)
+    if base is None:
+        return results
+    results[1] = base
+
+    windowed = select_recent_history(history, lookback_days=lookback_days, min_snapshots=MIN_KNN_SNAPSHOTS)
+    enriched = [enrich_snapshot_metrics(h.copy()) for h in windowed]
+    attach_market_features(enriched)
+    current = enriched[-1]
+    x_now = snapshot_feature_vector(current)
+
+    for horizon in horizons:
+        if horizon <= 1:
+            continue
+        rows = []
+        for i in range(len(enriched) - horizon):
+            cur = enriched[i]
+            nxt = enriched[i + horizon]
+            rows.append((snapshot_feature_vector(cur), nxt["total_gex"] - cur["total_gex"]))
+        if len(rows) < 3:
+            continue
+        x_train = np.vstack([r[0] for r in rows])
+        targets = {"delta_gex": np.array([r[1] for r in rows])}
+        preds, _, _, confidence, intervals = _weighted_knn_predict(
+            x_train, targets, x_now, k=min(k, len(rows))
+        )
+        low, high = intervals["delta_gex"]
+        results[horizon] = {
+            "horizon": horizon,
+            "predicted_delta_gex": preds["delta_gex"],
+            "predicted_total_gex": current["total_gex"] + preds["delta_gex"],
+            "predicted_delta_gex_low": low,
+            "predicted_delta_gex_high": high,
+            "confidence": confidence,
+        }
+    return results
 
 
 def _ts_label(ts: str) -> str:
@@ -261,8 +392,21 @@ def _manifest_allows_overlay(ticker: str, current_ts: str, lookback_days: int | 
     if not manifest:
         return False
     training_end = manifest.get("training_end_ts")
-    if not training_end or not lookback_days or lookback_days <= 0:
-        return bool(training_end)
+    if not training_end:
+        return False
+    # Sample-size gate: refuse to trust a supervised overlay trained on a
+    # handful of rows -- below this it is noise and should not move the blend.
+    n_train = manifest.get("metrics", {}).get("n_train")
+    if n_train is not None and n_train < MIN_OVERLAY_TRAIN_ROWS:
+        logger.info(
+            "Skipping model overlay for %s: only %s training rows (< %s).",
+            ticker,
+            n_train,
+            MIN_OVERLAY_TRAIN_ROWS,
+        )
+        return False
+    if not lookback_days or lookback_days <= 0:
+        return True
     try:
         return parse_timestamp(current_ts) - parse_timestamp(training_end) <= timedelta(days=lookback_days)
     except Exception:
@@ -290,7 +434,7 @@ def _predict_from_trained_models(
                 result["delta_gex"] = pred
                 result["confidence"] = 0.6
         except Exception:
-            pass
+            logger.warning("XGB/linear overlay inference failed for %s", ticker, exc_info=True)
 
     lstm_path = MODELS_DIR / f"{ticker}_gex_lstm.keras"
     meta_path = MODELS_DIR / f"{ticker}_gex_lstm_meta.joblib"
@@ -302,7 +446,17 @@ def _predict_from_trained_models(
             scaler = meta_bundle["scaler"]
             seq_len = meta["seq_len"]
             feature_cols = meta["features"]
-            if len(history) >= seq_len:
+            # Apply the same staleness + sample-size gates the XGB overlay gets.
+            lstm_n_train = meta.get("n_train")
+            lstm_fresh = True
+            lstm_end = meta.get("training_end_ts")
+            if lstm_end and lookback_days and lookback_days > 0:
+                try:
+                    lstm_fresh = parse_timestamp(current["ts"]) - parse_timestamp(lstm_end) <= timedelta(days=lookback_days)
+                except Exception:
+                    lstm_fresh = False
+            lstm_enough = lstm_n_train is None or lstm_n_train >= MIN_OVERLAY_TRAIN_ROWS
+            if lstm_fresh and lstm_enough and len(history) >= seq_len:
                 seq_rows = []
                 for h in history[-seq_len:]:
                     seq_rows.append(_snapshot_to_feature_dict(enrich_snapshot_metrics(h.copy())))
@@ -314,7 +468,7 @@ def _predict_from_trained_models(
                 result["delta_gex"] = pred if "delta_gex" not in result else 0.5 * result["delta_gex"] + 0.5 * pred
                 result["confidence"] = max(result.get("confidence", 0.5), 0.55)
         except Exception:
-            pass
+            logger.warning("LSTM overlay inference failed for %s", ticker, exc_info=True)
 
     return result if result else None
 
