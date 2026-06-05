@@ -1,0 +1,26 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - wiki/**
+      - .github/workflows/publish-wiki.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish wiki pages
+        uses: Andrew-Chen-Wang/github-wiki-action@v4
+        with:
+          path: wiki
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "docs: sync wiki from main"
+          strategy: init

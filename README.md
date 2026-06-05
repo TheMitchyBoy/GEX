@@ -174,6 +174,12 @@ python scripts/gex_compact_exports.py --ticker SPX --keep-full-days 14
 
 See [ROADMAP.md](ROADMAP.md) for planned work.
 
+## Documentation
+
+- **[GitHub Wiki](https://github.com/TheMitchyBoy/GEX/wiki)** — full project guide (auto-published from [`wiki/`](wiki/))
+- [Getting started (wiki)](https://github.com/TheMitchyBoy/GEX/wiki/Getting-Started)
+- [Roadmap (wiki)](https://github.com/TheMitchyBoy/GEX/wiki/Roadmap)
+
 ## Project layout
 
 | Path | Role |
