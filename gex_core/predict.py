@@ -181,6 +181,42 @@ def select_recent_history(
     return windowed
 
 
+def forecast_blocker_message(
+    history: list[dict[str, Any]],
+    *,
+    lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+    export_timestamp_count: int | None = None,
+) -> str | None:
+    """Human-readable reason when ``predict_next_snapshot`` would return None."""
+    ordered = sorted(history, key=lambda row: row["ts"])
+    windowed = select_recent_history(ordered, lookback_days=lookback_days)
+    if len(windowed) < MIN_KNN_SNAPSHOTS:
+        windowed = select_recent_history(
+            ordered, lookback_days=lookback_days, min_snapshots=MIN_KNN_SNAPSHOTS
+        )
+    if len(windowed) < MIN_KNN_SNAPSHOTS:
+        export_hint = ""
+        if export_timestamp_count is not None and export_timestamp_count >= MIN_KNN_SNAPSHOTS:
+            export_hint = (
+                f" ({export_timestamp_count} export timestamps are indexed, but only "
+                f"{len(ordered)} load into the forecast window — check missing strike CSVs "
+                f"or raise GEX_PREDICTION_LOOKBACK_DAYS / GEX_PREDICTION_HISTORY_MAX.)"
+            )
+        return (
+            f"Need at least {MIN_KNN_SNAPSHOTS} loadable snapshots in the forecast window; "
+            f"found {len(windowed)}{export_hint}"
+        )
+    enriched = [enrich_snapshot_metrics(h.copy()) for h in windowed]
+    attach_market_features(enriched)
+    train = prepare_training_rows(enriched)
+    if len(train) < 3:
+        return (
+            f"Need at least 3 snapshot transitions for KNN training; found {len(train)} "
+            f"from {len(windowed)} snapshots."
+        )
+    return None
+
+
 def predict_next_snapshot(
     history: list[dict[str, Any]],
     k: int = 4,
