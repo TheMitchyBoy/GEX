@@ -15,15 +15,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from gex_core.exports import find_exports_for_ticker, load_strike_series, parse_timestamp
+from gex_core.exports import EXPORT_DIR, find_exports_for_ticker, load_strike_series, parse_timestamp
 from gex_core.features import compute_features_from_exports, enrich_snapshot_metrics
 from gex_core.history import build_history as build_history_from_exports
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
 from gex_core.predict import apply_flow_to_prediction, load_flow_predictions, predict_next_snapshot, similar_setups
 from gex_core.tickers import PRIMARY_TICKER
 
-EXPORT_DIR = Path("data/exports")
-IMG_DIR = Path("img")
+IMG_DIR = Path(__file__).resolve().parent / "img"
 FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
 
 

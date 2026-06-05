@@ -24,7 +24,8 @@ from gex_core.data_quality import clean_option_data
 from gex_core.exports import load_strike_series, parse_timestamp
 
 
-DATA_DIR = Path("data")
+# Resolve relative to repo root so gunicorn/docker cwd does not break loading.
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 CONTRACT_SIZE = 100
 
 

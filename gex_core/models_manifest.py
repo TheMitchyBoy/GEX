@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-MODELS_DIR = Path("models")
+# Resolve relative to repo root so gunicorn/docker cwd does not break loading.
+MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
 
 
 def manifest_path(ticker: str) -> Path:

@@ -134,7 +134,7 @@ def get_uw_data(ticker: str) -> dict | None:
     return refresh_uw_data(ticker)
 
 
-IMG_DIR = Path("img")
+IMG_DIR = Path(__file__).resolve().parent / "img"
 FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
 REFRESH_TICKERS = supported_tickers()
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
