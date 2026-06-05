@@ -176,7 +176,8 @@ See [ROADMAP.md](ROADMAP.md) for planned work.
 
 ## Documentation
 
-- **[GitHub Wiki](https://github.com/TheMitchyBoy/GEX/wiki)** — full project guide (auto-published from [`wiki/`](wiki/))
+- **[GitHub Wiki](https://github.com/TheMitchyBoy/GEX/wiki)** — full project guide (source: [`wiki/`](wiki/), auto-published on `main`)
+- [Wiki one-time setup](docs/WIKI_SETUP.md) — required once before the publish Action can push
 - [Getting started (wiki)](https://github.com/TheMitchyBoy/GEX/wiki/Getting-Started)
 - [Roadmap (wiki)](https://github.com/TheMitchyBoy/GEX/wiki/Roadmap)
 

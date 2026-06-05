@@ -2,6 +2,8 @@
 
 Welcome to the **GEX** project wiki. This documentation complements the [README](https://github.com/TheMitchyBoy/GEX/blob/main/README.md) with deeper guides for operators and contributors.
 
+> **Maintainers:** Page source lives in [`wiki/`](https://github.com/TheMitchyBoy/GEX/tree/main/wiki) on `main`. If this wiki is empty, complete the [one-time setup](https://github.com/TheMitchyBoy/GEX/blob/main/docs/WIKI_SETUP.md) so GitHub Actions can publish updates.
+
 GEX analyzes **dealer gamma exposure** in equity options markets using data from the [Unusual Whales](https://unusualwhales.com/) API. Snapshots are stored as timestamped CSV/JSON exports and power a Flask SPX dashboard, forecasting models, and optional live flow overlays.
 
 ## Quick links
