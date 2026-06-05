@@ -180,6 +180,7 @@ See [ROADMAP.md](ROADMAP.md) for planned work.
 - [Wiki one-time setup](docs/WIKI_SETUP.md) — required once before the publish Action can push
 - [Getting started (wiki)](https://github.com/TheMitchyBoy/GEX/wiki/Getting-Started)
 - [Roadmap (wiki)](https://github.com/TheMitchyBoy/GEX/wiki/Roadmap)
+- [Improvement ideas backlog](docs/IMPROVEMENTS.md) — prioritized engineering tasks
 
 ## Project layout
 
