@@ -13,7 +13,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -112,7 +112,7 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
             "gamma_flip": gamma_flip,
             "analysis": analysis,
             "ts": time.monotonic(),
-            "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         }
         with _uw_lock:
             _UW_CACHE[ticker] = entry
@@ -705,7 +705,7 @@ def ticker_widget(ticker: str):
         ticker=ticker,
         summary=summary,
         confluence=confluence,
-        updated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        updated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         theme=theme,
         compact=compact,
     )

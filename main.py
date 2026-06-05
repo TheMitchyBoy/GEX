@@ -24,7 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -251,7 +251,7 @@ def _run_uw(
             "ticker": ticker.upper(),
             "data_source": "unusual_whales",
             "source": "Unusual Whales API",
-            "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "market_date": market_date,
             "spot": float(spot_price),
             "spot_price": float(spot_price),

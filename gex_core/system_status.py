@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from gex_core.exports import EXPORT_DIR
@@ -53,5 +53,5 @@ def build_system_status(ticker: str | None = None) -> dict:
         "model_overlay_min_rows": MIN_OVERLAY_TRAIN_ROWS,
         "alert_webhook_configured": bool(os.environ.get("GEX_ALERT_WEBHOOK_URL")),
         "alert_auto_dispatch": os.environ.get("GEX_ALERT_AUTO_DISPATCH", "").lower() in {"1", "true", "yes"},
-        "checked_at_utc": datetime.utcnow().isoformat() + "Z",
+        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
     }
