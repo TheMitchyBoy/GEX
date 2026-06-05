@@ -61,6 +61,17 @@
         border-bottom: 1px solid rgba(255,255,255,.06);
       }
       .level-row:last-child { border-bottom: 0; }
+      .card-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      .card-stack > .glass {
+        margin-bottom: 0 !important;
+      }
+      .dashboard-section {
+        align-items: flex-start;
+      }
       .pill {
         border-radius: 4px;
         font-size: .7rem;
@@ -254,8 +265,8 @@
       </div>
       {% endif %}
 
-      <section class="row g-3">
-        <div class="col-12 col-xl-8">
+      <section class="row g-3 dashboard-section">
+        <div class="col-12 col-xl-8 card-stack">
           <div class="glass rounded-4 p-3 mb-3">
             <h2 class="h5 mb-2">SPX Gamma Exposure Map</h2>
             <p class="small text-secondary mb-2">
@@ -346,9 +357,7 @@
             <div class="text-secondary">No positive gamma focus data available.</div>
             {% endif %}
           </div>
-        </div>
 
-        <div class="col-12">
           <div class="glass rounded-4 p-3 mb-3">
             <h2 class="h5 mb-2">Predicted Gamma Change</h2>
             <p class="small text-secondary mb-2">
@@ -369,7 +378,7 @@
           </div>
         </div>
 
-        <div class="col-12 col-xl-4">
+        <div class="col-12 col-xl-4 card-stack">
           <div class="glass rounded-4 p-3 mb-3">
             <div class="d-flex justify-content-between align-items-center mb-2">
               <h2 class="h6 mb-0">Today's Regime</h2>
