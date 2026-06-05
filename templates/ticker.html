@@ -479,17 +479,29 @@
             <div class="metric-value mb-2">{{ prediction.predicted_regime }}</div>
             <div class="metric-label">Predicted ΔGEX</div>
             <div class="metric-value mb-2">{{ '%+.3f'|format(prediction.predicted_delta_gex) }} Bn$ / %</div>
+            {% if prediction.predicted_delta_gex_low is defined and prediction.predicted_delta_gex_high is defined %}
+            <div class="metric-label">ΔGEX interval (≈68%)</div>
+            <div class="metric-value mb-2 text-secondary">{{ '%+.3f'|format(prediction.predicted_delta_gex_low) }} … {{ '%+.3f'|format(prediction.predicted_delta_gex_high) }}</div>
+            {% endif %}
+            {% if prediction.regime_detail %}
+            <div class="metric-label">Detected regime</div>
+            <div class="metric-value mb-2 text-secondary">{{ prediction.regime_detail.label }}</div>
+            {% endif %}
             {% if prediction.base_predicted_delta_gex is defined %}
             <div class="metric-label">KNN ΔGEX (before flow)</div>
             <div class="metric-value mb-2 text-secondary">{{ '%+.3f'|format(prediction.base_predicted_delta_gex) }} Bn$ / %</div>
             <div class="metric-label">Flow ΔGEX</div>
             <div class="metric-value mb-2">{{ '%+.4f'|format(prediction.flow_delta_gex) }} Bn$ / %</div>
             {% endif %}
-            <div class="metric-label">Confidence</div>
-            <div class="metric-value mb-2">{{ '%.1f'|format(prediction.confidence * 100) }}%</div>
+            <div class="metric-label">Confidence{% if prediction.calibrated_confidence is defined %} (calibrated){% endif %}</div>
+            <div class="metric-value mb-2">
+              {% if prediction.calibrated_confidence is defined %}{{ '%.1f'|format(prediction.calibrated_confidence * 100) }}%
+              <span class="text-secondary small">(raw {{ '%.1f'|format(prediction.confidence * 100) }}%)</span>
+              {% else %}{{ '%.1f'|format(prediction.confidence * 100) }}%{% endif %}
+            </div>
             {% if prediction.backtest_sign_accuracy is defined %}
             <div class="metric-label">Backtest ΔGEX Sign (n={{ prediction.backtest_n }})</div>
-            <div class="metric-value mb-2">{{ '%.1f'|format(prediction.backtest_sign_accuracy * 100) }}%</div>
+            <div class="metric-value mb-2">{{ '%.1f'|format(prediction.backtest_sign_accuracy * 100) }}%{% if prediction.backtest_baseline_accuracy is not none %} <span class="text-secondary small">vs naive {{ '%.1f'|format(prediction.backtest_baseline_accuracy * 100) }}%</span>{% endif %}</div>
             {% endif %}
             <div class="metric-label">Regime Flip Probability</div>
             <div class="metric-value">{{ '%.1f'|format(prediction.regime_flip_probability * 100) }}%</div>
