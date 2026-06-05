@@ -62,23 +62,63 @@ def make_timeline_chart(history, ticker: str) -> str | None:
 
     fig = go.Figure()
 
-    if any(v is not None for v in put_wall) and any(v is not None for v in call_wall):
+    def _band_bounds(levels: list[float | None], pct: float) -> tuple[list[float | None], list[float | None]]:
+        lower = [(level * (1 - pct)) if level is not None else None for level in levels]
+        upper = [(level * (1 + pct)) if level is not None else None for level in levels]
+        return lower, upper
+
+    def _add_distance_band(
+        levels: list[float | None],
+        pct: float,
+        name: str,
+        color: str,
+        fillcolor: str,
+    ) -> None:
+        if not any(level is not None for level in levels):
+            return
+        lower, upper = _band_bounds(levels, pct)
         fig.add_trace(go.Scatter(
             x=labels,
-            y=put_wall,
+            y=lower,
             mode="lines",
-            line=dict(color="rgba(255,71,87,0.55)", width=1, dash="dashdot"),
-            name="Put wall",
-            hovertemplate="%{x}<br>Put wall %{y:.0f}<extra></extra>",
+            line=dict(width=0, color=color),
+            hoverinfo="skip",
+            showlegend=False,
         ))
         fig.add_trace(go.Scatter(
             x=labels,
-            y=call_wall,
+            y=upper,
             mode="lines",
-            line=dict(color="rgba(0,217,126,0.55)", width=1, dash="dashdot"),
             fill="tonexty",
-            fillcolor="rgba(148,163,184,0.08)",
-            name="Call/put wall corridor",
+            fillcolor=fillcolor,
+            line=dict(width=0, color=color),
+            name=name,
+            hoverinfo="skip",
+        ))
+
+    _add_distance_band(gamma_flip, 0.0025, "Gamma flip band (+/-0.25%)", "#e2e8f0", "rgba(226,232,240,0.10)")
+    _add_distance_band(call_wall, 0.0015, "Call wall band (+/-0.15%)", _GREEN, "rgba(0,217,126,0.08)")
+    _add_distance_band(put_wall, 0.0015, "Put wall band (+/-0.15%)", _RED, "rgba(255,71,87,0.08)")
+
+    if any(v is not None for v in put_wall):
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=put_wall,
+            mode="lines+markers",
+            line=dict(color=_RED, width=1.7, dash="dashdot"),
+            marker=dict(size=5, color=_RED),
+            name="Put wall",
+            hovertemplate="%{x}<br>Put wall %{y:.0f}<extra></extra>",
+        ))
+
+    if any(v is not None for v in call_wall):
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=call_wall,
+            mode="lines+markers",
+            line=dict(color=_GREEN, width=1.7, dash="dashdot"),
+            marker=dict(size=5, color=_GREEN),
+            name="Call wall",
             hovertemplate="%{x}<br>Call wall %{y:.0f}<extra></extra>",
         ))
 
@@ -94,8 +134,18 @@ def make_timeline_chart(history, ticker: str) -> str | None:
         ))
 
     if any(v is not None for v in spot):
+        def _distance_text(distance: float | None) -> str:
+            return f"{distance:+.0f} pts" if distance is not None else "N/A"
+
         spot_custom = [
-            [totals[idx], near_term_ratio[idx], regimes[idx]]
+            [
+                totals[idx],
+                near_term_ratio[idx],
+                regimes[idx],
+                _distance_text((spot[idx] - gamma_flip[idx]) if spot[idx] is not None and gamma_flip[idx] is not None else None),
+                _distance_text((spot[idx] - call_wall[idx]) if spot[idx] is not None and call_wall[idx] is not None else None),
+                _distance_text((spot[idx] - put_wall[idx]) if spot[idx] is not None and put_wall[idx] is not None else None),
+            ]
             for idx in range(len(labels))
         ]
         fig.add_trace(go.Scatter(
@@ -109,46 +159,34 @@ def make_timeline_chart(history, ticker: str) -> str | None:
             hovertemplate=(
                 "%{x}<br>SPX spot %{y:.2f}"
                 "<br>Regime %{customdata[2]}"
+                "<br>Spot - flip %{customdata[3]}"
+                "<br>Spot - call wall %{customdata[4]}"
+                "<br>Spot - put wall %{customdata[5]}"
                 "<br>Net GEX %{customdata[0]:+.3f} Bn$ / %"
                 "<br>Near-term gamma share %{customdata[1]:.1%}<extra></extra>"
             ),
         ))
 
-    bar_colors = [_GREEN if t >= 0 else _RED for t in totals]
-    bar_custom = [[near_term_ratio[idx], regimes[idx]] for idx in range(len(labels))]
-    fig.add_trace(go.Bar(
-        x=labels,
-        y=totals,
-        yaxis="y2",
-        customdata=bar_custom,
-        marker_color=bar_colors,
-        marker_line_width=0,
-        opacity=0.34,
-        name="Net dealer GEX",
-        hovertemplate=(
-            "%{x}<br>Net dealer GEX %{y:+.3f} Bn$ / %"
-            "<br>Near-term gamma share %{customdata[0]:.1%}"
-            "<br>Regime %{customdata[1]}<extra></extra>"
-        ),
-    ))
+    level_values = [
+        value
+        for series in (spot, gamma_flip, call_wall, put_wall)
+        for value in series
+        if value is not None
+    ]
+    y_range = None
+    if level_values:
+        low, high = min(level_values), max(level_values)
+        pad = max(20.0, (high - low) * 0.12)
+        y_range = [low - pad, high + pad]
 
     _apply_base(
         fig,
-        title=f"{ticker} · Options Movement Map",
+        title=f"{ticker} · Spot vs Gamma Levels",
         height=430,
         margin=dict(l=48, r=58, t=58, b=36),
         xaxis=dict(title="Snapshot", rangeslider=dict(visible=len(labels) > 4, thickness=0.08)),
-        yaxis=dict(title="SPX level / key option strikes", zeroline=False),
-        yaxis2=dict(
-            title="Net GEX (Bn$ / %)",
-            overlaying="y",
-            side="right",
-            zeroline=True,
-            zerolinecolor="rgba(255,255,255,0.25)",
-            gridcolor="rgba(255,255,255,0)",
-        ),
+        yaxis=dict(title="SPX spot and gamma levels", zeroline=False, range=y_range),
         hovermode="x unified",
-        barmode="overlay",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
