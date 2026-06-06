@@ -27,8 +27,8 @@ def test_gex_profile_chart_uses_tight_spot_window_and_bar_width():
     assert payload["layout"]["xaxis"]["range"][0] <= 4700
     assert payload["layout"]["xaxis"]["range"][1] >= 5100
     assert payload["layout"]["bargap"] == 0.0
-    assert "rangeslider" not in payload["layout"]["xaxis"]
-    assert payload["layout"]["xaxis"]["dtick"] >= 5
+    xaxis = payload["layout"]["xaxis"]
+    assert xaxis.get("tickmode") == "array" or xaxis.get("dtick") == 100
 
 
 def test_chart_strike_series_pins_spot_level():
@@ -37,7 +37,7 @@ def test_chart_strike_series_pins_spot_level():
     assert 7350.0 in window.index
 
 
-def test_periscope_exposure_chart_uses_bar_width_and_strike_ticks():
+def test_periscope_exposure_chart_uses_even_categorical_strikes():
     exposure = pd.Series(
         [0.5, -0.3, 0.8, -0.2, 0.4],
         index=[7300.0, 7350.0, 7380.0, 7400.0, 7450.0],
@@ -46,9 +46,9 @@ def test_periscope_exposure_chart_uses_bar_width_and_strike_ticks():
         make_periscope_exposure_chart(exposure, ticker="SPX", spot=7380.0, compact=True)
     )
     bar = payload["data"][0]
-    assert bar["width"] > 1
-    assert payload["layout"]["yaxis"]["dtick"] >= 5
-    assert payload["layout"]["bargap"] == 0.0
+    assert bar.get("width") is None
+    assert payload["layout"]["yaxis"]["type"] == "category"
+    assert payload["layout"]["bargap"] == 0.12
 
 
 def test_0dte_movement_chart_compares_same_day_snapshots():

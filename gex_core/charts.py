@@ -54,15 +54,6 @@ def _median_strike_step(strikes: list[float]) -> float:
     return max(1.0, float(pd.Series(diffs).median())) if diffs else 5.0
 
 
-def _strike_tick_step(step: float, span: float, *, max_ticks: int = 8) -> float:
-    """Readable strike-axis tick spacing."""
-    target = span / max(4, max_ticks)
-    for candidate in (5, 10, 25, 50, 100, 200, 250, 500):
-        if candidate >= target:
-            return float(candidate)
-    return max(step, target)
-
-
 def _strike_axis_range(
     strikes: list[float],
     spot: float | None,
@@ -158,14 +149,26 @@ def _strike_axis_layout(
     *,
     axis: str = "x",
 ) -> dict:
+    """Strike axis with ticks aligned to the actual bar grid."""
     step = _median_strike_step(strikes)
-    span = max(strikes) - min(strikes)
-    dtick = _strike_tick_step(step, span)
     axis_range = _strike_axis_range(strikes, spot, step=step)
-    tickformat = ",.0f"
-    if axis == "y":
-        return dict(title="Strike", range=axis_range, dtick=dtick, tickformat=tickformat)
-    return dict(title="SPX strike", range=axis_range, dtick=dtick, tickformat=tickformat)
+    title = "Strike" if axis == "y" else "SPX strike"
+    layout: dict[str, Any] = dict(
+        title=title,
+        range=axis_range,
+        tickformat=",.0f",
+        gridcolor="rgba(255,255,255,0.06)",
+        zerolinecolor="rgba(255,255,255,0.15)",
+    )
+    n = len(strikes)
+    if n <= 20:
+        tick_every = 1 if n <= 10 else 2
+        layout["tickmode"] = "array"
+        layout["tickvals"] = strikes[::tick_every]
+    else:
+        # Match the strike increment (typically 5 for SPX), not a coarse 25/50 grid.
+        layout["dtick"] = step
+    return layout
 
 
 def _apply_base(fig: go.Figure, **extra) -> go.Figure:
@@ -867,19 +870,24 @@ def _horizontal_exposure_bars(
 ) -> str | None:
     if exposure is None or exposure.empty:
         return None
-    series = _chart_strike_series(
-        pd.Series(exposure, dtype=float),
-        spot,
-        window_pct=window_pct,
-        max_bars=max_bars,
-        pin_levels=(spot,),
-    )
+    # Periscope may pass a pre-windowed series; avoid double-filtering.
+    raw = pd.Series(exposure, dtype=float).sort_index()
+    if len(raw) <= max_bars + 2:
+        series = raw
+    else:
+        series = _chart_strike_series(
+            raw,
+            spot,
+            window_pct=window_pct,
+            max_bars=max_bars,
+            pin_levels=(spot,),
+        )
     if series.empty:
         return None
     strikes = [float(s) for s in series.index]
+    labels = [f"{s:.0f}" for s in strikes]
     values = [float(v) for v in series.values]
     colors = [_GREEN if v >= 0 else _RED for v in values]
-    bar_width = _bar_width(strikes)
     prev_map = {}
     if previous is not None and not previous.empty:
         prev_map = {float(k): float(v) for k, v in pd.Series(previous, dtype=float).items()}
@@ -887,14 +895,13 @@ def _horizontal_exposure_bars(
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
-            y=strikes,
+            y=labels,
             x=values,
             orientation="h",
-            width=bar_width,
             marker_color=colors,
             opacity=0.88,
             name="Exposure",
-            hovertemplate="Strike %{y:.0f}<br>Exposure %{x:.3f}<extra></extra>",
+            hovertemplate="Strike %{y}<br>Exposure %{x:.3f}<extra></extra>",
         )
     )
     if prev_map:
@@ -902,33 +909,46 @@ def _horizontal_exposure_bars(
         if any(v is not None for v in prev_x):
             fig.add_trace(
                 go.Scatter(
-                    y=strikes,
+                    y=labels,
                     x=prev_x,
                     mode="markers",
                     marker=dict(color="#ffffff", size=6, line=dict(color=_CHART_BG, width=1)),
                     name="Prior slice",
-                    hovertemplate="Strike %{y:.0f}<br>Prior %{x:.3f}<extra></extra>",
+                    hovertemplate="Strike %{y}<br>Prior %{x:.3f}<extra></extra>",
                 )
             )
     if spot and spot > 0:
-        fig.add_hline(
-            y=float(spot),
-            line_color=_AMBER,
-            line_width=1.6,
-            annotation_text=f"Spot {spot:.0f}",
-            annotation_font=dict(color=_AMBER, size=10),
+        nearest = min(strikes, key=lambda s: abs(s - float(spot)))
+        spot_label = f"{nearest:.0f}"
+        fig.add_hline(y=spot_label, line_color=_AMBER, line_width=1.6)
+        fig.add_annotation(
+            x=1.0,
+            xref="paper",
+            y=spot_label,
+            yref="y",
+            xanchor="left",
+            text=f"Spot {spot:.0f}",
+            showarrow=False,
+            font=dict(color=_AMBER, size=10),
+            xshift=6,
         )
 
-    chart_height = max(height, min(520, 16 * len(strikes) + 96))
+    chart_height = max(height, min(480, 14 * len(strikes) + 88))
     _apply_base(
         fig,
         title=title,
         height=chart_height,
         margin=dict(l=64, r=24, t=52, b=36),
         xaxis=dict(title="Exposure", zeroline=True, zerolinecolor="rgba(255,255,255,0.2)"),
-        yaxis=_strike_axis_layout(strikes, spot, axis="y"),
+        yaxis=dict(
+            title="Strike",
+            type="category",
+            categoryorder="array",
+            categoryarray=labels,
+            gridcolor="rgba(255,255,255,0.06)",
+        ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        bargap=0.0,
+        bargap=0.12,
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
