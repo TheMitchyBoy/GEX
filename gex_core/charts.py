@@ -856,39 +856,68 @@ def make_heatmap(surface_path: Path | None = None, ticker: str = "", surface_df:
 
 _EXPOSURE_LABELS = {"gamma": "Net Gamma", "vanna": "Net Vanna", "charm": "Net Charm"}
 _EXPOSURE_UNITS = {"gamma": "Bn$ / %", "vanna": "Bn$ / vol pt", "charm": "Bn$ / day"}
+_UW_PROFILE_MAX = 55
+_UW_EXTENDED_MAX = 96
+
+# Unusual Whales Periscope palette (market-exposure dashboard)
+_UW_CHART_BG = "#0c1018"
+_UW_GREEN = "#22c55e"
+_UW_RED = "#ef4444"
+_UW_SPOT = "#fbbf24"
+_UW_GRID = "rgba(148, 163, 184, 0.08)"
+_UW_ZERO = "rgba(148, 163, 184, 0.35)"
+
+
+def _periscope_base_layout(**extra) -> dict:
+    layout = dict(
+        paper_bgcolor=_UW_CHART_BG,
+        plot_bgcolor=_UW_CHART_BG,
+        font=dict(color="#cbd5e1", family="Inter, system-ui, sans-serif", size=11),
+        margin=dict(l=52, r=16, t=8, b=36),
+    )
+    layout.update(extra)
+    return layout
 
 
 def _horizontal_exposure_bars(
     exposure: pd.Series,
     spot: float | None,
     *,
-    title: str,
+    title: str = "",
     previous: pd.Series | None = None,
-    height: int = 420,
-    max_bars: int = 40,
-    window_pct: float = 0.03,
+    mode: str = "profile",
+    max_bars: int | None = None,
+    window_pct: float | None = None,
 ) -> str | None:
+    """UW Periscope-style horizontal exposure profile (strike rows + prior-slice dots)."""
     if exposure is None or exposure.empty:
         return None
-    # Periscope may pass a pre-windowed series; avoid double-filtering.
+
     raw = pd.Series(exposure, dtype=float).sort_index()
-    if len(raw) <= max_bars + 2:
+    is_profile = mode == "profile"
+    cap = max_bars or (_UW_PROFILE_MAX if is_profile else _UW_EXTENDED_MAX)
+    window = window_pct or (0.045 if is_profile else 0.085)
+
+    if is_profile and len(raw) <= cap:
+        series = raw
+    elif len(raw) <= cap + 2:
         series = raw
     else:
         series = _chart_strike_series(
             raw,
             spot,
-            window_pct=window_pct,
-            max_bars=max_bars,
+            window_pct=window,
+            max_bars=cap,
             pin_levels=(spot,),
         )
     if series.empty:
         return None
+
     strikes = [float(s) for s in series.index]
     labels = [f"{s:.0f}" for s in strikes]
     values = [float(v) for v in series.values]
-    colors = [_GREEN if v >= 0 else _RED for v in values]
-    prev_map = {}
+    colors = [_UW_GREEN if v >= 0 else _UW_RED for v in values]
+    prev_map: dict[float, float] = {}
     if previous is not None and not previous.empty:
         prev_map = {float(k): float(v) for k, v in pd.Series(previous, dtype=float).items()}
 
@@ -899,9 +928,10 @@ def _horizontal_exposure_bars(
             x=values,
             orientation="h",
             marker_color=colors,
-            opacity=0.88,
+            marker_line_width=0,
+            opacity=0.92,
             name="Exposure",
-            hovertemplate="Strike %{y}<br>Exposure %{x:.3f}<extra></extra>",
+            hovertemplate="Strike %{y}<br>Net %{x:.3f} Bn<extra></extra>",
         )
     )
     if prev_map:
@@ -912,43 +942,42 @@ def _horizontal_exposure_bars(
                     y=labels,
                     x=prev_x,
                     mode="markers",
-                    marker=dict(color="#ffffff", size=6, line=dict(color=_CHART_BG, width=1)),
-                    name="Prior slice",
-                    hovertemplate="Strike %{y}<br>Prior %{x:.3f}<extra></extra>",
+                    marker=dict(color="#ffffff", size=7, line=dict(color=_UW_CHART_BG, width=1.5)),
+                    name="Prior 10m",
+                    hovertemplate="Strike %{y}<br>Prior %{x:.3f} Bn<extra></extra>",
                 )
             )
+
     if spot and spot > 0:
         nearest = min(strikes, key=lambda s: abs(s - float(spot)))
         spot_label = f"{nearest:.0f}"
-        fig.add_hline(y=spot_label, line_color=_AMBER, line_width=1.6)
-        fig.add_annotation(
-            x=1.0,
-            xref="paper",
-            y=spot_label,
-            yref="y",
-            xanchor="left",
-            text=f"Spot {spot:.0f}",
-            showarrow=False,
-            font=dict(color=_AMBER, size=10),
-            xshift=6,
-        )
+        fig.add_hline(y=spot_label, line_color=_UW_SPOT, line_width=1.5, line_dash="dot")
 
-    chart_height = max(height, min(480, 14 * len(strikes) + 88))
-    _apply_base(
-        fig,
-        title=title,
-        height=chart_height,
-        margin=dict(l=64, r=24, t=52, b=36),
-        xaxis=dict(title="Exposure", zeroline=True, zerolinecolor="rgba(255,255,255,0.2)"),
-        yaxis=dict(
-            title="Strike",
-            type="category",
-            categoryorder="array",
-            categoryarray=labels,
-            gridcolor="rgba(255,255,255,0.06)",
-        ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        bargap=0.12,
+    chart_height = 400 if is_profile else max(560, min(720, 12 * len(strikes) + 72))
+
+    fig.update_layout(
+        **_periscope_base_layout(
+            title=dict(text=title, x=0, font=dict(size=12, color="#94a3b8")) if title else None,
+            height=chart_height,
+            showlegend=False,
+            bargap=0.08,
+            xaxis=dict(
+                title="",
+                zeroline=True,
+                zerolinecolor=_UW_ZERO,
+                zerolinewidth=1.5,
+                gridcolor=_UW_GRID,
+                tickfont=dict(size=10, color="#94a3b8"),
+            ),
+            yaxis=dict(
+                title="",
+                type="category",
+                categoryorder="array",
+                categoryarray=labels,
+                gridcolor=_UW_GRID,
+                tickfont=dict(size=10, color="#94a3b8"),
+            ),
+        )
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
@@ -962,7 +991,7 @@ def make_periscope_price_chart(
     highlight_ts: str | None = None,
     price_source: str | None = None,
 ) -> str | None:
-    """Intraday SPX line chart for the Periscope top panel."""
+    """Intraday SPX price panel (UW Periscope top-left)."""
     x: list = []
     y: list[float] = []
     if price_points:
@@ -983,30 +1012,37 @@ def make_periscope_price_chart(
             x=list(x),
             y=list(y),
             mode="lines",
-            line=dict(color=_AMBER, width=2.4),
+            line=dict(color=_UW_SPOT, width=2),
+            fill="tozeroy",
+            fillcolor="rgba(251, 191, 36, 0.06)",
             name="SPX",
             hovertemplate="%{x}<br>SPX %{y:.2f}<extra></extra>",
         )
     )
-    if highlight_ts and highlight_ts in x:
-        idx = list(x).index(highlight_ts)
-        fig.add_vrect(
-            x0=max(0, idx - 0.5),
-            x1=min(len(x) - 0.5, idx + 0.5),
-            fillcolor="rgba(96,165,250,0.18)",
-            line_width=0,
-        )
+    if highlight_ts:
+        labels = list(x)
+        match_idx = next((i for i, label in enumerate(labels) if str(label).startswith(str(highlight_ts)[:16])), None)
+        if match_idx is None and highlight_ts in labels:
+            match_idx = labels.index(highlight_ts)
+        if match_idx is not None:
+            fig.add_vrect(
+                x0=match_idx - 0.45,
+                x1=match_idx + 0.45,
+                fillcolor="rgba(96,165,250,0.22)",
+                line_width=0,
+                layer="below",
+            )
     if spot and spot > 0:
-        fig.add_hline(y=spot, line_dash="dot", line_color="#94a3b8", annotation_text=f"{spot:.0f}")
+        fig.add_hline(y=spot, line_dash="dot", line_color="rgba(148,163,184,0.55)", line_width=1)
 
-    source_note = f" · {price_source}" if price_source else ""
-    _apply_base(
-        fig,
-        title=f"{ticker} Price{source_note}",
-        height=380,
-        margin=dict(l=48, r=16, t=52, b=40),
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="Price", zeroline=False),
+    fig.update_layout(
+        **_periscope_base_layout(
+            title=dict(text=f"{ticker} Price", x=0, font=dict(size=12, color="#94a3b8")),
+            height=400,
+            showlegend=False,
+            xaxis=dict(title="", showgrid=False, tickfont=dict(size=10, color="#64748b")),
+            yaxis=dict(title="", gridcolor=_UW_GRID, tickfont=dict(size=10, color="#64748b"), zeroline=False),
+        )
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
@@ -1021,15 +1057,22 @@ def make_periscope_exposure_chart(
     compact: bool = False,
 ) -> str | None:
     label = _EXPOSURE_LABELS.get(exposure_type, "Exposure")
-    title = f"{ticker} · {label}"
+    if compact:
+        title = f"{ticker} Market Maker Exposures · {label}"
+        return _horizontal_exposure_bars(
+            exposure if exposure is not None else pd.Series(dtype=float),
+            spot,
+            title=title,
+            previous=previous,
+            mode="profile",
+        )
+    title = f"{ticker} Market Maker Exposures Extended · {label}"
     return _horizontal_exposure_bars(
         exposure if exposure is not None else pd.Series(dtype=float),
         spot,
         title=title,
         previous=previous,
-        height=300 if compact else 440,
-        max_bars=28 if compact else 44,
-        window_pct=0.022 if compact else 0.04,
+        mode="extended",
     )
 
 
@@ -1041,22 +1084,26 @@ def make_mm_positions_chart(positions: dict | None, ticker: str = "SPX") -> str 
     values = [safe_float(positions.get(k), 0.0) for k in keys]
     if not any(abs(v) > 1e-9 for v in values):
         return None
-    colors = [_GREEN if v >= 0 else _RED for v in values]
+    colors = [_UW_GREEN if v >= 0 else _UW_RED for v in values]
     fig = go.Figure(
         go.Bar(
             x=labels,
             y=values,
             marker_color=colors,
+            marker_line_width=0,
             hovertemplate="%{x}<br>%{y:.3f} Bn<extra></extra>",
         )
     )
-    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)")
-    _apply_base(
-        fig,
-        title=f"{ticker} · Market Maker Positions",
-        height=300,
-        margin=dict(l=48, r=16, t=52, b=48),
-        yaxis_title="Net position (Bn)",
+    fig.add_hline(y=0, line_dash="solid", line_color=_UW_ZERO, line_width=1.5)
+    fig.update_layout(
+        **_periscope_base_layout(
+            title=dict(text=f"{ticker} Market Maker Positions", x=0, font=dict(size=12, color="#94a3b8")),
+            height=400,
+            showlegend=False,
+            bargap=0.25,
+            xaxis=dict(tickfont=dict(size=10, color="#94a3b8"), gridcolor=_UW_GRID),
+            yaxis=dict(title="", gridcolor=_UW_GRID, zeroline=False, tickfont=dict(size=10, color="#64748b")),
+        )
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 

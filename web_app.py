@@ -490,7 +490,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         price_source=price_source or ctx.get("data_path"),
     )
     exposure_chart_json = make_periscope_exposure_chart(
-        ctx.get("exposure_window"),
+        ctx.get("exposure_profile"),
         ticker=ticker,
         exposure_type=exposure,
         spot=spot,

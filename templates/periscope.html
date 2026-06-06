@@ -110,7 +110,21 @@
         box-shadow: 0 0 0 0.15rem rgba(96,165,250,0.2);
       }
       .chat-status { font-size: 0.72rem; color: var(--muted); }
-      #priceChart, #exposureChart, #positionsChart, #extendedChart { min-height: 280px; }
+      #priceChart, #exposureChart { min-height: 400px; }
+      #positionsChart { min-height: 400px; }
+      #extendedChart { min-height: 560px; }
+      .chart-panel-title {
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: #94a3b8;
+        padding: 0.5rem 0.65rem 0;
+      }
+      .chart-legend-hint {
+        font-size: 0.68rem;
+        color: #64748b;
+        padding: 0 0.65rem 0.35rem;
+      }
       .time-nav .btn { min-width: 7.5rem; }
       .time-nav .form-control,
       .time-nav .form-select {
@@ -245,12 +259,15 @@
 
       <section class="row g-3 mb-3">
         <div class="col-lg-6">
-          <div class="panel p-2 h-100">
+          <div class="panel h-100">
+            <div class="chart-panel-title">SPX Price</div>
             <div id="priceChart"></div>
           </div>
         </div>
         <div class="col-lg-6">
-          <div class="panel p-2 h-100">
+          <div class="panel h-100">
+            <div class="chart-panel-title">SPX Market Maker Exposures</div>
+            <div class="chart-legend-hint">White dots = prior 10-minute slice · dashed line = spot</div>
             <div id="exposureChart"></div>
           </div>
         </div>
@@ -258,7 +275,8 @@
 
       <section class="row g-3 mb-3">
         <div class="col-lg-5">
-          <div class="panel p-2 h-100">
+          <div class="panel h-100">
+            <div class="chart-panel-title">SPX Market Maker Positions</div>
             <div id="positionsChart"></div>
             {% if not positions_chart_json %}
             <div class="p-3 small muted text-center">Market maker position breakdown requires live UW greek data.</div>
@@ -266,7 +284,9 @@
           </div>
         </div>
         <div class="col-lg-7">
-          <div class="panel p-2 h-100">
+          <div class="panel h-100">
+            <div class="chart-panel-title">SPX Market Maker Exposures Extended</div>
+            <div class="chart-legend-hint">Wider strike range from greek-exposure chain</div>
             <div id="extendedChart"></div>
           </div>
         </div>
@@ -299,7 +319,7 @@
         extended: {{ extended_chart_json|safe if extended_chart_json else 'null' }},
       };
       const plotConfig = {responsive: true, displayModeBar: false};
-      const plotLayout = {paper_bgcolor: '#121826', plot_bgcolor: '#121826', font: {color: '#e2e8f0'}};
+      const plotLayout = {paper_bgcolor: '#0c1018', plot_bgcolor: '#0c1018', font: {color: '#cbd5e1'}};
       const exposure = '{{ exposure }}';
       const timelineData = {{ timeline|tojson }};
       const chatWelcome = {{ chat_welcome|tojson }};

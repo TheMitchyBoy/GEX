@@ -27,6 +27,8 @@ from gex_core.spot_exposure import spot_exposure_mm_positions, spot_exposure_net
 from gex_core.tickers import PRIMARY_TICKER
 
 EXPOSURE_TYPES = ("gamma", "vanna", "charm")
+PERISCOPE_PROFILE_MAX = 55
+PERISCOPE_EXTENDED_MAX = 96
 
 
 def group_timestamps_by_date(timestamps: list[str]) -> dict[str, list[str]]:
@@ -305,6 +307,23 @@ def build_periscope_context(
         elif isinstance(prev_strike, pd.Series):
             previous_exposure = _exposure_series(None, None, prev_strike, exposure, spot=prev_spot_price or None)
 
+    # UW Periscope profile: native spot-exposures grid (~50 ATM strikes).
+    exposure_profile = current_exposure.sort_index()
+    if len(exposure_profile) > PERISCOPE_PROFILE_MAX:
+        exposure_profile = _strike_window(
+            exposure_profile, spot or 0.0, window_pct=0.045, max_strikes=PERISCOPE_PROFILE_MAX
+        )
+
+    # Extended panel: wider greek-exposure chain when available.
+    greek_exposure = _greek_exposure_from_df(greek_df, exposure)
+    extended_source = greek_exposure if not greek_exposure.empty else current_exposure
+    exposure_extended = _strike_window(
+        extended_source,
+        spot or 0.0,
+        window_pct=0.085,
+        max_strikes=PERISCOPE_EXTENDED_MAX,
+    )
+
     gamma_flip = selected.get("gamma_flip")
     if gamma_flip is None and not current_exposure.empty and spot > 0:
         atm = select_atm_strike_series(current_exposure, spot, window_pct=0.06, min_strikes=5)
@@ -345,8 +364,9 @@ def build_periscope_context(
         "price_points": price_points or [],
         "exposure_series": current_exposure,
         "previous_exposure": previous_exposure,
-        "exposure_window": _strike_window(current_exposure, spot or 0.0, window_pct=0.022, max_strikes=28),
-        "exposure_extended": _strike_window(current_exposure, spot or 0.0, window_pct=0.04, max_strikes=44),
+        "exposure_profile": exposure_profile,
+        "exposure_window": exposure_profile,
+        "exposure_extended": exposure_extended,
         "mm_positions": _mm_positions(
             spot_df if isinstance(spot_df, pd.DataFrame) else None,
             greek_df if isinstance(greek_df, pd.DataFrame) else None,

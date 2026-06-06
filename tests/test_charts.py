@@ -37,7 +37,7 @@ def test_chart_strike_series_pins_spot_level():
     assert 7350.0 in window.index
 
 
-def test_periscope_exposure_chart_uses_even_categorical_strikes():
+def test_periscope_exposure_chart_uses_uw_profile_style():
     exposure = pd.Series(
         [0.5, -0.3, 0.8, -0.2, 0.4],
         index=[7300.0, 7350.0, 7380.0, 7400.0, 7450.0],
@@ -48,7 +48,9 @@ def test_periscope_exposure_chart_uses_even_categorical_strikes():
     bar = payload["data"][0]
     assert bar.get("width") is None
     assert payload["layout"]["yaxis"]["type"] == "category"
-    assert payload["layout"]["bargap"] == 0.12
+    assert payload["layout"]["bargap"] == 0.08
+    assert payload["layout"]["height"] == 400
+    assert "Market Maker Exposures" in payload["layout"]["title"]["text"]
 
 
 def test_0dte_movement_chart_compares_same_day_snapshots():
