@@ -79,6 +79,7 @@ def main() -> None:
     print(f"skipped gamma decline: {result.get('skipped_gamma_decline', 0)}")
     print(f"skipped strike distance: {result.get('skipped_strike_distance', 0)}")
     print(f"skipped filters: {result.get('skipped_filters', 0)}")
+    print(f"blocked cooldown: {result.get('blocked_cooldown', 0)}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")
 
     print("\nBy signal type:")

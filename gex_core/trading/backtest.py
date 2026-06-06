@@ -15,10 +15,17 @@ from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.config import (
     max_open_positions,
     min_ai_confidence,
+    stop_cooldown_bars,
     stop_loss_pct,
     take_profit_pct,
 )
-from gex_core.trading.exits import ExitState, evaluate_exit
+from gex_core.trading.exits import (
+    ExitProfile,
+    ExitState,
+    build_exit_profile,
+    contracts_for_confidence,
+    evaluate_exit,
+)
 from gex_core.trading.filters import MarketContext, market_context_from_snapshot
 from gex_core.trading.paper_broker import (
     estimate_entry_premium,
@@ -41,6 +48,8 @@ class _OpenPosition:
     signal_gamma: float
     gamma_delta: float
     ai_confidence: float
+    qty: float = 1.0
+    exit_profile: ExitProfile = field(default_factory=ExitProfile)
     exit_state: ExitState = field(default_factory=ExitState)
 
 
@@ -70,6 +79,8 @@ class BacktestState:
     skipped_gamma_decline: int = 0
     skipped_strike_distance: int = 0
     skipped_filters: int = 0
+    blocked_cooldown: int = 0
+    strike_cooldown: dict[tuple[float, str], int] = field(default_factory=dict)
 
 
 def _has_open_duplicate(positions: list[_OpenPosition], *, strike: float, option_type: str) -> bool:
@@ -130,7 +141,9 @@ def _close_position(
     pnl_pct: float,
     exit_reason: str,
     closed: list[_ClosedTrade],
+    qty: float | None = None,
 ) -> None:
+    trade_qty = pos.qty if qty is None else qty
     exit_premium = mark_to_market_premium(pos.entry_premium, pnl_pct)
     closed.append(
         _ClosedTrade(
@@ -144,7 +157,7 @@ def _close_position(
             entry_premium=pos.entry_premium,
             exit_premium=exit_premium,
             pnl_pct=pnl_pct,
-            pnl_usd=pnl_usd(pos.entry_premium, exit_premium),
+            pnl_usd=pnl_usd(pos.entry_premium, exit_premium, trade_qty),
             exit_reason=exit_reason,
             bars_held=exit_idx - pos.entry_idx,
         )
@@ -168,6 +181,9 @@ def _check_exits(
             bars_held=bars_held,
             entry_spot=pos.entry_spot,
             strike=pos.strike,
+            current_spot=spot,
+            option_type=pos.option_type,
+            profile=pos.exit_profile,
         )
         if exit_reason:
             _close_position(
@@ -178,7 +194,11 @@ def _check_exits(
                 pnl_pct=exit_pnl,
                 exit_reason=exit_reason,
                 closed=state.closed_trades,
+                qty=pos.qty,
             )
+            if exit_reason == "stop_loss":
+                key = (pos.strike, pos.option_type.lower())
+                state.strike_cooldown[key] = idx + stop_cooldown_bars()
         else:
             remaining.append(pos)
     state.open_positions = remaining
@@ -223,10 +243,24 @@ def _maybe_enter(
     rec = signals["recommended"]
     option_type = str(advice.get("option_type") or rec["option_type"])
     strike = float(rec["strike"])
+    cooldown_key = (strike, option_type.lower())
+    if state.strike_cooldown.get(cooldown_key, 0) > idx:
+        state.blocked_cooldown += 1
+        return
     if _has_open_duplicate(state.open_positions, strike=strike, option_type=option_type):
         state.blocked_duplicate += 1
         return
 
+    confidence = float(advice.get("confidence", 0.5))
+    qty = contracts_for_confidence(confidence)
+    regime = str(row.get("regime") or "")
+    profile = build_exit_profile(
+        ai_confidence=confidence,
+        gamma_delta=float(rec["gamma_delta"]),
+        regime=regime,
+        entry_spot=spot,
+        strike=strike,
+    )
     premium = estimate_entry_premium(spot, strike)
     state.open_positions.append(
         _OpenPosition(
@@ -239,7 +273,9 @@ def _maybe_enter(
             signal_type=str(rec["signal_type"]),
             signal_gamma=float(rec["gamma_bn"]),
             gamma_delta=float(rec["gamma_delta"]),
-            ai_confidence=float(advice.get("confidence", 0.5)),
+            ai_confidence=confidence,
+            qty=qty,
+            exit_profile=profile,
         )
     )
 
@@ -264,6 +300,7 @@ def _summarize(
             "skipped_gamma_decline": state.skipped_gamma_decline,
             "skipped_strike_distance": state.skipped_strike_distance,
             "skipped_filters": state.skipped_filters,
+            "blocked_cooldown": state.blocked_cooldown,
             "message": "No trades triggered in walk-forward window",
             "stop_loss_pct": stop_loss,
             "take_profit_pct": take_profit,
@@ -310,6 +347,7 @@ def _summarize(
         "skipped_gamma_decline": state.skipped_gamma_decline,
         "skipped_strike_distance": state.skipped_strike_distance,
         "skipped_filters": state.skipped_filters,
+        "blocked_cooldown": state.blocked_cooldown,
         "stop_loss_pct": stop_loss,
         "take_profit_pct": take_profit,
         "trades": [
@@ -400,6 +438,7 @@ def backtest_auto_trader(
                     pnl_pct=pnl_pct,
                     exit_reason="backtest_end",
                     closed=state.closed_trades,
+                    qty=pos.qty,
                 )
             state.open_positions.clear()
 

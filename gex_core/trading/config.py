@@ -80,6 +80,49 @@ def time_stop_min_pnl_pct() -> float:
         return 0.02
 
 
+def time_stop_min_magnet_progress() -> float:
+    """Minimum fraction of distance-to-strike closed to avoid a time stop."""
+    try:
+        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PROGRESS", "0.15"))
+    except (TypeError, ValueError):
+        return 0.15
+
+
+def stop_cooldown_bars() -> int:
+    try:
+        return max(0, int(os.environ.get("GEX_TRADER_STOP_COOLDOWN_BARS", "12")))
+    except (TypeError, ValueError):
+        return 12
+
+
+def strong_entry_confidence() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_STRONG_CONFIDENCE", "0.80"))
+    except (TypeError, ValueError):
+        return 0.80
+
+
+def strong_gamma_delta() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_STRONG_GAMMA_DELTA", "0.08"))
+    except (TypeError, ValueError):
+        return 0.08
+
+
+def magnet_proximity_pct() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_MAGNET_PROXIMITY_PCT", "0.003"))
+    except (TypeError, ValueError):
+        return 0.003
+
+
+def high_confidence_contracts() -> int:
+    try:
+        return max(1, int(os.environ.get("GEX_TRADER_HIGH_CONF_CONTRACTS", "2")))
+    except (TypeError, ValueError):
+        return 2
+
+
 def max_open_positions() -> int:
     try:
         return max(1, int(os.environ.get("GEX_TRADER_MAX_OPEN", "1")))

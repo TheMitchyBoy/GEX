@@ -18,10 +18,9 @@ from gex_core.trading.config import (
     paper_trading_only,
     stop_loss_pct,
     take_profit_pct,
-    webull_contracts,
     webull_underlying,
 )
-from gex_core.trading.exits import ExitState, evaluate_exit
+from gex_core.trading.exits import ExitProfile, ExitState, build_exit_profile, contracts_for_confidence, evaluate_exit
 from gex_core.trading.filters import MarketContext, market_context_from_snapshot
 from gex_core.trading.journal import (
     close_trade,
@@ -32,6 +31,7 @@ from gex_core.trading.journal import (
     patch_trade_meta,
     record_decision,
     set_trader_armed,
+    strike_stop_cooldown_active,
 )
 from gex_core.trading.paper_broker import (
     estimate_entry_premium,
@@ -74,6 +74,26 @@ def _exit_state_from_meta(meta: dict[str, Any]) -> ExitState:
     )
 
 
+def _exit_profile_from_meta(meta: dict[str, Any], pos: dict[str, Any]) -> ExitProfile:
+    saved = meta.get("exit_profile") or {}
+    if saved:
+        return ExitProfile(
+            hold_for_target=bool(saved.get("hold_for_target")),
+            partial_take_profit=saved.get("partial_take_profit"),
+            trail_trigger=float(saved.get("trail_trigger", 0.10)),
+            trail_floor=float(saved.get("trail_floor", 0.05)),
+            time_stop_bars=int(saved.get("time_stop_bars", 6)),
+            full_take_profit=float(saved.get("full_take_profit", take_profit_pct())),
+        )
+    return build_exit_profile(
+        ai_confidence=float(pos.get("ai_confidence") or 0.5),
+        gamma_delta=float(pos.get("gamma_delta") or 0.0),
+        regime=str(meta.get("regime") or ""),
+        entry_spot=float(pos["entry_spot"]),
+        strike=float(pos["strike"]),
+    )
+
+
 def _check_exits(ticker: str, spot: float, *, bar_count: int = 0) -> list[dict[str, Any]]:
     broker = get_broker()
     exits: list[dict[str, Any]] = []
@@ -85,12 +105,16 @@ def _check_exits(ticker: str, spot: float, *, bar_count: int = 0) -> list[dict[s
         meta = pos.get("meta") or {}
         exit_state = _exit_state_from_meta(meta)
         bars_held = int(meta.get("bars_held") or bar_count or 0)
+        profile = _exit_profile_from_meta(meta, pos)
         exit_reason, exit_pnl = evaluate_exit(
             pnl_pct,
             state=exit_state,
             bars_held=bars_held,
             entry_spot=float(pos["entry_spot"]),
             strike=float(pos["strike"]),
+            current_spot=float(spot),
+            option_type=str(pos["option_type"]),
+            profile=profile,
         )
 
         meta_update = {
@@ -177,13 +201,33 @@ def _maybe_enter(
     if not advice.get("approve"):
         return {"action": "skipped", "reason": advice.get("reason"), "advice": advice}
 
-    broker = get_broker()
     rec = signals["recommended"]
     option_type = advice.get("option_type") or rec["option_type"]
     strike = float(rec["strike"])
+    if strike_stop_cooldown_active(ticker, strike, str(option_type)):
+        return {"action": "skipped", "reason": f"Cooldown active after stop at {strike:.0f}", "advice": advice}
+
+    broker = get_broker()
+    confidence = float(advice.get("confidence", 0.5))
+    qty = int(contracts_for_confidence(confidence))
     underlying = webull_underlying()
     expire_date = _option_expire_date()
-    qty = webull_contracts()
+    regime = str((market.regime if market else "") or "")
+    exit_profile = build_exit_profile(
+        ai_confidence=confidence,
+        gamma_delta=float(rec["gamma_delta"]),
+        regime=regime,
+        entry_spot=float(spot),
+        strike=strike,
+    )
+    profile_meta = {
+        "hold_for_target": exit_profile.hold_for_target,
+        "partial_take_profit": exit_profile.partial_take_profit,
+        "trail_trigger": exit_profile.trail_trigger,
+        "trail_floor": exit_profile.trail_floor,
+        "time_stop_bars": exit_profile.time_stop_bars,
+        "full_take_profit": exit_profile.full_take_profit,
+    }
 
     if live_trading_allowed():
         limit_price = limit_price_for_buy(spot, strike, side="buy")
@@ -210,6 +254,8 @@ def _maybe_enter(
             "peak_pnl_pct": 0.0,
             "partial_taken": False,
             "bars_held": 0,
+            "regime": regime,
+            "exit_profile": profile_meta,
         }
     else:
         premium = estimate_entry_premium(spot, strike)
@@ -222,6 +268,8 @@ def _maybe_enter(
             "peak_pnl_pct": 0.0,
             "partial_taken": False,
             "bars_held": 0,
+            "regime": regime,
+            "exit_profile": profile_meta,
         }
 
     trade_id = open_trade(

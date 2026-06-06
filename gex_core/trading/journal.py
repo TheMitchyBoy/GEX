@@ -238,6 +238,28 @@ def list_recent_trades(limit: int = 30, ticker: str | None = None) -> list[dict[
     return [_row_to_trade(r) for r in rows]
 
 
+def strike_stop_cooldown_active(
+    ticker: str,
+    strike: float,
+    option_type: str,
+    *,
+    lookback: int = 5,
+) -> bool:
+    """True if this strike was recently stopped out (avoid immediate re-entry)."""
+    opt = option_type.lower()
+    for trade in list_recent_trades(limit=lookback, ticker=ticker):
+        if trade.get("status") != "closed" and trade.get("exit_reason") is None:
+            continue
+        if str(trade.get("exit_reason", "")) != "stop_loss":
+            continue
+        if float(trade.get("strike") or 0) != float(strike):
+            continue
+        if str(trade.get("option_type", "")).lower() != opt:
+            continue
+        return True
+    return False
+
+
 def get_performance_summary(ticker: str | None = None) -> dict[str, Any]:
     with _connect() as conn:
         if ticker:

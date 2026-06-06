@@ -36,7 +36,7 @@ def _option_type_for_strike(strike: float, spot: float) -> str:
 
 
 def _refine_trade_strike(cur: pd.Series, magnet_strike: float, spot: float, option_type: str) -> float | None:
-    """Pick the nearest positive-gamma strike toward spot within max distance."""
+    """Pick nearest ATM/ slightly ITM positive-gamma strike within max distance."""
     if spot <= 0:
         return None
     positive = cur[cur > 0]
@@ -44,7 +44,7 @@ def _refine_trade_strike(cur: pd.Series, magnet_strike: float, spot: float, opti
         return None
 
     max_dist = max_strike_distance_pct()
-    candidates: list[tuple[float, float]] = []
+    candidates: list[tuple[float, float, bool]] = []
     for strike_val, gamma_val in positive.items():
         strike_f = float(strike_val)
         if float(gamma_val) <= 0:
@@ -52,13 +52,16 @@ def _refine_trade_strike(cur: pd.Series, magnet_strike: float, spot: float, opti
         dist = abs(strike_f - spot) / spot
         if dist > max_dist:
             continue
-        if option_type == "call" and strike_f >= spot:
-            candidates.append((dist, strike_f))
-        elif option_type == "put" and strike_f <= spot:
-            candidates.append((dist, strike_f))
+        if option_type == "call" and strike_f >= spot * 0.998:
+            itm = strike_f <= spot
+            candidates.append((dist, strike_f, itm))
+        elif option_type == "put" and strike_f <= spot * 1.002:
+            itm = strike_f >= spot
+            candidates.append((dist, strike_f, itm))
 
     if candidates:
-        candidates.sort(key=lambda row: row[0])
+        # Prefer ATM, then slight ITM, then nearest OTM.
+        candidates.sort(key=lambda row: (row[0], 0 if abs(row[1] - spot) < spot * 0.0005 else 1, 0 if row[2] else 1))
         return candidates[0][1]
 
     dist_magnet = abs(magnet_strike - spot) / spot

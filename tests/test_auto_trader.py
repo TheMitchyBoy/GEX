@@ -20,9 +20,10 @@ def test_compute_gamma_signals_picks_max_and_fastest():
     prev = pd.Series([0.1, 0.5, 0.35, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7385.0)
     assert out["available"]
-    assert out["max_positive_gamma"]["strike"] == 7390.0
+    assert out["max_positive_gamma"]["gamma_bn"] == 1.5
     assert out["fastest_gamma_increase"]["gamma_delta"] == 1.0
     assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["recommended"]["strike"] in {7380.0, 7390.0}
 
 
 def test_compute_gamma_signals_switches_when_max_gamma_declines():
