@@ -36,9 +36,19 @@ LAG = 3
 # Wider default window than the original 7 days: a one-week window routinely
 # produced only 2-3 training rows. 30 days keeps the model regime-relevant while
 # giving the regressor enough samples to be meaningful.
-DEFAULT_LOOKBACK_DAYS = int(os.environ.get("GEX_TRAIN_LOOKBACK_DAYS", "90"))
+# 0 = use every export on disk (recommended when you have 3000+ intraday snapshots).
+DEFAULT_LOOKBACK_DAYS = int(os.environ.get("GEX_TRAIN_LOOKBACK_DAYS", "0"))
 # Minimum folds before walk-forward CV metrics are reported.
 MIN_CV_FOLDS = 3
+
+
+def _train_dedupe_identical_strikes() -> bool:
+    return os.environ.get("GEX_TRAIN_DEDUPE_IDENTICAL_STRIKES", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _summary_spot(info: dict[str, Path]) -> float | None:
@@ -59,16 +69,38 @@ def _recent_timestamps(timestamps: list[str], lookback_days: int | None) -> list
     return [ts for ts, ts_dt in zip(timestamps, parsed) if ts_dt >= cutoff]
 
 
-def build_dataset(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS) -> pd.DataFrame:
-    timestamps = _recent_timestamps(list_export_timestamps(ticker), lookback_days)
+def build_dataset(
+    ticker: str,
+    lookback_days: int | None = DEFAULT_LOOKBACK_DAYS,
+    *,
+    dedupe_identical_strikes: bool | None = None,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Build supervised training rows from export CSVs.
+
+    Returns ``(dataframe, stats)`` where stats reports catalog depth vs rows kept.
+    """
+    catalog = list_export_timestamps(ticker)
+    timestamps = _recent_timestamps(catalog, lookback_days)
+    dedupe = _train_dedupe_identical_strikes() if dedupe_identical_strikes is None else dedupe_identical_strikes
     rows = []
+    skipped_identical = 0
+    skipped_missing = 0
     prev_feats = None
     prev_strike = None
     for ts in timestamps:
         info = paths_for_export_timestamp(ticker, ts, EXPORT_DIR)
         strike_path = info.get("gex_by_strike")
-        strike = load_strike_series(strike_path) if strike_path else None
-        if prev_strike is not None and strike is not None and strike.equals(prev_strike):
+        if not strike_path:
+            skipped_missing += 1
+            continue
+        strike = load_strike_series(strike_path)
+        if (
+            dedupe
+            and prev_strike is not None
+            and strike is not None
+            and strike.equals(prev_strike)
+        ):
+            skipped_identical += 1
             continue
         feats = compute_features_from_exports(info, spot=_summary_spot(info), prev_features=prev_feats)
         prev_feats = feats
@@ -77,14 +109,23 @@ def build_dataset(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS
         row.update(feats)
         rows.append(row)
 
+    stats = {
+        "catalog_timestamps": len(catalog),
+        "window_timestamps": len(timestamps),
+        "training_rows": len(rows),
+        "skipped_identical_strikes": skipped_identical,
+        "skipped_missing_strike_csv": skipped_missing,
+    }
+
     if len(rows) < 2:
-        return pd.DataFrame()
+        return pd.DataFrame(), stats
 
     df = pd.DataFrame(rows).sort_values("ts_dt").reset_index(drop=True)
     df["target_delta_gex"] = df["total_gex_bn"].shift(-1) - df["total_gex_bn"]
     df["target_total_gex"] = df["total_gex_bn"].shift(-1)
     df = df.dropna(subset=["target_delta_gex"])
-    return df
+    stats["supervised_rows"] = int(len(df))
+    return df, stats
 
 
 def _chronological_split(X_all: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
@@ -133,10 +174,21 @@ def walk_forward_cv(X_all: pd.DataFrame, y: pd.Series, min_train: int = 4) -> di
 
 
 def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
-    print(f"Building ΔGEX dataset for {ticker} over the last {lookback_days or 'all'} days...")
-    df = build_dataset(ticker, lookback_days=lookback_days)
+    window_label = f"last {lookback_days} days" if lookback_days and lookback_days > 0 else "full export catalog"
+    print(f"Building ΔGEX dataset for {ticker} over the {window_label}...")
+    df, stats = build_dataset(ticker, lookback_days=lookback_days)
+    print(
+        f"Catalog: {stats['catalog_timestamps']} timestamps | "
+        f"window: {stats['window_timestamps']} | "
+        f"training rows: {stats.get('supervised_rows', stats['training_rows'])}"
+        + (
+            f" | skipped identical strikes: {stats['skipped_identical_strikes']}"
+            if stats["skipped_identical_strikes"]
+            else ""
+        )
+    )
     if df.empty or len(df) < 3:
-        print("Not enough export history. Need at least 4 recent snapshots.")
+        print("Not enough export history. Need at least 4 loadable snapshots.")
         return
 
     feature_cols = [
@@ -206,6 +258,9 @@ def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
             "lookback_days": lookback_days,
             "lag": effective_lag,
             "n_snapshots": int(len(df) + 1),
+            "catalog_timestamps": stats["catalog_timestamps"],
+            "window_timestamps": stats["window_timestamps"],
+            "skipped_identical_strikes": stats["skipped_identical_strikes"],
         },
     )
 
@@ -213,7 +268,18 @@ def train_model(ticker: str, lookback_days: int | None = DEFAULT_LOOKBACK_DAYS):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ticker", required=True)
-    parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS,
-                        help="Training window in days (default 30; use 0 for all history).")
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=DEFAULT_LOOKBACK_DAYS,
+        help="Training window in days (default 0 = all export history on disk).",
+    )
+    parser.add_argument(
+        "--dedupe-identical-strikes",
+        action="store_true",
+        help="Skip consecutive snapshots with identical strike profiles (default: keep all).",
+    )
     args = parser.parse_args()
+    if args.dedupe_identical_strikes:
+        os.environ["GEX_TRAIN_DEDUPE_IDENTICAL_STRIKES"] = "1"
     train_model(args.ticker.upper(), lookback_days=args.lookback_days)
