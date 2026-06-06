@@ -172,6 +172,10 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
     gex_std = float(strike.std()) if len(strike) > 1 else 0.0
     call_wall = float(strike.idxmax()) if len(strike) else None
     put_wall = float(strike.idxmin()) if len(strike) else None
+    positive_strike = strike[strike > 0]
+    pos_gamma_peak_strike = (
+        float(positive_strike.idxmax()) if len(positive_strike) else None
+    )
     gamma_flip = estimate_gamma_flip(cumulative)
 
     term_breakdown = term_structure_breakdown(
@@ -209,6 +213,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         "abs_mean": float(strike.abs().mean()) if len(strike) else 0.0,
         "call_wall": call_wall,
         "put_wall": put_wall,
+        "pos_gamma_peak_strike": pos_gamma_peak_strike,
         "gamma_flip": gamma_flip,
         **term_breakdown,
         "surface_peak": surface_peak,
@@ -322,6 +327,71 @@ def load_snapshot_at_ts(
     except Exception as exc:
         logging.getLogger(__name__).warning("Failed to load snapshot %s for %s: %s", ts, ticker, exc)
         return None
+
+
+_GAMMA_LEVEL_FIELDS = (
+    "spot",
+    "gamma_flip",
+    "call_wall",
+    "put_wall",
+    "pos_gamma_peak_strike",
+    "total_gex",
+    "near_term_ratio",
+    "regime",
+    "pos_gex",
+    "neg_gex",
+)
+
+
+def _positive_float(value) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if out > 0 else None
+
+
+def slim_gamma_timeline_rows(history: list[dict]) -> list[dict]:
+    """Project full snapshot history into chart-friendly gamma-level rows."""
+    rows: list[dict] = []
+    for row in history:
+        if _positive_float(row.get("spot")) is None:
+            continue
+        rows.append(
+            {
+                "ts": row.get("ts"),
+                "ts_label": row.get("ts_label"),
+                **{field: row.get(field) for field in _GAMMA_LEVEL_FIELDS},
+            }
+        )
+    return rows
+
+
+def build_gamma_levels_timeline(
+    ticker: str,
+    *,
+    history: list[dict] | None = None,
+    days: int | None = None,
+    max_points: int | None = None,
+) -> list[dict]:
+    """Timeline rows with spot and gamma levels from bounded snapshot history."""
+    if history is None:
+        days = int(os.environ.get("GEX_DASHBOARD_TIMELINE_DAYS", "90")) if days is None else days
+        cap = int(os.environ.get("GEX_DASHBOARD_TIMELINE_MAX_POINTS", "240")) if max_points is None else max_points
+        history = build_history(
+            ticker,
+            lookback_days=days,
+            max_snapshots=cap,
+            dedupe_identical_strikes=True,
+        )
+    rows = slim_gamma_timeline_rows(history)
+    cap = int(os.environ.get("GEX_DASHBOARD_TIMELINE_MAX_POINTS", "240")) if max_points is None else max_points
+    if cap and len(rows) > cap:
+        step = max(1, len(rows) // cap)
+        rows = rows[::step]
+        if rows[-1]["ts"] != history[-1].get("ts"):
+            rows.append(slim_gamma_timeline_rows([history[-1]])[0])
+    return rows
 
 
 def build_index_timeline_history(

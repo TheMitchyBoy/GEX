@@ -6,6 +6,7 @@ from gex_core.charts import (
     make_0dte_movement_chart,
     make_gex_profile_chart,
     make_spx_price_chart,
+    make_timeline_chart,
 )
 
 
@@ -71,3 +72,40 @@ def test_spx_price_chart_falls_back_to_snapshot_spots():
 
 def test_spx_price_chart_returns_none_without_data():
     assert make_spx_price_chart(None, history=[]) is None
+
+
+def test_timeline_chart_plots_spot_and_max_positive_gamma_strike():
+    history = [
+        {
+            "ts_label": "2026-06-04 15:00:00",
+            "spot": 4990.0,
+            "pos_gamma_peak_strike": 5000.0,
+            "gamma_flip": 4985.0,
+            "call_wall": 5000.0,
+            "put_wall": 4925.0,
+            "total_gex": 1.2,
+            "near_term_ratio": 0.4,
+            "regime": "LONG gamma",
+        },
+        {
+            "ts_label": "2026-06-05 15:00:00",
+            "spot": 5010.0,
+            "pos_gamma_peak_strike": 5025.0,
+            "gamma_flip": 5005.0,
+            "call_wall": 5025.0,
+            "put_wall": 4950.0,
+            "total_gex": 0.8,
+            "near_term_ratio": 0.35,
+            "regime": "LONG gamma",
+        },
+    ]
+
+    payload = json.loads(make_timeline_chart(history, "SPX"))
+    names = [trace["name"] for trace in payload["data"] if trace.get("name")]
+    assert "SPX spot" in names
+    assert "Max +γ strike" in names
+    spot = next(trace for trace in payload["data"] if trace.get("name") == "SPX spot")
+    peak = next(trace for trace in payload["data"] if trace.get("name") == "Max +γ strike")
+    assert spot["y"] == [4990.0, 5010.0]
+    assert peak["y"] == [5000.0, 5025.0]
+    assert "Max +γ Strike" in payload["layout"]["title"]["text"]
