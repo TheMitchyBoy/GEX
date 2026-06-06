@@ -37,7 +37,7 @@ from gex_core.charts import (
     make_timeline_chart,
     safe_float,
 )
-from gex_core.market_exposure_agent import analyze_market_exposure
+from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.periscope import (
     build_periscope_context,
     build_slice_options,
@@ -507,6 +507,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     positions_chart_json = make_mm_positions_chart(ctx.get("mm_positions"), ticker=ticker)
 
     cumulative = selected.get("cumulative")
+    uw_agg = uw_entry.get("agg") if uw_entry else None
     agent = analyze_market_exposure(
         ticker=ticker,
         spot=safe_float(spot, 0.0) or 5000.0,
@@ -514,8 +515,15 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         cumulative_gex=cumulative,
         total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
         gamma_flip=ctx.get("gamma_flip"),
-        history=None,
+        history=_prediction_history(ticker) if uw_agg else None,
         exposure_type=exposure,
+        agg=uw_agg,
+        spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
+        api_key=uw_api_key() if uw_agg else None,
+        knn_prediction=predict_next_snapshot(
+            _prediction_history(ticker),
+            lookback_days=prediction_lookback_days(ticker),
+        ) if uw_agg else None,
     )
 
     csv_source = selected.get("data_source") or ctx.get("data_path") or "unusual_whales"
@@ -1105,6 +1113,8 @@ def api_agent_analyze():
     )
     selected = ctx.get("selected") or {}
     gex_series = ctx.get("exposure_series")
+    uw_agg = uw_entry.get("agg") if uw_entry else None
+    pred_history = _prediction_history(ticker)
     result = analyze_market_exposure(
         ticker=ticker,
         spot=safe_float(ctx.get("spot"), 0.0) or 5000.0,
@@ -1112,8 +1122,49 @@ def api_agent_analyze():
         cumulative_gex=selected.get("cumulative"),
         total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
         gamma_flip=ctx.get("gamma_flip"),
-        history=None,
+        history=pred_history if uw_agg else None,
         exposure_type=exposure,
+        agg=uw_agg,
+        spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
+        api_key=uw_api_key() if uw_agg else None,
+        knn_prediction=predict_next_snapshot(
+            pred_history,
+            lookback_days=prediction_lookback_days(ticker),
+        ) if uw_agg else None,
+    )
+    return jsonify(result)
+
+
+@APP.get("/api/agent/predict")
+def api_agent_predict():
+    """Feed all Unusual Whales data to the AI and return structured predictions."""
+    ticker = PRIMARY_TICKER
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    if not uw_entry or not uw_entry.get("agg"):
+        return jsonify(
+            {
+                "error": "Live Unusual Whales data unavailable",
+                "detail": _REFRESH_REASON_MESSAGES.get(_uw_failure_reason(ticker), "Configure UW_API_KEY"),
+            }
+        ), 503
+
+    agg = uw_entry["agg"]
+    spot = safe_float(uw_entry.get("spot"), 0.0)
+    pred_history = _prediction_history(ticker)
+    knn = predict_next_snapshot(pred_history, lookback_days=prediction_lookback_days(ticker))
+
+    result = predict_market_exposure(
+        ticker=ticker,
+        spot=spot,
+        gex_by_strike=agg.gex_by_strike,
+        cumulative_gex=agg.cumulative_gex,
+        total_gex_bn=agg.total_gex_bn,
+        agg=agg,
+        gamma_flip=uw_entry.get("gamma_flip"),
+        spot_gamma_bn=uw_entry.get("spot_gamma_bn"),
+        history=pred_history,
+        knn_prediction=knn,
+        api_key=uw_api_key(),
     )
     return jsonify(result)
 

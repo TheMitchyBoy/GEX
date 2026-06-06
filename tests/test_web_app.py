@@ -42,6 +42,17 @@ def test_api_agent_analyze_returns_json():
     assert "narrative" in payload
 
 
+def test_api_agent_predict_returns_503_without_live_uw(monkeypatch):
+    import web_app
+
+    monkeypatch.setattr(web_app, "get_uw_data", lambda *a, **k: None)
+    client = web_app.APP.test_client()
+    response = client.get("/api/agent/predict")
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert "error" in payload
+
+
 def test_force_refresh_failure_with_history_degrades_to_stale(monkeypatch):
     """A failed forced refresh must not show the hard error when cached data exists."""
     import web_app
