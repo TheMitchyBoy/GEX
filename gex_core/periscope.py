@@ -176,6 +176,20 @@ def _greek_exposure_from_df(greek_df: pd.DataFrame | None, exposure: str) -> pd.
     return pd.Series(dtype=float)
 
 
+def _prefer_denser_exposure(spot_series: pd.Series, greek_series: pd.Series, spot: float) -> pd.Series | None:
+    """Prefer the greek chain when it has materially more strikes near spot."""
+    spot_val = safe_float(spot, 0.0)
+    if spot_val <= 0 or spot_series.empty or greek_series.empty:
+        return None
+    band = spot_val * 0.025
+    lo, hi = spot_val - band, spot_val + band
+    spot_n = int(((spot_series.index >= lo) & (spot_series.index <= hi)).sum())
+    greek_n = int(((greek_series.index >= lo) & (greek_series.index <= hi)).sum())
+    if greek_n >= max(spot_n + 8, int(spot_n * 1.35)):
+        return greek_series.sort_index()
+    return None
+
+
 def _exposure_series(
     spot_df: pd.DataFrame | None,
     greek_df: pd.DataFrame | None,
@@ -192,6 +206,9 @@ def _exposure_series(
 
     if spot_val > 0 and not spot_covers_strike_grid(spot_series, spot_val) and not greek_series.empty:
         return greek_series.sort_index()
+    denser = _prefer_denser_exposure(spot_series, greek_series, spot_val)
+    if denser is not None:
+        return denser
     if not spot_series.empty:
         return spot_series.sort_index()
     if not greek_series.empty:

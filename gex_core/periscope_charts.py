@@ -16,7 +16,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 
-from gex_core.features import estimate_gamma_flip, select_atm_strike_series
+from gex_core.features import estimate_gamma_flip, select_atm_strike_series, select_dense_atm_strike_series
 
 # Theme
 _BG = "#080b10"
@@ -33,6 +33,8 @@ _ZERO = "rgba(255, 255, 255, 0.35)"
 _EXPOSURE_TITLE = {"gamma": "Net Gamma", "vanna": "Net Vanna", "charm": "Net Charm"}
 _PROFILE_BARS = 34
 _EXTENDED_BARS = 52
+_LADDER_BARS = 65
+_LADDER_WINDOW_PCT = 0.025
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -110,7 +112,12 @@ def strike_ladder_chart(
     if series is None or series.empty:
         return None
 
-    window = _atm_series(series, spot, max_bars=max_bars)
+    window = select_dense_atm_strike_series(
+        series,
+        spot,
+        window_pct=_LADDER_WINDOW_PCT,
+        max_strikes=max_bars or _LADDER_BARS,
+    )
     if window.empty:
         return None
 
@@ -542,7 +549,8 @@ def build_periscope_charts(
     spot: float | None,
     exposure_profile: pd.Series | None,
     exposure_extended: pd.Series | None,
-    previous_exposure: pd.Series | None,
+    exposure_series: pd.Series | None = None,
+    previous_exposure: pd.Series | None = None,
     price_points: list[dict[str, Any]] | None,
     highlight_label: str | None,
     mm_positions: dict[str, float] | None,
@@ -553,14 +561,19 @@ def build_periscope_charts(
     """Build the four trading-focused Periscope panels."""
     profile = pd.Series(exposure_profile, dtype=float).sort_index() if exposure_profile is not None else pd.Series(dtype=float)
     extended = pd.Series(exposure_extended, dtype=float).sort_index() if exposure_extended is not None else profile
+    full = pd.Series(exposure_series, dtype=float).sort_index() if exposure_series is not None else pd.Series(dtype=float)
     cum_source = extended if len(extended) > len(profile) else profile
+    ladder_source = full if len(full) >= len(extended) else extended
+    if ladder_source.empty:
+        ladder_source = profile
 
     return PeriscopeChartBundle(
         ladder=strike_ladder_chart(
-            profile,
+            ladder_source,
             spot=spot,
             exposure_type=exposure_type,
             gamma_flip=gamma_flip,
+            max_bars=_LADDER_BARS,
         ),
         price=session_price_chart(price_points, spot=spot, highlight_label=highlight_label),
         exposures=exposure_by_strike_chart(

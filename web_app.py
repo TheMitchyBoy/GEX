@@ -486,6 +486,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         spot=spot,
         exposure_profile=ctx.get("exposure_profile"),
         exposure_extended=ctx.get("exposure_extended"),
+        exposure_series=ctx.get("exposure_series"),
         previous_exposure=prev_series,
         price_points=price_points,
         highlight_label=selected.get("ts_label"),

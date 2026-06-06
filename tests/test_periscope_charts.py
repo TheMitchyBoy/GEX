@@ -83,6 +83,25 @@ def test_strike_ladder_chart_horizontal_bars_from_center():
     assert any(a.get("x") == 0 for a in payload["layout"].get("annotations", []))
 
 
+def test_strike_ladder_uses_dense_atm_grid_from_exports():
+    """Ladder must not skip 5-pt strikes near spot (peak subsampling bug)."""
+    from pathlib import Path
+
+    p = sorted(Path("data/exports").glob("SPX_gex_by_strike_*.csv"))[-1]
+    df = pd.read_csv(p)
+    series = pd.Series(df["gex_bn_per_pct"].values, index=df["strike"].values)
+    spot = 7383.74
+    payload = json.loads(
+        strike_ladder_chart(series, spot=spot, max_bars=65)
+    )
+    bar_strikes = sorted(payload["data"][0]["y"])
+    assert len(bar_strikes) >= 55
+    near = [s for s in bar_strikes if 7330 <= s <= 7430]
+    assert len(near) >= 18
+    gaps = [near[i + 1] - near[i] for i in range(len(near) - 1)]
+    assert max(gaps) <= 5.0
+
+
 def test_build_periscope_charts_bundle():
     profile = pd.Series([1.0, -1.0], index=[7380.0, 7400.0])
     bundle = build_periscope_charts(

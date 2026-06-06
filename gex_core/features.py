@@ -215,6 +215,49 @@ def select_atm_strike_series(
     return cleaned.sort_index()
 
 
+def select_dense_atm_strike_series(
+    series: pd.Series,
+    spot: float | None,
+    *,
+    window_pct: float = 0.025,
+    min_strikes: int = 8,
+    max_strikes: int = 65,
+) -> pd.Series:
+    """Keep every strike inside the ATM band — trim only from the edges, never skip peaks."""
+    if series is None or series.empty:
+        return pd.Series(dtype=float)
+    cleaned = pd.Series(pd.to_numeric(series, errors="coerce"), index=pd.to_numeric(series.index, errors="coerce"))
+    cleaned = cleaned.dropna()
+    cleaned = cleaned[~cleaned.index.isna()]
+    if cleaned.empty:
+        return pd.Series(dtype=float)
+    cleaned = cleaned.sort_index()
+    if cleaned.index.duplicated().any():
+        cleaned = cleaned.groupby(level=0).sum()
+
+    spot_val = safe_float(spot, 0.0)
+    if spot_val <= 0:
+        return cleaned.head(max_strikes)
+
+    lo, hi = spot_val * (1 - window_pct), spot_val * (1 + window_pct)
+    window = cleaned.loc[(cleaned.index >= lo) & (cleaned.index <= hi)]
+    if len(window) < min_strikes:
+        distances = pd.Series(
+            np.abs(cleaned.index.astype(float) - spot_val),
+            index=cleaned.index,
+        )
+        window = cleaned.loc[distances.nsmallest(min(len(cleaned), max_strikes)).index]
+
+    if len(window) > max_strikes:
+        distances = pd.Series(
+            np.abs(window.index.astype(float) - spot_val),
+            index=window.index,
+        )
+        window = window.loc[distances.nsmallest(max_strikes).index]
+
+    return window.sort_index()
+
+
 def spot_covers_strike_grid(series: pd.Series, spot: float, *, tolerance_pct: float = 0.015) -> bool:
     """True when spot lies inside the strike index range (with a small margin)."""
     if series is None or series.empty or spot <= 0:
