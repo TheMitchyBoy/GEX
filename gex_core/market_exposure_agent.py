@@ -90,6 +90,7 @@ def _hermes_analyze(user_prompt: str) -> str | None:
             load_soul_identity=False,
             quiet_mode=True,
             max_iterations=1,
+            reasoning_config={"enabled": False},
             ephemeral_system_prompt=_HERMES_SYSTEM_PROMPT,
         )
         response = agent.chat(user_prompt)
