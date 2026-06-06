@@ -52,8 +52,8 @@
       @media (max-width: 991px) {
         .uw-grid, .uw-grid-extended { grid-template-columns: 1fr; }
       }
-      #priceChart, #exposureChart, #positionsChart { min-height: 420px; }
-      #extendedChart { min-height: 580px; }
+      #priceChart, #exposureChart, #changeChart, #cumulativeChart { min-height: 400px; }
+      #positionsChart { min-height: 320px; }
       .chip {
         border-radius: 999px;
         border: 1px solid rgba(59,130,246,0.35);
@@ -166,33 +166,35 @@
 
       <section class="uw-grid mb-3">
         <div class="uw-panel">
-          <div class="uw-panel-head"><span>SPX Price</span></div>
+          <div class="uw-panel-head"><span>Session Price</span></div>
           <div class="uw-panel-body"><div id="priceChart"></div></div>
         </div>
         <div class="uw-panel">
           <div class="uw-panel-head">
-            <span>SPX Market Maker Exposures · {{ exposure|title }}</span>
+            <span>Exposure by Strike · {{ exposure|title }}</span>
             <span class="small muted fw-normal">● prior 10m</span>
           </div>
           <div class="uw-panel-body"><div id="exposureChart"></div></div>
         </div>
       </section>
 
-      <section class="uw-grid uw-grid-extended mb-3">
+      <section class="uw-grid mb-3">
         <div class="uw-panel">
-          <div class="uw-panel-head"><span>SPX Market Maker Positions</span></div>
-          <div class="uw-panel-body">
-            <div id="positionsChart"></div>
-            {% if not positions_chart_json %}
-            <div class="p-3 small muted text-center">Positions require live UW data.</div>
-            {% endif %}
-          </div>
+          <div class="uw-panel-head"><span>10m Change · {{ exposure|title }}</span></div>
+          <div class="uw-panel-body"><div id="changeChart"></div></div>
         </div>
         <div class="uw-panel">
-          <div class="uw-panel-head"><span>SPX Market Maker Exposures Extended · {{ exposure|title }}</span></div>
-          <div class="uw-panel-body"><div id="extendedChart"></div></div>
+          <div class="uw-panel-head"><span>Cumulative Exposure · Gamma Flip</span></div>
+          <div class="uw-panel-body"><div id="cumulativeChart"></div></div>
         </div>
       </section>
+
+      {% if positions_chart_json %}
+      <section class="uw-panel mb-3">
+        <div class="uw-panel-head"><span>Dealer Positioning (Net)</span></div>
+        <div class="uw-panel-body"><div id="positionsChart"></div></div>
+      </section>
+      {% endif %}
 
       <section class="uw-panel p-3 agent-card">
         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -214,8 +216,9 @@
       const charts = {
         price: {{ price_chart_json|safe if price_chart_json else 'null' }},
         exposure: {{ exposure_chart_json|safe if exposure_chart_json else 'null' }},
+        change: {{ change_chart_json|safe if change_chart_json else 'null' }},
+        cumulative: {{ cumulative_chart_json|safe if cumulative_chart_json else 'null' }},
         positions: {{ positions_chart_json|safe if positions_chart_json else 'null' }},
-        extended: {{ extended_chart_json|safe if extended_chart_json else 'null' }},
       };
       const plotConfig = {responsive: true, displayModeBar: false};
       const exposure = '{{ exposure }}';
@@ -228,8 +231,9 @@
       }
       renderChart(document.getElementById('priceChart'), charts.price);
       renderChart(document.getElementById('exposureChart'), charts.exposure);
+      renderChart(document.getElementById('changeChart'), charts.change);
+      renderChart(document.getElementById('cumulativeChart'), charts.cumulative);
       renderChart(document.getElementById('positionsChart'), charts.positions);
-      renderChart(document.getElementById('extendedChart'), charts.extended);
 
       function navigateTime({ ts = null, date = null } = {}) {
         const params = new URLSearchParams();

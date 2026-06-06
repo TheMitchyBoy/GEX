@@ -489,10 +489,14 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         price_points=price_points,
         highlight_label=selected.get("ts_label"),
         mm_positions=ctx.get("mm_positions"),
+        gamma_flip=ctx.get("gamma_flip"),
+        call_wall=ctx.get("call_wall"),
+        put_wall=ctx.get("put_wall"),
     )
     price_chart_json = charts.price
     exposure_chart_json = charts.exposures
-    extended_chart_json = charts.exposures_extended
+    change_chart_json = charts.change
+    cumulative_chart_json = charts.cumulative
     positions_chart_json = charts.positions
 
     cumulative = selected.get("cumulative")
@@ -528,8 +532,9 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         data_source=data_source,
         price_chart_json=price_chart_json,
         exposure_chart_json=exposure_chart_json,
+        change_chart_json=change_chart_json,
+        cumulative_chart_json=cumulative_chart_json,
         positions_chart_json=positions_chart_json,
-        extended_chart_json=extended_chart_json,
         chat_welcome=chat_welcome,
         bootstrap_status=bootstrap_status,
         refresh_message=refresh_message,
