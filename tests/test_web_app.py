@@ -15,7 +15,8 @@ def test_index_renders_periscope_dashboard():
     response = client.get("/")
     assert response.status_code == 200
     assert b"PERISCOPE" in response.data
-    assert b"Session rewind" in response.data
+    assert b"Rewind 10 min" in response.data
+    assert b"Trading day" in response.data
 
 
 def test_api_periscope_returns_json():
