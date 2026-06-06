@@ -35,8 +35,8 @@ from gex_core.charts import (
 )
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import (
+    build_gamma_levels_timeline,
     build_history,
-    build_index_timeline_history,
     get_latest_ts,
     list_tickers,
     list_timestamps,
@@ -645,7 +645,7 @@ def ticker_page(ticker):
     selected = _select_snapshot(history, requested_ts, ticker=ticker)
     export_state = summarize_export_state(ticker)
     timestamps = list_timestamps(ticker)
-    timeline_history = build_index_timeline_history(ticker)
+    gamma_timeline = build_gamma_levels_timeline(ticker, history=history)
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
     prev_ts = timestamps[replay_index - 1] if replay_index > 0 else None
     next_ts = timestamps[replay_index + 1] if replay_index + 1 < len(timestamps) else None
@@ -816,7 +816,7 @@ def ticker_page(ticker):
         zero_dte_movement_chart_json=zero_dte_movement_chart_json,
         zero_dte_movement=zero_dte_movement,
         predicted_strike_chart_json=predicted_strike_chart_json,
-        timeline_chart_json=make_timeline_chart(timeline_history or history, ticker),
+        timeline_chart_json=make_timeline_chart(gamma_timeline or history, ticker),
         cumulative_chart_json=make_cumulative_gex_chart(
             selected.get("cumulative"), ticker, gamma_flip=selected.get("gamma_flip"),
         ),

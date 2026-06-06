@@ -65,6 +65,11 @@ def make_timeline_chart(history, ticker: str) -> str | None:
     labels = [row["ts_label"] for row in history]
     totals = [safe_float(row.get("total_gex"), 0.0) for row in history]
     spot = [safe_float(row.get("spot"), 0.0) or None for row in history]
+    pos_gamma_peak = [
+        safe_float(row.get("pos_gamma_peak_strike"), 0.0) or None for row in history
+    ]
+    if not any(v is not None for v in pos_gamma_peak):
+        pos_gamma_peak = [safe_float(row.get("call_wall"), 0.0) or None for row in history]
     gamma_flip = [safe_float(row.get("gamma_flip"), 0.0) or None for row in history]
     call_wall = [safe_float(row.get("call_wall"), 0.0) or None for row in history]
     put_wall = [safe_float(row.get("put_wall"), 0.0) or None for row in history]
@@ -107,41 +112,47 @@ def make_timeline_chart(history, ticker: str) -> str | None:
             hoverinfo="skip",
         ))
 
-    _add_distance_band(gamma_flip, 0.0025, "Gamma flip band (+/-0.25%)", "#e2e8f0", "rgba(226,232,240,0.10)")
-    _add_distance_band(call_wall, 0.0015, "Call wall band (+/-0.15%)", _GREEN, "rgba(0,217,126,0.08)")
+    _add_distance_band(
+        pos_gamma_peak,
+        0.0015,
+        "Max +γ proximity band (+/-0.15%)",
+        _GREEN,
+        "rgba(0,217,126,0.10)",
+    )
+    _add_distance_band(gamma_flip, 0.0025, "Gamma flip band (+/-0.25%)", "#e2e8f0", "rgba(226,232,240,0.08)")
     _add_distance_band(put_wall, 0.0015, "Put wall band (+/-0.15%)", _RED, "rgba(255,71,87,0.08)")
 
     if any(v is not None for v in put_wall):
         fig.add_trace(go.Scatter(
             x=labels,
             y=put_wall,
-            mode="lines+markers",
-            line=dict(color=_RED, width=1.7, dash="dashdot"),
-            marker=dict(size=5, color=_RED),
+            mode="lines",
+            line=dict(color=_RED, width=1.4, dash="dashdot"),
+            marker=dict(size=4, color=_RED),
             name="Put wall",
             hovertemplate="%{x}<br>Put wall %{y:.0f}<extra></extra>",
-        ))
-
-    if any(v is not None for v in call_wall):
-        fig.add_trace(go.Scatter(
-            x=labels,
-            y=call_wall,
-            mode="lines+markers",
-            line=dict(color=_GREEN, width=1.7, dash="dashdot"),
-            marker=dict(size=5, color=_GREEN),
-            name="Call wall",
-            hovertemplate="%{x}<br>Call wall %{y:.0f}<extra></extra>",
         ))
 
     if any(v is not None for v in gamma_flip):
         fig.add_trace(go.Scatter(
             x=labels,
             y=gamma_flip,
-            mode="lines+markers",
-            line=dict(color="#e2e8f0", width=2, dash="dot"),
-            marker=dict(size=6, color="#e2e8f0", line=dict(color=_CHART_BG, width=1)),
+            mode="lines",
+            line=dict(color="#e2e8f0", width=1.6, dash="dot"),
+            marker=dict(size=5, color="#e2e8f0", line=dict(color=_CHART_BG, width=1)),
             name="Gamma flip",
             hovertemplate="%{x}<br>Gamma flip %{y:.0f}<extra></extra>",
+        ))
+
+    if any(v is not None for v in pos_gamma_peak):
+        fig.add_trace(go.Scatter(
+            x=labels,
+            y=pos_gamma_peak,
+            mode="lines+markers",
+            line=dict(color=_GREEN, width=2.6),
+            marker=dict(size=7, color=_GREEN, line=dict(color=_CHART_BG, width=1)),
+            name="Max +γ strike",
+            hovertemplate="%{x}<br>Max +γ strike %{y:.0f}<extra></extra>",
         ))
 
     if any(v is not None for v in spot):
@@ -153,9 +164,27 @@ def make_timeline_chart(history, ticker: str) -> str | None:
                 totals[idx],
                 near_term_ratio[idx],
                 regimes[idx],
-                _distance_text((spot[idx] - gamma_flip[idx]) if spot[idx] is not None and gamma_flip[idx] is not None else None),
-                _distance_text((spot[idx] - call_wall[idx]) if spot[idx] is not None and call_wall[idx] is not None else None),
-                _distance_text((spot[idx] - put_wall[idx]) if spot[idx] is not None and put_wall[idx] is not None else None),
+                f"{pos_gamma_peak[idx]:.0f}" if pos_gamma_peak[idx] is not None else "N/A",
+                _distance_text(
+                    (spot[idx] - pos_gamma_peak[idx])
+                    if spot[idx] is not None and pos_gamma_peak[idx] is not None
+                    else None
+                ),
+                _distance_text(
+                    (spot[idx] - gamma_flip[idx])
+                    if spot[idx] is not None and gamma_flip[idx] is not None
+                    else None
+                ),
+                _distance_text(
+                    (spot[idx] - call_wall[idx])
+                    if spot[idx] is not None and call_wall[idx] is not None
+                    else None
+                ),
+                _distance_text(
+                    (spot[idx] - put_wall[idx])
+                    if spot[idx] is not None and put_wall[idx] is not None
+                    else None
+                ),
             ]
             for idx in range(len(labels))
         ]
@@ -170,9 +199,11 @@ def make_timeline_chart(history, ticker: str) -> str | None:
             hovertemplate=(
                 "%{x}<br>SPX spot %{y:.2f}"
                 "<br>Regime %{customdata[2]}"
-                "<br>Spot - flip %{customdata[3]}"
-                "<br>Spot - call wall %{customdata[4]}"
-                "<br>Spot - put wall %{customdata[5]}"
+                "<br>Max +γ strike %{customdata[3]}"
+                "<br>Spot - max +γ %{customdata[4]}"
+                "<br>Spot - flip %{customdata[5]}"
+                "<br>Spot - call wall %{customdata[6]}"
+                "<br>Spot - put wall %{customdata[7]}"
                 "<br>Net GEX %{customdata[0]:+.3f} Bn$ / %"
                 "<br>Near-term gamma share %{customdata[1]:.1%}<extra></extra>"
             ),
@@ -180,7 +211,7 @@ def make_timeline_chart(history, ticker: str) -> str | None:
 
     level_values = [
         value
-        for series in (spot, gamma_flip, call_wall, put_wall)
+        for series in (spot, pos_gamma_peak, gamma_flip, call_wall, put_wall)
         for value in series
         if value is not None
     ]
@@ -192,11 +223,11 @@ def make_timeline_chart(history, ticker: str) -> str | None:
 
     _apply_base(
         fig,
-        title=f"{ticker} · Spot vs Gamma Levels",
+        title=f"{ticker} · Spot vs Max +γ Strike",
         height=430,
         margin=dict(l=48, r=58, t=58, b=36),
         xaxis=dict(title="Snapshot", rangeslider=dict(visible=len(labels) > 4, thickness=0.08)),
-        yaxis=dict(title="SPX spot and gamma levels", zeroline=False, range=y_range),
+        yaxis=dict(title="SPX spot and gamma strikes", zeroline=False, range=y_range),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
