@@ -10,10 +10,11 @@ if [[ ! -f "$VENDOR/pyproject.toml" ]]; then
     echo "Vendor the repo under vendor/hermes-agent or install git." >&2
     exit 1
   fi
+  mkdir -p "$(dirname "$VENDOR")"
   rm -rf "$VENDOR"
   git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$VENDOR"
 fi
 
-pip install -e "$VENDOR"
+python3 -m pip install --no-cache-dir -e "$VENDOR"
 echo "Hermes Agent installed. Set OPENAI_API_KEY or OPENROUTER_API_KEY for LLM analysis."
 echo "Optional: GEX_HERMES_PROVIDER=openai|openrouter, GEX_AGENT_MODEL=<model>"
