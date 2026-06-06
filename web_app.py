@@ -38,6 +38,7 @@ from gex_core.charts import (
     safe_float,
 )
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
+from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
     build_periscope_context,
     build_slice_options,
@@ -508,22 +509,13 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
 
     cumulative = selected.get("cumulative")
     uw_agg = uw_entry.get("agg") if uw_entry else None
-    agent = analyze_market_exposure(
+    chat_welcome = build_welcome_message(
         ticker=ticker,
-        spot=safe_float(spot, 0.0) or 5000.0,
-        gex_by_strike=gex_series if gex_series is not None else pd.Series(dtype=float),
-        cumulative_gex=cumulative,
-        total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
+        spot=safe_float(spot, 0.0) or None,
+        regime=ctx.get("regime", "N/A"),
+        total_gex=safe_float(ctx.get("total_gex"), 0.0),
         gamma_flip=ctx.get("gamma_flip"),
-        history=_prediction_history(ticker) if uw_agg else None,
-        exposure_type=exposure,
-        agg=uw_agg,
-        spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
-        api_key=uw_api_key() if uw_agg else None,
-        knn_prediction=predict_next_snapshot(
-            _prediction_history(ticker),
-            lookback_days=prediction_lookback_days(ticker),
-        ) if uw_agg else None,
+        exposure=exposure,
     )
 
     csv_source = selected.get("data_source") or ctx.get("data_path") or "unusual_whales"
@@ -550,7 +542,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         exposure_chart_json=exposure_chart_json,
         positions_chart_json=positions_chart_json,
         extended_chart_json=extended_chart_json,
-        agent=agent,
+        chat_welcome=chat_welcome,
         bootstrap_status=bootstrap_status,
         refresh_message=refresh_message,
         uw_configured=uw_api_configured(),
@@ -1167,6 +1159,86 @@ def api_agent_predict():
         api_key=uw_api_key(),
     )
     return jsonify(result)
+
+
+def _chat_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
+    """Build periscope + UW context for chat endpoints."""
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        selected_ts=requested_ts,
+        exposure=exposure,
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    selected = ctx.get("selected") or {}
+    gex_series = ctx.get("exposure_series")
+    uw_agg = uw_entry.get("agg") if uw_entry else None
+    pred_history = _prediction_history(ticker)
+    knn = (
+        predict_next_snapshot(pred_history, lookback_days=prediction_lookback_days(ticker))
+        if uw_agg
+        else None
+    )
+    return {
+        "ctx": ctx,
+        "selected": selected,
+        "gex_series": gex_series,
+        "uw_entry": uw_entry,
+        "uw_agg": uw_agg,
+        "pred_history": pred_history,
+        "knn": knn,
+    }
+
+
+@APP.post("/api/chat")
+def api_chat():
+    """Conversational GEX assistant backed by full Unusual Whales data."""
+    payload = request.get_json(silent=True) or {}
+    message = str(payload.get("message", "")).strip()
+    session_id = payload.get("session_id")
+    exposure = str(payload.get("exposure") or request.args.get("exposure", "gamma")).lower()
+    requested_ts = payload.get("ts") or request.args.get("ts")
+
+    if not message:
+        return jsonify({"error": "message is required"}), 400
+
+    ticker = PRIMARY_TICKER
+    chat_ctx = _chat_context(ticker, exposure, requested_ts)
+    ctx = chat_ctx["ctx"]
+    selected = chat_ctx["selected"]
+    gex_series = chat_ctx["gex_series"]
+    uw_entry = chat_ctx["uw_entry"]
+    uw_agg = chat_ctx["uw_agg"]
+
+    result = chat_reply(
+        session_id=session_id,
+        user_message=message,
+        ticker=ticker,
+        spot=safe_float(ctx.get("spot"), 0.0) or 5000.0,
+        gex_by_strike=gex_series if gex_series is not None else pd.Series(dtype=float),
+        cumulative_gex=selected.get("cumulative"),
+        total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
+        gamma_flip=ctx.get("gamma_flip"),
+        exposure_type=exposure,
+        agg=uw_agg,
+        spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
+        history=chat_ctx["pred_history"] if uw_agg else None,
+        knn_prediction=chat_ctx["knn"],
+        api_key=uw_api_key() if uw_agg else None,
+    )
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@APP.post("/api/chat/reset")
+def api_chat_reset():
+    payload = request.get_json(silent=True) or {}
+    session_id = payload.get("session_id")
+    if session_id:
+        reset_session(str(session_id))
+    return jsonify({"ok": True})
 
 
 @APP.get("/api/latest-summary")

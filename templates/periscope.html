@@ -50,6 +50,66 @@
       .regime-long { color: var(--green); }
       .regime-short { color: var(--red); }
       .agent-card { border-left: 3px solid var(--accent); }
+      .chat-panel { display: flex; flex-direction: column; min-height: 360px; max-height: 480px; }
+      .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+      }
+      .chat-bubble {
+        max-width: 88%;
+        padding: 0.55rem 0.75rem;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .chat-bubble.user {
+        align-self: flex-end;
+        background: rgba(96,165,250,0.18);
+        border: 1px solid rgba(96,165,250,0.35);
+      }
+      .chat-bubble.assistant {
+        align-self: flex-start;
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid var(--line);
+      }
+      .chat-bubble.system {
+        align-self: center;
+        background: transparent;
+        border: 1px dashed var(--line);
+        color: var(--muted);
+        font-size: 0.78rem;
+        max-width: 100%;
+      }
+      .chat-input-row {
+        border-top: 1px solid var(--line);
+        padding: 0.75rem;
+        display: flex;
+        gap: 0.5rem;
+      }
+      .chat-input-row textarea {
+        flex: 1;
+        resize: none;
+        min-height: 2.5rem;
+        max-height: 6rem;
+        background: #0b1220;
+        border: 1px solid var(--line);
+        color: var(--txt);
+        border-radius: 8px;
+        padding: 0.5rem 0.65rem;
+        font-size: 0.85rem;
+      }
+      .chat-input-row textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 0.15rem rgba(96,165,250,0.2);
+      }
+      .chat-status { font-size: 0.72rem; color: var(--muted); }
       #priceChart, #exposureChart, #positionsChart, #extendedChart { min-height: 280px; }
       .time-nav .btn { min-width: 7.5rem; }
       .time-nav .form-control,
@@ -215,44 +275,18 @@
       <section class="panel p-3 mb-3 agent-card">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <div>
-            <h2 class="h6 mb-0">AI Market Exposure Agent</h2>
-            <div class="small muted">Powered by <a href="https://github.com/NousResearch/hermes-agent" class="link-light" target="_blank" rel="noopener">Hermes Agent</a>
-              {% if agent.hermes_enhanced or agent.llm_enhanced %} · Hermes LLM{% else %} · rule-based{% endif %}
-            </div>
+            <h2 class="h6 mb-0">GEX Assistant</h2>
+            <div class="small muted">Chat about dealer gamma — powered by Unusual Whales data</div>
           </div>
-          <button class="btn btn-sm btn-primary" id="refreshAgent">Re-analyze</button>
+          <button class="btn btn-sm btn-outline-secondary" id="chatReset" type="button">New chat</button>
         </div>
-        <div class="row g-3">
-          <div class="col-md-4">
-            <div class="small muted mb-1">WHO → WHOM → WHAT</div>
-            <div class="small"><strong>WHO:</strong> {{ agent.who }}</div>
-            <div class="small"><strong>WHOM:</strong> {{ agent.whom }}</div>
-            <div class="small"><strong>WHAT:</strong> {{ agent.what }}</div>
-            <div class="mt-2 small">
-              <span class="chip">{{ agent.bias|upper }} bias</span>
-              <span class="chip">{{ (agent.confidence * 100)|round|int }}% conf</span>
-            </div>
+        <div class="chat-panel">
+          <div class="chat-messages" id="chatMessages" aria-live="polite"></div>
+          <div class="chat-input-row">
+            <textarea id="chatInput" rows="1" placeholder="Ask about regime, levels, predictions…" aria-label="Chat message"></textarea>
+            <button class="btn btn-sm btn-primary align-self-end" id="chatSend" type="button">Send</button>
           </div>
-          <div class="col-md-8">
-            <div class="small muted mb-1">Analysis</div>
-            <p class="small mb-2" id="agentNarrative">{{ agent.narrative }}</p>
-            {% if agent.pattern_matches %}
-            <div class="small muted mb-1">Matched patterns</div>
-            <ul class="small mb-2">
-              {% for p in agent.pattern_matches[:3] %}
-              <li><strong>{{ p.name }}</strong> ({{ p.category }}, {{ (p.confidence * 100)|round|int }}%) — {{ p.description or '' }}</li>
-              {% endfor %}
-            </ul>
-            {% endif %}
-            {% if agent.predictions %}
-            <div class="small muted mb-1">Predictions</div>
-            <ul class="small mb-0">
-              {% for pred in agent.predictions[:3] %}
-              <li>{{ pred }}</li>
-              {% endfor %}
-            </ul>
-            {% endif %}
-          </div>
+          <div class="px-3 pb-2 chat-status" id="chatStatus"></div>
         </div>
       </section>
     </main>
@@ -268,6 +302,99 @@
       const plotLayout = {paper_bgcolor: '#121826', plot_bgcolor: '#121826', font: {color: '#e2e8f0'}};
       const exposure = '{{ exposure }}';
       const timelineData = {{ timeline|tojson }};
+      const chatWelcome = {{ chat_welcome|tojson }};
+
+      function renderMarkdownLite(text) {
+        return text
+          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*(.+?)\*/g, '<em>$1</em>');
+      }
+
+      function appendChatBubble(role, text) {
+        const box = document.getElementById('chatMessages');
+        if (!box) return;
+        const el = document.createElement('div');
+        el.className = `chat-bubble ${role}`;
+        el.innerHTML = renderMarkdownLite(text);
+        box.appendChild(el);
+        box.scrollTop = box.scrollHeight;
+      }
+
+      let chatSessionId = null;
+      let chatBusy = false;
+
+      function setChatStatus(text) {
+        const el = document.getElementById('chatStatus');
+        if (el) el.textContent = text || '';
+      }
+
+      async function sendChatMessage() {
+        const input = document.getElementById('chatInput');
+        if (!input || chatBusy) return;
+        const message = input.value.trim();
+        if (!message) return;
+
+        appendChatBubble('user', message);
+        input.value = '';
+        chatBusy = true;
+        setChatStatus('Thinking…');
+        document.getElementById('chatSend')?.setAttribute('disabled', 'disabled');
+
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              message,
+              session_id: chatSessionId,
+              exposure: params.get('exposure') || exposure,
+              ts: params.get('ts'),
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            appendChatBubble('assistant', data.error || 'Something went wrong.');
+          } else {
+            chatSessionId = data.session_id;
+            appendChatBubble('assistant', data.reply);
+            const src = data.llm_source || 'unknown';
+            const uw = data.uw_data_fed ? ' · full UW data' : '';
+            setChatStatus(`via ${src}${uw}`);
+          }
+        } catch (err) {
+          appendChatBubble('assistant', 'Network error — please try again.');
+          setChatStatus('');
+        } finally {
+          chatBusy = false;
+          document.getElementById('chatSend')?.removeAttribute('disabled');
+        }
+      }
+
+      document.getElementById('chatSend')?.addEventListener('click', sendChatMessage);
+      document.getElementById('chatInput')?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          sendChatMessage();
+        }
+      });
+
+      document.getElementById('chatReset')?.addEventListener('click', async () => {
+        if (chatSessionId) {
+          await fetch('/api/chat/reset', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({session_id: chatSessionId}),
+          }).catch(() => {});
+        }
+        chatSessionId = null;
+        const box = document.getElementById('chatMessages');
+        if (box) box.innerHTML = '';
+        appendChatBubble('assistant', chatWelcome);
+        setChatStatus('');
+      });
+
+      appendChatBubble('assistant', chatWelcome);
 
       function renderChart(el, spec) {
         if (!spec || !el) return;
@@ -307,14 +434,6 @@
           event.preventDefault();
           navigateTime({ ts: timelineData.prev_ts });
         }
-      });
-
-      document.getElementById('refreshAgent')?.addEventListener('click', async () => {
-        const params = new URLSearchParams(window.location.search);
-        const res = await fetch(`/api/agent/analyze?${params.toString()}`);
-        const data = await res.json();
-        const narrative = document.getElementById('agentNarrative');
-        if (narrative && data.narrative) narrative.textContent = data.narrative;
       });
 
       setInterval(() => {

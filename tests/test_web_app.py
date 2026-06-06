@@ -5,7 +5,7 @@ def test_ticker_page_returns_200_with_history():
     response = client.get("/ticker/SPX")
     assert response.status_code == 200
     assert b"Market Maker Exposure" in response.data
-    assert b"AI Market Exposure Agent" in response.data
+    assert b"GEX Assistant" in response.data
 
 
 def test_index_renders_periscope_dashboard():
@@ -40,6 +40,35 @@ def test_api_agent_analyze_returns_json():
     assert payload["ticker"] == "SPX"
     assert "who" in payload
     assert "narrative" in payload
+
+
+def test_api_chat_requires_message():
+    import web_app
+
+    client = web_app.APP.test_client()
+    response = client.post("/api/chat", json={"message": ""})
+    assert response.status_code == 400
+
+
+def test_api_chat_rule_based_reply(monkeypatch):
+    import web_app
+
+    monkeypatch.setattr(
+        web_app,
+        "chat_reply",
+        lambda **kwargs: {
+            "session_id": "test-session",
+            "reply": "LONG gamma environment.",
+            "llm_source": "rule_based",
+            "uw_data_fed": False,
+            "messages": [],
+        },
+    )
+    client = web_app.APP.test_client()
+    response = client.post("/api/chat", json={"message": "What regime are we in?"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["reply"] == "LONG gamma environment."
 
 
 def test_api_agent_predict_returns_503_without_live_uw(monkeypatch):
