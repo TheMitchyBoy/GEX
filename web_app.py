@@ -241,6 +241,15 @@ def _dashboard_history(ticker: str) -> list[dict]:
     )
 
 
+def _dashboard_skip_backtest() -> bool:
+    return os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _prediction_history(ticker: str) -> list[dict]:
     """History for KNN — keep consecutive duplicate strike profiles for sample depth."""
     dedupe = os.environ.get("GEX_PREDICTION_DEDUP", "0").strip().lower() not in {
@@ -468,7 +477,8 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
 @APP.get("/health")
 def health():
     status = build_system_status(PRIMARY_TICKER)
-    code = 200 if status.get("healthy") else 503
+    # Liveness: return 200 when exports exist so stale data does not block routing.
+    code = 200 if status.get("ready") else 503
     return jsonify(status), code
 
 
@@ -643,7 +653,8 @@ def ticker_page(ticker):
 
     requested_ts = request.args.get("ts")
     selected = _select_snapshot(history, requested_ts, ticker=ticker)
-    export_state = summarize_export_state(ticker)
+    prediction_history = _prediction_history(ticker)
+    export_state = summarize_export_state(ticker, forecast_history=prediction_history)
     timestamps = list_timestamps(ticker)
     gamma_timeline = build_gamma_levels_timeline(ticker, history=history)
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
@@ -702,7 +713,6 @@ def ticker_page(ticker):
 
     prediction = None
     flow_overlay = None
-    prediction_history = _prediction_history(ticker)
     prediction_lookback = prediction_lookback_days(ticker)
     forecast_blocker = None
     try:
@@ -724,8 +734,10 @@ def ticker_page(ticker):
     except Exception:
         logger.exception("Flow overlay failed for %s", ticker)
 
+    backtest: dict = {}
     try:
-        backtest = backtest_delta_sign_accuracy(ticker)
+        if not _dashboard_skip_backtest():
+            backtest = backtest_delta_sign_accuracy(ticker, history=history)
         if prediction and backtest.get("accuracy") is not None:
             prediction = dict(prediction)
             prediction["backtest_sign_accuracy"] = backtest["accuracy"]

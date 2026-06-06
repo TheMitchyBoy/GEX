@@ -160,6 +160,44 @@ def _spx_price_config() -> tuple[str, str]:
     return period, interval
 
 
+def _yfinance_timeout_seconds() -> float:
+    try:
+        return max(1.0, float(os.environ.get("GEX_YFINANCE_TIMEOUT_SEC", "8")))
+    except (TypeError, ValueError):
+        return 8.0
+
+
+def _fetch_yfinance_history(
+    symbol: str,
+    *,
+    period: str,
+    interval: str,
+) -> pd.DataFrame | None:
+    """Run a yfinance history fetch with a hard timeout so page renders cannot hang."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    timeout = _yfinance_timeout_seconds()
+
+    def _load() -> pd.DataFrame | None:
+        import yfinance as yf
+
+        data = yf.Ticker(symbol).history(period=period, interval=interval)
+        if data is None or data.empty:
+            return None
+        return data
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            data = pool.submit(_load).result(timeout=timeout)
+    except FuturesTimeout:
+        logger.warning("yfinance history timed out for %s after %.1fs", symbol, timeout)
+        return None
+    except Exception as exc:  # pragma: no cover - network/optional dep path
+        logger.debug("yfinance history unavailable for %s: %s", symbol, exc)
+        return None
+    return data
+
+
 def fetch_spx_price_history(
     period: str | None = None,
     interval: str | None = None,
@@ -173,10 +211,8 @@ def fetch_spx_price_history(
     period = period or default_period
     interval = interval or default_interval
     try:
-        import yfinance as yf
-
-        data = yf.Ticker(SPX_YF_SYMBOL).history(period=period, interval=interval)
-        if data is None or data.empty or "Close" not in data:
+        data = _fetch_yfinance_history(SPX_YF_SYMBOL, period=period, interval=interval)
+        if data is None or "Close" not in data:
             return None
         closes = data["Close"].dropna()
         points = [

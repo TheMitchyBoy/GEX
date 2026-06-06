@@ -97,6 +97,23 @@ def test_slim_gamma_timeline_rows_projects_chart_fields():
     assert "strike" not in rows[0]
 
 
+def test_build_gamma_levels_timeline_handles_missing_tail_spot():
+    history = [
+        {
+            "ts": f"2026-06-05_{i:06d}",
+            "ts_label": f"2026-06-05 {i:02d}:00:00",
+            "spot": 5000.0 + i,
+            "pos_gamma_peak_strike": 5010.0,
+        }
+        for i in range(120)
+    ]
+    history.append({"ts": "2026-06-05_999999", "ts_label": "tail", "spot": None})
+
+    rows = build_gamma_levels_timeline("SPX", history=history, max_points=40)
+    assert rows
+    assert all(row.get("spot") for row in rows)
+
+
 def test_build_gamma_levels_timeline_reuses_history():
     history = [
         {

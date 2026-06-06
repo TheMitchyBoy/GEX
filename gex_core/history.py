@@ -389,8 +389,9 @@ def build_gamma_levels_timeline(
     if cap and len(rows) > cap:
         step = max(1, len(rows) // cap)
         rows = rows[::step]
-        if rows[-1]["ts"] != history[-1].get("ts"):
-            rows.append(slim_gamma_timeline_rows([history[-1]])[0])
+        tail_rows = slim_gamma_timeline_rows([history[-1]])
+        if tail_rows and rows[-1]["ts"] != tail_rows[0]["ts"]:
+            rows.append(tail_rows[0])
     return rows
 
 
