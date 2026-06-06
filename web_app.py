@@ -518,6 +518,10 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     if uw_entry:
         data_source += " · live API"
 
+    from gex_core.trading.engine import trader_status
+
+    auto_trader = trader_status(ticker)
+
     return render_template(
         "periscope.html",
         ticker=ticker,
@@ -546,6 +550,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         uw_configured=uw_api_configured(),
         refresh_minutes=REFRESH_MINUTES,
         vanna_charm_available=ctx.get("vanna_charm_available", False),
+        auto_trader=auto_trader,
     )
 
 
@@ -1105,6 +1110,72 @@ def api_periscope():
     )
 
 
+@APP.get("/api/trader/status")
+def api_trader_status():
+    from gex_core.trading.engine import trader_status
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    return jsonify(trader_status(ticker))
+
+
+@APP.post("/api/trader/arm")
+def api_trader_arm():
+    from gex_core.trading.engine import arm_trader, trader_status
+
+    payload = request.get_json(silent=True) or {}
+    armed = bool(payload.get("armed", True))
+    arm_trader(armed)
+    ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
+    return jsonify({"armed": armed, "status": trader_status(ticker)})
+
+
+@APP.post("/api/trader/run")
+def api_trader_run():
+    """Manual paper-trading evaluation cycle."""
+    from gex_core.trading.engine import run_trading_cycle
+    from gex_core.uw_context_bundle import build_uw_context_bundle
+
+    ticker = PRIMARY_TICKER
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    spot = ctx.get("spot")
+    if not spot:
+        return jsonify({"error": "No spot price available"}), 503
+    uw_bundle = None
+    if uw_entry and uw_entry.get("agg") is not None:
+        uw_bundle = build_uw_context_bundle(
+            ticker=ticker,
+            spot=float(spot),
+            agg=uw_entry["agg"],
+            gamma_flip=ctx.get("gamma_flip"),
+            spot_gamma_bn=uw_entry.get("spot_gamma_bn"),
+            api_key=uw_api_key(),
+            fetch_extras=False,
+        )
+    result = run_trading_cycle(
+        ticker=ticker,
+        spot=float(spot),
+        exposure=ctx.get("exposure_series"),
+        previous_exposure=ctx.get("previous_exposure"),
+        uw_bundle=uw_bundle,
+        force=True,
+    )
+    return jsonify(result)
+
+
+@APP.get("/api/trader/suggestions")
+def api_trader_suggestions():
+    from gex_core.trading.advisor import build_suggestions
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    return jsonify({"ticker": ticker, "suggestions": build_suggestions(ticker)})
+
+
 @APP.get("/api/periscope/timeline")
 def api_periscope_timeline():
     """Available dates and intraday slices for the session picker."""
@@ -1369,6 +1440,44 @@ def _manual_dispatch_authorized(req) -> bool:
     return bool(provided) and secrets.compare_digest(provided, token)
 
 
+def _run_auto_trader(ticker: str) -> None:
+    """Evaluate gamma signals and manage paper option trades."""
+    from gex_core.trading.config import auto_trader_enabled
+    from gex_core.trading.engine import run_trading_cycle
+    from gex_core.uw_context_bundle import build_uw_context_bundle
+
+    if not auto_trader_enabled():
+        return
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    spot = ctx.get("spot")
+    if not spot:
+        return
+    uw_bundle = None
+    if uw_entry and uw_entry.get("agg") is not None:
+        uw_bundle = build_uw_context_bundle(
+            ticker=ticker,
+            spot=float(spot),
+            agg=uw_entry["agg"],
+            gamma_flip=ctx.get("gamma_flip"),
+            spot_gamma_bn=uw_entry.get("spot_gamma_bn"),
+            api_key=uw_api_key(),
+            fetch_extras=False,
+        )
+    run_trading_cycle(
+        ticker=ticker,
+        spot=float(spot),
+        exposure=ctx.get("exposure_series"),
+        previous_exposure=ctx.get("previous_exposure"),
+        uw_bundle=uw_bundle,
+    )
+
+
 def _auto_dispatch_alerts(ticker: str) -> None:
     """Generate alerts and run auto-dispatch. Background scheduler only."""
     history = _dashboard_history(ticker)
@@ -1398,6 +1507,10 @@ def _scheduled_refresh():
             _auto_dispatch_alerts(ticker)
         except Exception:
             logger.exception("Auto-dispatch failed for %s", ticker)
+        try:
+            _run_auto_trader(ticker)
+        except Exception:
+            logger.exception("Auto-trader cycle failed for %s", ticker)
 
 
 def _acquire_scheduler_lock() -> bool:

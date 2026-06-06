@@ -94,6 +94,11 @@
         flex: 1; resize: none; background: #06080d; border: 1px solid var(--border);
         color: var(--txt); border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.84rem;
       }
+      .trader-stat { font-size: 0.78rem; color: var(--label); }
+      .trader-stat strong { color: var(--txt); }
+      .suggestion-list { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; color: var(--muted); }
+      .badge-armed { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.35); }
+      .badge-disarmed { background: rgba(100,116,139,0.15); color: var(--muted); border: 1px solid var(--border); }
     </style>
   </head>
   <body>
@@ -175,6 +180,59 @@
           <span class="small muted fw-normal">center = strikes · bars = net exposure · amber = spot</span>
         </div>
         <div class="uw-panel-body"><div id="gexLadderChart"></div></div>
+      </section>
+
+      <section class="uw-panel mb-3 p-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+          <div>
+            <h2 class="h6 mb-0">Gamma Auto-Trader</h2>
+            <div class="small muted">Paper options · max +γ strike or fastest γ increase · AI-gated entries</div>
+          </div>
+          <div class="d-flex gap-2 align-items-center">
+            <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">
+              {% if auto_trader.armed %}ARMED{% else %}DISARMED{% endif %}
+            </span>
+            <span class="chip">PAPER</span>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-3 mb-2 trader-stat">
+          <span><strong>Win rate</strong> {{ '%.0f'|format((auto_trader.performance.win_rate or 0) * 100) }}%</span>
+          <span><strong>Trades</strong> {{ auto_trader.performance.total_trades or 0 }}</span>
+          <span><strong>Stop</strong> {{ '%.0f'|format((auto_trader.stop_loss_pct or 0.05) * 100) }}%</span>
+          <span><strong>Target</strong> {{ '%.0f'|format((auto_trader.take_profit_pct or 0.35) * 100) }}%</span>
+          <span><strong>Open</strong> {{ (auto_trader.open_positions or [])|length }}</span>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <button class="btn btn-sm btn-success" id="traderArmBtn" type="button">Arm trader</button>
+          <button class="btn btn-sm btn-outline-secondary" id="traderDisarmBtn" type="button">Disarm</button>
+          <button class="btn btn-sm btn-outline-info" id="traderRunBtn" type="button">Run cycle now</button>
+        </div>
+        {% if auto_trader.open_positions %}
+        <div class="small mb-2 fw-semibold">Open positions</div>
+        <div class="table-responsive mb-2">
+          <table class="table table-sm table-dark table-borderless small mb-0">
+            <thead><tr><th>Type</th><th>Strike</th><th>Entry</th><th>Signal</th><th>AI conf</th></tr></thead>
+            <tbody>
+              {% for p in auto_trader.open_positions %}
+              <tr>
+                <td>{{ p.option_type|upper }}</td>
+                <td>{{ '%.0f'|format(p.strike) }}</td>
+                <td>{{ '%.2f'|format(p.entry_spot) }}</td>
+                <td>{{ p.signal_type }}</td>
+                <td>{{ '%.0f'|format((p.ai_confidence or 0) * 100) }}%</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+        {% if auto_trader.suggestions %}
+        <div class="small fw-semibold mb-1">AI suggestions (from trade memory)</div>
+        <ul class="suggestion-list" id="traderSuggestions">
+          {% for s in auto_trader.suggestions %}<li>{{ s }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        <div class="small muted" id="traderStatusMsg"></div>
       </section>
 
       <section class="uw-panel p-3 agent-card">
@@ -297,6 +355,35 @@
         appendChatBubble('assistant', chatWelcome);
       });
       appendChatBubble('assistant', chatWelcome);
+
+      async function traderPost(url, body) {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body || {}),
+        });
+        return res.json();
+      }
+      document.getElementById('traderArmBtn')?.addEventListener('click', async () => {
+        const data = await traderPost('/api/trader/arm', {armed: true});
+        document.getElementById('traderArmBadge').textContent = data.armed ? 'ARMED' : 'DISARMED';
+        document.getElementById('traderStatusMsg').textContent = data.armed ? 'Trader armed — cycles run on each refresh.' : '';
+      });
+      document.getElementById('traderDisarmBtn')?.addEventListener('click', async () => {
+        const data = await traderPost('/api/trader/arm', {armed: false});
+        document.getElementById('traderArmBadge').textContent = 'DISARMED';
+        document.getElementById('traderStatusMsg').textContent = 'Trader disarmed.';
+      });
+      document.getElementById('traderRunBtn')?.addEventListener('click', async () => {
+        document.getElementById('traderStatusMsg').textContent = 'Running cycle…';
+        const data = await traderPost('/api/trader/run', {});
+        const entry = data.entry;
+        const exits = data.exits || [];
+        let msg = data.reason || 'Cycle complete.';
+        if (entry?.action === 'opened') msg = `Opened ${entry.option_type?.toUpperCase()} @ ${entry.strike}`;
+        if (exits.length) msg += ` · ${exits.length} exit(s)`;
+        document.getElementById('traderStatusMsg').textContent = msg;
+      });
     </script>
   </body>
 </html>

@@ -354,6 +354,13 @@ def build_uw_context_bundle(
             if k not in {"predicted_strike", "knn_strike", "flow_strike"}
         }
 
+    try:
+        from gex_core.trading.journal import get_trade_memory_for_ai
+
+        bundle["trade_memory"] = get_trade_memory_for_ai(ticker)
+    except Exception:
+        pass
+
     return bundle
 
 

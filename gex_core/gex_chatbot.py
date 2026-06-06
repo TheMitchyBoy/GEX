@@ -34,6 +34,8 @@ _CHAT_SYSTEM = (
     "- When asked for predictions, cite regime, gamma flip, walls, and intraday trends.\n"
     "- If data is missing, say so — do not invent levels.\n"
     "- This is market analysis, not financial advice.\n"
+    "- When trade_memory is present in the data bundle, use it to refine predictions and "
+    "reference past paper-trade performance.\n"
 )
 
 _MAX_SESSIONS = int(os.environ.get("GEX_CHAT_MAX_SESSIONS", "200"))
@@ -105,7 +107,8 @@ def build_welcome_message(
         f"Hi — I'm your **GEX assistant** for {ticker}. "
         f"I have Unusual Whales {exposure} exposure for this snapshot "
         f"(spot {spot_str}, {regime}, net GEX {total_gex:+.2f} Bn$/%, flip {flip_str}).\n\n"
-        "Ask me about regime, key levels, predictions, charm/vanna, or trade setups."
+        "Ask me about regime, key levels, predictions, charm/vanna, or trade setups. "
+        "I also learn from paper auto-trader history when available."
     )
 
 
