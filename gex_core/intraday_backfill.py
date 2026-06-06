@@ -190,8 +190,18 @@ def backfill_intraday_minutes(
     interval_minutes = interval_minutes or DEFAULT_BACKFILL_INTERVAL_MINUTES
     minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key, date=market_date)
     if minute_df.empty:
-        logger.warning("No intraday spot-exposures for %s on %s", ticker, market_date)
-        return 0
+        logger.warning(
+            "No intraday spot-exposures for %s on %s — falling back to EOD strike snapshot",
+            ticker,
+            market_date,
+        )
+        return 1 if backfill_daily_strike_snapshots(
+            ticker,
+            market_date,
+            export_dir=export_dir,
+            api_key=api_key,
+            force=force,
+        ) else 0
     minute_df = sample_intraday_rows(minute_df, interval_minutes)
     if minute_df.empty:
         logger.warning("No %d-min samples for %s on %s", interval_minutes, ticker, market_date)
