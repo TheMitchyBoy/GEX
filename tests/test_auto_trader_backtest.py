@@ -50,3 +50,40 @@ def test_backtest_insufficient_history():
     result = backtest_auto_trader("SPX", history=[_snapshot("t", 5000, {5010: 1.0})])
     assert result["total_trades"] == 0
     assert "Not enough history" in result.get("message", "")
+
+
+def test_backtest_caps_stop_and_take_profit():
+    history = [
+        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
+        _snapshot("2026-06-01_101000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_102000", 4800.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+    ]
+    result = backtest_auto_trader(
+        "SPX",
+        history=history,
+        min_confidence=0.4,
+        stop_loss=0.05,
+        take_profit=0.35,
+        max_open=1,
+    )
+    stop_trades = [t for t in result["trades"] if t["exit_reason"] == "stop_loss"]
+    assert stop_trades
+    assert stop_trades[0]["pnl_pct"] == -0.05
+
+
+def test_backtest_blocks_duplicate_strike_entries():
+    history = [
+        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
+        _snapshot("2026-06-01_101000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_102000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.3}),
+        _snapshot("2026-06-01_103000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.4}),
+    ]
+    result = backtest_auto_trader(
+        "SPX",
+        history=history,
+        min_confidence=0.4,
+        max_open=3,
+    )
+    assert result["total_trades"] == 1
+    assert result["blocked_duplicate"] >= 2
+    assert len({t["strike"] for t in result["trades"]}) == 1

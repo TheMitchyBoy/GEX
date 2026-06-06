@@ -60,6 +60,29 @@ class BacktestState:
     open_positions: list[_OpenPosition] = field(default_factory=list)
     closed_trades: list[_ClosedTrade] = field(default_factory=list)
     skipped_entries: int = 0
+    blocked_duplicate: int = 0
+
+
+def _apply_exit_pnl_cap(
+    pnl_pct: float,
+    exit_reason: str,
+    *,
+    stop_loss: float,
+    take_profit: float,
+) -> float:
+    """Model stop/limit fills at configured thresholds (handles sparse snapshot gaps)."""
+    if exit_reason == "stop_loss":
+        return max(pnl_pct, -stop_loss)
+    if exit_reason == "take_profit":
+        return min(pnl_pct, take_profit)
+    return pnl_pct
+
+
+def _has_open_duplicate(positions: list[_OpenPosition], *, strike: float, option_type: str) -> bool:
+    for pos in positions:
+        if pos.strike == strike and pos.option_type.lower() == option_type.lower():
+            return True
+    return False
 
 
 def _memory_from_closed(closed: list[_ClosedTrade]) -> dict[str, Any]:
@@ -152,12 +175,18 @@ def _check_exits(
         elif pnl_pct >= take_profit:
             exit_reason = "take_profit"
         if exit_reason:
+            capped = _apply_exit_pnl_cap(
+                pnl_pct,
+                exit_reason,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+            )
             _close_position(
                 pos,
                 exit_idx=idx,
                 exit_ts=ts,
                 exit_spot=spot,
-                pnl_pct=pnl_pct,
+                pnl_pct=capped,
                 exit_reason=exit_reason,
                 closed=state.closed_trades,
             )
@@ -191,8 +220,12 @@ def _maybe_enter(
         return
 
     rec = signals["recommended"]
-    option_type = advice.get("option_type") or rec["option_type"]
+    option_type = str(advice.get("option_type") or rec["option_type"])
     strike = float(rec["strike"])
+    if _has_open_duplicate(state.open_positions, strike=strike, option_type=option_type):
+        state.blocked_duplicate += 1
+        return
+
     premium = estimate_entry_premium(spot, strike)
     state.open_positions.append(
         _OpenPosition(
@@ -226,6 +259,7 @@ def _summarize(
             "total_trades": 0,
             "open_at_end": len(state.open_positions),
             "skipped_entries": state.skipped_entries,
+            "blocked_duplicate": state.blocked_duplicate,
             "message": "No trades triggered in walk-forward window",
             "stop_loss_pct": stop_loss,
             "take_profit_pct": take_profit,
@@ -268,6 +302,7 @@ def _summarize(
         "by_exit_reason": by_exit,
         "open_at_end": len(state.open_positions),
         "skipped_entries": state.skipped_entries,
+        "blocked_duplicate": state.blocked_duplicate,
         "stop_loss_pct": stop_loss,
         "take_profit_pct": take_profit,
         "trades": [

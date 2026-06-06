@@ -57,6 +57,7 @@ def main() -> None:
     print(f"total PnL: ${result['total_pnl_usd']:,.2f}")
     print(f"avg bars held: {result['avg_bars_held']:.1f}")
     print(f"skipped entries: {result['skipped_entries']}")
+    print(f"blocked duplicates: {result.get('blocked_duplicate', 0)}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")
 
     print("\nBy signal type:")
