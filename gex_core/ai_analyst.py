@@ -45,6 +45,21 @@ import numpy as np
 import pandas as pd
 
 
+def _clean_strike_series(series: pd.Series | pd.DataFrame) -> pd.Series:
+    """Return a float strike profile without UW metadata attrs (pandas nlargest-safe)."""
+    if isinstance(series, pd.DataFrame):
+        series = series.squeeze()
+    if not isinstance(series, pd.Series):
+        series = pd.Series(series, dtype=float)
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, copy=False)
+    index = series.index
+    cleaned = pd.Series(values, index=index, dtype=float)
+    cleaned = cleaned[np.isfinite(cleaned)]
+    if cleaned.index.duplicated().any():
+        cleaned = cleaned.groupby(level=0).sum()
+    return cleaned.sort_index()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Data structures
 # ─────────────────────────────────────────────────────────────────────────────
@@ -207,14 +222,12 @@ def _wall_signal(spot: float, wall: float | None, gex: float | None, kind: str) 
 
 def _concentration_signal(gex_by_strike: pd.Series) -> GammaSignal:
     """Score how concentrated the gamma is around a few strikes."""
-    if isinstance(gex_by_strike, pd.DataFrame):
-        gex_by_strike = gex_by_strike.squeeze()
-    gex_by_strike = pd.Series(gex_by_strike, dtype=float)
+    gex_by_strike = _clean_strike_series(gex_by_strike)
     if gex_by_strike.empty:
         return GammaSignal("Concentration", "N/A", "Insufficient data.", "neutral")
-    abs_vals = gex_by_strike.abs()
-    top5 = abs_vals.nlargest(5).sum()
-    total = abs_vals.sum()
+    abs_vals = np.abs(gex_by_strike.to_numpy(dtype=float))
+    top5 = float(np.sort(abs_vals)[-5:].sum()) if abs_vals.size else 0.0
+    total = float(abs_vals.sum())
     conc = top5 / total if total > 0 else 0.0
     if conc > 0.60:
         detail = f"Top 5 strikes hold {conc*100:.0f}% of total gamma — highly concentrated. Expect strong pinning near the dominant strike."
@@ -488,6 +501,10 @@ def analyze_dealer_gamma(
     GammaAnalysis
     """
     from gex_core.features import estimate_gamma_flip as _estimate_flip
+
+    gex_by_strike = _clean_strike_series(gex_by_strike)
+    if not cumulative_gex.empty:
+        cumulative_gex = _clean_strike_series(cumulative_gex)
 
     # ── Key levels ──────────────────────────────────────────────────────────
     if gamma_flip is None and not cumulative_gex.empty:

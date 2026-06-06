@@ -25,7 +25,8 @@ if [ "${GEX_STARTUP_BACKFILL:-}" = "1" ] || { [ "${GEX_AUTO_BACKFILL_IF_EMPTY:-1
     python3 scripts/gex_backfill_intraday.py \
       --tickers "${TICKERS:-SPX}" \
       --intraday-days "${GEX_INTRADAY_BACKFILL_DAYS:-90}" \
-      --interval-minutes "${GEX_BACKFILL_INTERVAL_MINUTES:-10}"
+      --daily-days "${GEX_DAILY_BACKFILL_DAYS:-90}" \
+      --interval-minutes "${GEX_BACKFILL_INTERVAL_MINUTES:-10}" || true
     python3 scripts/train_gex_model.py \
       --ticker SPX \
       --lookback-days "${GEX_TRAIN_LOOKBACK_DAYS:-90}"
