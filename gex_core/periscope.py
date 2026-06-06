@@ -23,6 +23,7 @@ from gex_core.periscope_api import (
     should_use_api_for_date,
 )
 from gex_core.storage import list_indexed_timestamps_for_date
+from gex_core.spot_exposure import spot_exposure_mm_positions, spot_exposure_net_series
 from gex_core.tickers import PRIMARY_TICKER
 
 EXPOSURE_TYPES = ("gamma", "vanna", "charm")
@@ -144,11 +145,17 @@ def _strike_window(series: pd.Series, spot: float, window_pct: float = 0.04) -> 
 
 
 def _exposure_series(
+    spot_df: pd.DataFrame | None,
     greek_df: pd.DataFrame | None,
     strike_series: pd.Series | None,
     exposure: str,
 ) -> pd.Series:
+    """Per-strike exposure — prefer UW spot-exposures/strike (Periscope source)."""
     exposure = exposure.lower()
+    spot_series = spot_exposure_net_series(spot_df, exposure)
+    if not spot_series.empty:
+        return spot_series
+
     if greek_df is not None and not greek_df.empty:
         df = greek_df.set_index("strike") if "strike" in greek_df.columns else greek_df
         if exposure == "gamma":
@@ -171,8 +178,12 @@ def _exposure_series(
     return pd.Series(dtype=float)
 
 
-def _mm_positions(greek_df: pd.DataFrame | None) -> dict[str, float]:
-    """Summarize net dealer call/put positioning from UW greek table."""
+def _mm_positions(spot_df: pd.DataFrame | None, greek_df: pd.DataFrame | None) -> dict[str, float]:
+    """Summarize net dealer call/put positioning from UW spot-exposures/strike."""
+    spot_positions = spot_exposure_mm_positions(spot_df)
+    if any(abs(v) > 1e-12 for v in spot_positions.values()):
+        return spot_positions
+
     out = {
         "net_call_delta_bn": 0.0,
         "net_put_delta_bn": 0.0,
@@ -252,18 +263,24 @@ def build_periscope_context(
     else:
         gex_series = pd.Series(dtype=float)
 
+    spot_df = selected.get("spot_exposures_df")
     greek_df = None
     if uw_entry and uw_entry.get("agg") is not None:
+        if not isinstance(spot_df, pd.DataFrame) or spot_df.empty:
+            spot_df = uw_entry["agg"].gex_by_strike.attrs.get("spot_exposures_df")
         greek_df = uw_entry["agg"].gex_by_strike.attrs.get("greek_exposure_df")
         if greek_df is None and uw_entry["agg"].surface_data is not None and not uw_entry["agg"].surface_data.empty:
             greek_df = uw_entry["agg"].surface_data
 
-    current_exposure = _exposure_series(greek_df, gex_series, exposure)
+    current_exposure = _exposure_series(spot_df, greek_df, gex_series, exposure)
     previous_exposure = pd.Series(dtype=float)
     if previous_snapshot:
+        prev_spot = previous_snapshot.get("spot_exposures_df")
         prev_strike = previous_snapshot.get("strike")
-        if isinstance(prev_strike, pd.Series):
-            previous_exposure = _exposure_series(None, prev_strike, exposure)
+        if isinstance(prev_spot, pd.DataFrame) and not prev_spot.empty:
+            previous_exposure = _exposure_series(prev_spot, None, None, exposure)
+        elif isinstance(prev_strike, pd.Series):
+            previous_exposure = _exposure_series(None, None, prev_strike, exposure)
 
     gamma_flip = selected.get("gamma_flip")
     if gamma_flip is None and not gex_series.empty:
@@ -273,9 +290,11 @@ def build_periscope_context(
 
     regime = selected.get("regime", "N/A")
     total_gex = safe_float(selected.get("total_gex"), 0.0)
-    if uw_entry and uw_entry.get("agg") is not None:
-        total_gex = safe_float(uw_entry["agg"].total_gex_bn, total_gex)
-        regime = "LONG gamma" if total_gex >= 0 else "SHORT gamma"
+    if uw_entry and uw_entry.get("spot_gamma_bn") is not None:
+        is_latest = resolved_ts == timestamps[-1] if timestamps and resolved_ts else True
+        if is_latest:
+            total_gex = safe_float(uw_entry["spot_gamma_bn"], total_gex)
+            regime = "LONG gamma" if total_gex >= 0 else "SHORT gamma"
 
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
 
@@ -302,13 +321,19 @@ def build_periscope_context(
         "previous_exposure": previous_exposure,
         "exposure_window": _strike_window(current_exposure, spot or 0.0, window_pct=0.035),
         "exposure_extended": _strike_window(current_exposure, spot or 0.0, window_pct=0.08),
-        "mm_positions": _mm_positions(greek_df if isinstance(greek_df, pd.DataFrame) else None),
+        "mm_positions": _mm_positions(
+            spot_df if isinstance(spot_df, pd.DataFrame) else None,
+            greek_df if isinstance(greek_df, pd.DataFrame) else None,
+        ),
         "history": history or [],
         "selected": selected,
         "data_path": "uw_api" if should_use_api_for_date(active_date, api_key=api_key) else "exports",
         "uw_fetched_at": uw_entry.get("fetched_at") if uw_entry else None,
         "vanna_charm_available": bool(
-            isinstance(greek_df, pd.DataFrame)
-            and {"call_vanna", "put_vanna", "call_charm", "put_charm"}.intersection(greek_df.columns)
+            (isinstance(spot_df, pd.DataFrame) and {"call_vanna_oi", "put_vanna_oi"}.issubset(spot_df.columns))
+            or (
+                isinstance(greek_df, pd.DataFrame)
+                and {"call_vanna", "put_vanna", "call_charm", "put_charm"}.intersection(greek_df.columns)
+            )
         ),
     }

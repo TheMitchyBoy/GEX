@@ -178,12 +178,16 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
     if not force and _uw_cache_fresh(ticker):
         return _UW_CACHE[ticker]
     try:
-        from gex_core.uw_loader import fetch_uw_gex
+        from gex_core.uw_loader import fetch_spot_gamma_aggregate_bn, fetch_uw_gex
         from gex_core.ai_analyst import analyze_dealer_gamma
         from gex_core.features import estimate_gamma_flip
+        from gex_core.spot_exposure import spot_exposure_gamma_flip, spot_exposure_net_series
 
         spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
-        gamma_flip = estimate_gamma_flip(agg.cumulative_gex)
+        spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
+        spot_gamma = spot_exposure_net_series(spot_df, "gamma") if isinstance(spot_df, pd.DataFrame) else pd.Series(dtype=float)
+        gamma_flip = spot_exposure_gamma_flip(spot_gamma) if not spot_gamma.empty else estimate_gamma_flip(agg.cumulative_gex)
+        spot_gamma_bn = fetch_spot_gamma_aggregate_bn(ticker, api_key=uw_api_key())
         analysis = analyze_dealer_gamma(
             ticker=ticker, spot=spot,
             gex_by_strike=agg.gex_by_strike,
@@ -194,6 +198,7 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
         entry = {
             "spot": spot, "agg": agg,
             "gamma_flip": gamma_flip,
+            "spot_gamma_bn": spot_gamma_bn,
             "analysis": analysis,
             "ts": time.monotonic(),
             "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),

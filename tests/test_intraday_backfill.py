@@ -56,11 +56,11 @@ def test_scale_strike_profile_matches_target_total():
 
 @patch("gex_core.intraday_backfill.fetch_cross_asset_returns", return_value={})
 @patch("gex_core.intraday_backfill.fetch_vol_regime", return_value={})
-@patch("gex_core.uw_loader.fetch_uw_greek_exposure")
+@patch("gex_core.uw_loader.fetch_uw_spot_exposures")
 @patch("gex_core.uw_loader.fetch_uw_spot_exposures_intraday")
 def test_backfill_intraday_minutes_writes_snapshots(
     mock_intraday,
-    mock_greek,
+    mock_spot_strike,
     _mock_vol,
     _mock_cross,
     tmp_path,
@@ -75,10 +75,12 @@ def test_backfill_intraday_minutes_writes_snapshots(
             "gamma_per_one_percent_move_oi": [1.0e9, 2.0e9],
         }
     )
-    mock_greek.return_value = pd.DataFrame(
+    mock_spot_strike.return_value = pd.DataFrame(
         {
             "strike": [4900.0, 5000.0],
-            "net_gex": [0.5, 0.5],
+            "call_gamma_oi": [1.0e9, 1.0e9],
+            "put_gamma_oi": [-0.5e9, -0.5e9],
+            "price": [5000.0, 5000.0],
         }
     )
 

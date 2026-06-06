@@ -24,9 +24,9 @@ from gex_core.market_time import (
 from gex_core.intraday_backfill import (
     minute_row_total_gex_bn,
     sample_intraday_rows,
-    scale_strike_profile,
     uw_time_to_export_ts,
 )
+from gex_core.spot_exposure import spot_exposure_net_series
 from gex_core.storage import (
     list_indexed_dates,
     list_indexed_timestamps_before_date,
@@ -72,6 +72,7 @@ def _snapshot_from_strike(
     spot: float,
     total_gex_bn: float,
     data_source: str = "uw_api",
+    spot_exposures_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     cumulative = strike.cumsum()
     call_wall = float(strike.idxmax()) if len(strike) else None
@@ -93,16 +94,31 @@ def _snapshot_from_strike(
         "regime": "LONG gamma" if total_gex_bn >= 0 else "SHORT gamma",
         "data_source": data_source,
         "spot": float(spot),
+        "uw_endpoint": "spot-exposures/strike",
     }
+    if spot_exposures_df is not None and not spot_exposures_df.empty:
+        metrics["spot_exposures_df"] = spot_exposures_df
     return enrich_snapshot_metrics(metrics)
 
 
 def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None = None) -> dict[str, Any]:
-    """Build a snapshot dict from live UW greek-exposure cache."""
+    """Build a Periscope snapshot from live UW spot-exposures (matches UW Periscope)."""
     agg = uw_entry["agg"]
-    strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
-    spot = safe_float(uw_entry.get("spot"), 0.0)
-    total_gex = safe_float(agg.total_gex_bn, float(strike.sum()))
+    spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
+    if isinstance(spot_df, pd.DataFrame) and not spot_df.empty:
+        strike = spot_exposure_net_series(spot_df, "gamma")
+        spot = safe_float(
+            spot_df["price"].dropna().iloc[0] if "price" in spot_df.columns else None,
+            safe_float(uw_entry.get("spot"), 0.0),
+        )
+    else:
+        spot_df = None
+        strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
+        spot = safe_float(uw_entry.get("spot"), 0.0)
+    total_gex = safe_float(
+        uw_entry.get("spot_gamma_bn"),
+        safe_float(agg.total_gex_bn, float(strike.sum())),
+    )
     active_ts = ts or market_now_export_ts()
     return _snapshot_from_strike(
         ticker,
@@ -111,6 +127,7 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
         spot=spot,
         total_gex_bn=total_gex,
         data_source="unusual_whales",
+        spot_exposures_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
     )
 
 
@@ -137,19 +154,17 @@ def fetch_intraday_day_cache(
     if not api_key:
         return None
 
-    from gex_core.uw_loader import fetch_uw_greek_exposure, fetch_uw_spot_exposures_intraday
+    from gex_core.uw_loader import fetch_uw_spot_exposures, fetch_uw_spot_exposures_intraday
 
     try:
         minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key, date=market_date)
         if minute_df.empty:
             return cached if cached else None
 
-        strike_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=market_date)
-        base_strike = pd.Series(
-            strike_df["net_gex"].values,
-            index=strike_df["strike"].values,
-            dtype=float,
-        ).sort_index()
+        spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=market_date)
+        base_strike = spot_exposure_net_series(spot_df, "gamma")
+        if base_strike.empty:
+            return cached if cached else None
     except Exception:
         logger.exception("UW intraday fetch failed for %s on %s", ticker, market_date)
         return cached if cached else None
@@ -167,13 +182,13 @@ def fetch_intraday_day_cache(
             continue
         spot = safe_float(row.get("price"), 0.0)
         total_gex_bn = minute_row_total_gex_bn(row)
-        scaled_strike = scale_strike_profile(base_strike, total_gex_bn)
         snapshots[ts] = _snapshot_from_strike(
             ticker,
             ts,
-            strike=scaled_strike,
+            strike=base_strike,
             spot=spot,
             total_gex_bn=total_gex_bn,
+            spot_exposures_df=spot_df,
         )
         timestamps.append(ts)
         if spot > 0:

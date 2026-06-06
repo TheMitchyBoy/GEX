@@ -180,7 +180,8 @@ def backfill_intraday_minutes(
     interval_minutes: int | None = None,
 ) -> int:
     """Backfill UW spot-exposure rows for a single trading day."""
-    from gex_core.uw_loader import fetch_uw_greek_exposure, fetch_uw_spot_exposures_intraday
+    from gex_core.uw_loader import fetch_uw_spot_exposures, fetch_uw_spot_exposures_intraday
+    from gex_core.spot_exposure import spot_exposure_net_series
 
     ticker = ticker.upper()
     export_dir = export_dir or EXPORT_DIR
@@ -208,14 +209,13 @@ def backfill_intraday_minutes(
         return 0
 
     try:
-        strike_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=market_date)
-        base_strike = pd.Series(
-            strike_df["net_gex"].values,
-            index=strike_df["strike"].values,
-            dtype=float,
-        ).sort_index()
+        spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=market_date)
+        base_strike = spot_exposure_net_series(spot_df, "gamma")
+        if base_strike.empty:
+            logger.warning("Empty spot-exposures/strike profile for %s on %s", ticker, market_date)
+            return 0
     except Exception:
-        logger.exception("Could not load strike profile for %s on %s", ticker, market_date)
+        logger.exception("Could not load spot-exposure strike profile for %s on %s", ticker, market_date)
         return 0
 
     existing = _existing_timestamps(ticker, export_dir)
@@ -230,8 +230,7 @@ def backfill_intraday_minutes(
             continue
         spot = float(row.get("price") or 0.0)
         total_gex_bn = minute_row_total_gex_bn(row)
-        scaled_strike = scale_strike_profile(base_strike, total_gex_bn)
-        cumulative = scaled_strike.cumsum()
+        cumulative = base_strike.cumsum()
         summary = _build_summary(
             ticker,
             market_date=market_date,
@@ -246,7 +245,7 @@ def backfill_intraday_minutes(
         summary["interval_minutes"] = interval_minutes
         write_snapshot_export(
             ticker,
-            gex_by_strike=scaled_strike,
+            gex_by_strike=base_strike,
             cumulative_gex=cumulative,
             summary=summary,
             export_dir=export_dir,

@@ -50,13 +50,26 @@ def test_load_periscope_snapshot_uses_api_cache_for_today():
     assert float(row["spot"]) == 5025.0
 
 
-def test_snapshot_from_uw_entry_builds_strike_profile():
+def test_snapshot_from_uw_entry_uses_spot_exposures_profile():
     strike = pd.Series({5000: 2.0, 5100: -1.0})
+    spot_df = pd.DataFrame(
+        {
+            "strike": [5000.0, 5100.0],
+            "call_gamma_oi": [3.0e9, 1.0e9],
+            "put_gamma_oi": [-1.0e9, -2.0e9],
+            "price": [5050.0, 5050.0],
+        }
+    )
+    gex_by_strike = strike.copy()
+    gex_by_strike.attrs = {"spot_exposures_df": spot_df}
     uw_entry = {
         "spot": 5050.0,
-        "agg": type("Agg", (), {"gex_by_strike": strike, "total_gex_bn": 1.0})(),
+        "spot_gamma_bn": -87.0,
+        "agg": type("Agg", (), {"gex_by_strike": gex_by_strike, "total_gex_bn": 1.0})(),
     }
     row = snapshot_from_uw_entry("SPX", uw_entry, ts="2026-06-06_120000")
     assert row["ts"] == "2026-06-06_120000"
     assert row["spot"] == 5050.0
-    assert not row["strike"].empty
+    assert float(row["total_gex"]) == -87.0
+    assert float(row["strike"].loc[5000.0]) == 2.0
+    assert row.get("spot_exposures_df") is not None

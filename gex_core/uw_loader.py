@@ -537,6 +537,25 @@ def fetch_uw_gex(
     )
 
 
+def fetch_spot_gamma_aggregate_bn(
+    ticker: str,
+    api_key: str | None = None,
+    date: str | None = None,
+) -> float | None:
+    """Latest aggregate net gamma (Bn$ / %) from UW spot-exposures intraday."""
+    from gex_core.intraday_backfill import minute_row_total_gex_bn
+    from gex_core.market_time import market_today
+
+    minute_df = fetch_uw_spot_exposures_intraday(
+        ticker,
+        api_key=api_key,
+        date=date or market_today(),
+    )
+    if minute_df.empty:
+        return None
+    return minute_row_total_gex_bn(minute_df.iloc[-1])
+
+
 def fetch_uw_charm_vanna(
     ticker: str = "SPX",
     api_key: str | None = None,
