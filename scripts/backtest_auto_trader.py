@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from gex_core.trading.backtest import backtest_auto_trader
+from gex_core.trading.backtest import backtest_auto_trader, backtest_auto_trader_bootstrap
 
 
 def _fmt_pct(value: float | None) -> str:
@@ -28,17 +28,32 @@ def main() -> None:
     parser.add_argument("--stop-loss", type=float, default=None)
     parser.add_argument("--take-profit", type=float, default=None)
     parser.add_argument("--min-confidence", type=float, default=None)
+    parser.add_argument("--target-trades", type=int, default=0, help="Bootstrap until N trades (e.g. 1000)")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    result = backtest_auto_trader(
-        args.ticker.upper(),
-        lookback_days=args.lookback_days,
-        max_snapshots=args.max_snapshots,
-        dedupe_identical_strikes=args.dedupe,
-        stop_loss=args.stop_loss,
-        take_profit=args.take_profit,
-        min_confidence=args.min_confidence,
-    )
+    if args.target_trades > 0:
+        result = backtest_auto_trader_bootstrap(
+            args.ticker.upper(),
+            target_trades=args.target_trades,
+            seed=args.seed,
+            lookback_days=args.lookback_days,
+            max_snapshots=args.max_snapshots,
+            dedupe_identical_strikes=args.dedupe,
+            stop_loss=args.stop_loss,
+            take_profit=args.take_profit,
+            min_confidence=args.min_confidence,
+        )
+    else:
+        result = backtest_auto_trader(
+            args.ticker.upper(),
+            lookback_days=args.lookback_days,
+            max_snapshots=args.max_snapshots,
+            dedupe_identical_strikes=args.dedupe,
+            stop_loss=args.stop_loss,
+            take_profit=args.take_profit,
+            min_confidence=args.min_confidence,
+        )
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))
@@ -51,6 +66,9 @@ def main() -> None:
         return
 
     print(f"snapshots: {result['snapshots']}")
+    if result.get("bootstrap"):
+        print(f"base snapshots: {result.get('base_snapshots', 'n/a')}")
+        print(f"target trades: {result.get('target_trades', 'n/a')}")
     print(f"total trades: {result['total_trades']}")
     print(f"win rate: {result['win_rate']:.1%} ({result['wins']}W / {result['losses']}L)")
     print(f"avg PnL: {_fmt_pct(result['avg_pnl_pct'])}")
@@ -58,6 +76,7 @@ def main() -> None:
     print(f"avg bars held: {result['avg_bars_held']:.1f}")
     print(f"skipped entries: {result['skipped_entries']}")
     print(f"blocked duplicates: {result.get('blocked_duplicate', 0)}")
+    print(f"skipped gamma decline: {result.get('skipped_gamma_decline', 0)}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")
 
     print("\nBy signal type:")

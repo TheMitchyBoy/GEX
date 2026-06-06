@@ -20,6 +20,25 @@ def test_compute_gamma_signals_picks_max_and_fastest():
     assert out["available"]
     assert out["max_positive_gamma"]["strike"] == 7390.0
     assert out["fastest_gamma_increase"]["gamma_delta"] == 1.0
+    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+
+
+def test_compute_gamma_signals_switches_when_max_gamma_declines():
+    cur = pd.Series([0.2, 1.0, 0.8, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7385.0)
+    assert out["available"]
+    assert out["selection_reason"] == "max_positive_gamma_declined"
+    assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
+    assert out["recommended"]["strike"] == 7400.0
+
+
+def test_compute_gamma_signals_skips_when_all_gamma_declines():
+    cur = pd.Series([0.1, 0.8, 0.3, 0.2], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    prev = pd.Series([0.2, 1.5, 0.5, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7385.0)
+    assert not out["available"]
+    assert out["skip_reason"] == "gamma_declined"
 
 
 def test_paper_broker_stop_loss_threshold():
