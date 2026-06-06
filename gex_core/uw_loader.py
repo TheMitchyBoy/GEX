@@ -199,6 +199,65 @@ def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
 # Spot price
 # ─────────────────────────────────────────────────────────────────────────────
 
+def fetch_uw_ohlc_points(
+    ticker: str,
+    *,
+    candle_size: str = "15m",
+    limit: int | None = None,
+    api_key: str | None = None,
+) -> list[dict]:
+    """Return OHLC close series from ``/api/stock/{ticker}/ohlc/{candle_size}``."""
+    params: dict[str, int] = {}
+    if limit is not None:
+        params["limit"] = int(limit)
+    rows = _get(
+        f"/api/stock/{ticker}/ohlc/{candle_size}",
+        api_key=api_key,
+        **params,
+    )
+    points: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        close = row.get("close")
+        ts = row.get("end_time") or row.get("start_time")
+        if close is None or not ts:
+            continue
+        try:
+            price = float(close)
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        points.append({"ts": str(ts), "close": price})
+    points.sort(key=lambda item: item["ts"])
+    return points
+
+
+def fetch_uw_stock_state_price(ticker: str, api_key: str | None = None) -> float:
+    """Best-effort last price from ``/api/stock/{ticker}/stock-state``."""
+    try:
+        rows = _get(f"/api/stock/{ticker}/stock-state", api_key=api_key)
+    except Exception:
+        return 0.0
+    if not rows:
+        return 0.0
+    row = rows[0] if isinstance(rows, list) else rows
+    if not isinstance(row, dict):
+        return 0.0
+    for key in ("close", "last_price", "price", "prev_close_price"):
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            return price
+    return 0.0
+
+
 def fetch_uw_spot(
     ticker: str,
     api_key: str | None = None,

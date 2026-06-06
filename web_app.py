@@ -48,6 +48,7 @@ from gex_core.market_features import (
     fetch_spx_price_history,
     fetch_spx_price_series_for_dashboard,
 )
+from gex_core.uw_price_stream import start_uw_price_stream
 from gex_core.intelligence import (
     build_gamma_analysis_panel,
     build_data_quality_panel,
@@ -1058,6 +1059,7 @@ def start_background_refresh():
 
 
 start_background_refresh()
+start_uw_price_stream(REFRESH_TICKERS)
 
 
 if __name__ == "__main__":

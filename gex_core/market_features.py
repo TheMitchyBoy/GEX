@@ -154,83 +154,98 @@ def fetch_vol_regime() -> dict[str, float]:
     }
 
 
-def _spx_price_config() -> tuple[str, str]:
-    period = os.environ.get("GEX_SPX_PRICE_PERIOD", "5d")
-    interval = os.environ.get("GEX_SPX_PRICE_INTERVAL", "15m")
-    return period, interval
+def _uw_ohlc_candle_size() -> str:
+    return os.environ.get("GEX_UW_OHLC_CANDLE_SIZE", os.environ.get("GEX_SPX_PRICE_INTERVAL", "15m"))
 
 
-def _yfinance_timeout_seconds() -> float:
+def _uw_ohlc_limit() -> int:
     try:
-        return max(1.0, float(os.environ.get("GEX_YFINANCE_TIMEOUT_SEC", "8")))
+        return max(50, int(os.environ.get("GEX_UW_OHLC_LIMIT", "800")))
     except (TypeError, ValueError):
-        return 8.0
+        return 800
 
 
-def _fetch_yfinance_history(
-    symbol: str,
+def _uw_price_enabled() -> bool:
+    from gex_core.env_bootstrap import uw_api_configured
+
+    return uw_api_configured()
+
+
+def _merge_price_points(*series: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    merged: dict[str, float] = {}
+    for points in series:
+        if not points:
+            continue
+        for row in points:
+            ts = row.get("ts")
+            close = row.get("close")
+            if not ts or close is None:
+                continue
+            try:
+                merged[str(ts)] = float(close)
+            except (TypeError, ValueError):
+                continue
+    return [{"ts": ts, "close": close} for ts, close in sorted(merged.items())]
+
+
+def fetch_uw_price_history(
+    ticker: str = "SPX",
     *,
-    period: str,
-    interval: str,
-) -> pd.DataFrame | None:
-    """Run a yfinance history fetch with a hard timeout so page renders cannot hang."""
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-
-    timeout = _yfinance_timeout_seconds()
-
-    def _load() -> pd.DataFrame | None:
-        import yfinance as yf
-
-        data = yf.Ticker(symbol).history(period=period, interval=interval)
-        if data is None or data.empty:
-            return None
-        return data
-
+    candle_size: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]] | None:
+    """Recent price history from UW OHLC REST."""
+    if not _uw_price_enabled():
+        return None
     try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            data = pool.submit(_load).result(timeout=timeout)
-    except FuturesTimeout:
-        logger.warning("yfinance history timed out for %s after %.1fs", symbol, timeout)
+        from gex_core.uw_loader import fetch_uw_ohlc_points
+
+        points = fetch_uw_ohlc_points(
+            ticker,
+            candle_size=candle_size or _uw_ohlc_candle_size(),
+            limit=limit or _uw_ohlc_limit(),
+        )
+        return points or None
+    except Exception as exc:  # pragma: no cover - network path
+        logger.debug("UW OHLC price history unavailable for %s: %s", ticker, exc)
         return None
-    except Exception as exc:  # pragma: no cover - network/optional dep path
-        logger.debug("yfinance history unavailable for %s: %s", symbol, exc)
-        return None
-    return data
 
 
 def fetch_spx_price_history(
     period: str | None = None,
     interval: str | None = None,
+    *,
+    ticker: str = "SPX",
 ) -> list[dict[str, Any]] | None:
-    """Recent SPX price history as ``[{"ts": iso, "close": float}, ...]``.
-
-    Best-effort via ``yfinance``; returns ``None`` when offline or the optional
-    dependency is missing so callers can fall back to the snapshot spot series.
-    """
-    default_period, default_interval = _spx_price_config()
-    period = period or default_period
-    interval = interval or default_interval
-    try:
-        data = _fetch_yfinance_history(SPX_YF_SYMBOL, period=period, interval=interval)
-        if data is None or "Close" not in data:
-            return None
-        closes = data["Close"].dropna()
-        points = [
-            {"ts": ts.isoformat(), "close": float(value)}
-            for ts, value in closes.items()
-        ]
-        return points or None
-    except Exception as exc:  # pragma: no cover - network/optional dep path
-        logger.debug("SPX price history unavailable: %s", exc)
-        return None
+    """Recent price history as ``[{"ts": iso, "close": float}, ...]`` via UW OHLC."""
+    _ = period
+    candle_size = interval or _uw_ohlc_candle_size()
+    return fetch_uw_price_history(ticker, candle_size=candle_size)
 
 
-def fetch_spx_price() -> float:
-    """Latest SPX index price; ``0.0`` when unavailable (offline)."""
-    for period, interval in (("1d", "5m"), ("5d", "30m"), ("1mo", "1d")):
-        points = fetch_spx_price_history(period=period, interval=interval)
-        if points:
-            return float(points[-1]["close"])
+def fetch_spx_price(ticker: str = "SPX") -> float:
+    """Latest price from UW websocket cache, then REST fallbacks."""
+    if _uw_price_enabled():
+        try:
+            from gex_core.uw_price_stream import get_uw_price_stream
+
+            live = get_uw_price_stream().get_latest_price(ticker)
+            if live > 0:
+                return live
+        except Exception as exc:
+            logger.debug("UW websocket price unavailable for %s: %s", ticker, exc)
+        try:
+            from gex_core.uw_loader import fetch_uw_stock_state_price, fetch_uw_spot
+
+            state_price = fetch_uw_stock_state_price(ticker)
+            if state_price > 0:
+                return state_price
+            return fetch_uw_spot(ticker)
+        except Exception as exc:
+            logger.debug("UW REST price fallback unavailable for %s: %s", ticker, exc)
+    points = fetch_spx_price_history(ticker=ticker)
+    if points:
+        return float(points[-1]["close"])
     return 0.0
 
 
@@ -240,7 +255,7 @@ def fetch_spx_price_series_for_dashboard(
     index_days: int | None = None,
     index_interval_minutes: int | None = None,
 ) -> tuple[list[dict[str, Any]], float, str]:
-    """Merge live Yahoo SPX prices with indexed export spots for the dashboard chart."""
+    """Merge UW websocket ticks, OHLC candles, and indexed export spots."""
     from gex_core.storage import fetch_index_spot_series
 
     index_days = int(os.environ.get("GEX_DASHBOARD_TIMELINE_DAYS", "90")) if index_days is None else index_days
@@ -250,7 +265,19 @@ def fetch_spx_price_series_for_dashboard(
         else index_interval_minutes
     )
 
-    live_points = fetch_spx_price_history()
+    ws_points: list[dict[str, Any]] = []
+    ohlc_points: list[dict[str, Any]] = []
+    if _uw_price_enabled():
+        try:
+            from gex_core.uw_price_stream import get_uw_price_stream
+
+            ws_points = get_uw_price_stream().get_price_points(ticker)
+        except Exception as exc:
+            logger.debug("UW websocket series unavailable for %s: %s", ticker, exc)
+        history = fetch_uw_price_history(ticker)
+        if history:
+            ohlc_points = history
+
     indexed = fetch_index_spot_series(
         ticker,
         days=index_days,
@@ -263,21 +290,22 @@ def fetch_spx_price_series_for_dashboard(
         if row.get("spot")
     ]
 
+    live_points = _merge_price_points(ohlc_points, ws_points)
     points: list[dict[str, Any]] = []
     source = "snapshots"
     if indexed_points and live_points:
         live_start = live_points[0]["ts"]
         points = [p for p in indexed_points if p["ts"] < live_start]
         points.extend(live_points)
-        source = "live+snapshots"
+        source = "uw-live+snapshots"
     elif live_points:
         points = live_points
-        source = "live"
+        source = "uw-live"
     elif indexed_points:
         points = indexed_points
         source = "snapshots"
 
-    current = fetch_spx_price()
+    current = fetch_spx_price(ticker)
     if current <= 0 and points:
         current = float(points[-1]["close"])
     elif current <= 0 and indexed:
