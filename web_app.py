@@ -35,7 +35,6 @@ from gex_core.charts import (
     make_timeline_chart,
     safe_float,
 )
-from gex_core.periscope_charts import build_periscope_charts
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
@@ -479,31 +478,30 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     gex_series = ctx.get("exposure_series")
     prev_series = ctx.get("previous_exposure")
     spot = ctx.get("spot")
+    selected = ctx.get("selected") or {}
 
-    charts = build_periscope_charts(
+    prev_spot = None
+    history = ctx.get("history") or []
+    sel_ts = ctx.get("selected_ts")
+    if history and sel_ts:
+        for i, row in enumerate(history):
+            if row.get("ts") == sel_ts and i > 0:
+                prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
+                break
+
+    from gex_core.trading.strategy_viz import build_strategy_dashboard
+
+    strategy = build_strategy_dashboard(
         ticker=ticker,
-        exposure_type=exposure,
         spot=spot,
-        exposure_profile=ctx.get("exposure_profile"),
-        exposure_extended=ctx.get("exposure_extended"),
-        exposure_series=ctx.get("exposure_series"),
+        exposure=gex_series,
         previous_exposure=prev_series,
-        price_points=price_points,
-        highlight_label=selected.get("ts_label"),
-        mm_positions=ctx.get("mm_positions"),
-        gamma_flip=ctx.get("gamma_flip"),
-        call_wall=ctx.get("call_wall"),
-        put_wall=ctx.get("put_wall"),
+        snapshot=selected,
+        prev_spot=prev_spot,
     )
-    price_chart_json = charts.price
-    exposure_chart_json = charts.exposures
-    change_chart_json = charts.change
-    cumulative_chart_json = charts.cumulative
-    positions_chart_json = charts.positions
-    ladder_chart_json = charts.ladder
+    strategy_chart_json = strategy["chart_json"]
+    strategy_state = strategy["state"]
 
-    cumulative = selected.get("cumulative")
-    uw_agg = uw_entry.get("agg") if uw_entry else None
     chat_welcome = build_welcome_message(
         ticker=ticker,
         spot=safe_float(spot, 0.0) or None,
@@ -537,12 +535,8 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         timeline=timeline,
         replay_index=ctx.get("replay_index", 0),
         data_source=data_source,
-        price_chart_json=price_chart_json,
-        exposure_chart_json=exposure_chart_json,
-        change_chart_json=change_chart_json,
-        cumulative_chart_json=cumulative_chart_json,
-        positions_chart_json=positions_chart_json,
-        ladder_chart_json=ladder_chart_json,
+        strategy_chart_json=strategy_chart_json,
+        strategy_state=strategy_state,
         is_live_slice=timeline.get("is_latest", False),
         chat_welcome=chat_welcome,
         bootstrap_status=bootstrap_status,
@@ -1176,6 +1170,39 @@ def api_trader_run():
         force=True,
     )
     return jsonify(result)
+
+
+@APP.get("/api/trader/strategy")
+def api_trader_strategy():
+    """Live strategy signals, filter state, and chart spec for dashboard refresh."""
+    from gex_core.trading.strategy_viz import build_strategy_dashboard
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        selected_ts=request.args.get("ts"),
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    history = ctx.get("history") or []
+    prev_spot = None
+    sel_ts = ctx.get("selected_ts")
+    if history and sel_ts:
+        for i, row in enumerate(history):
+            if row.get("ts") == sel_ts and i > 0:
+                prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
+                break
+    payload = build_strategy_dashboard(
+        ticker=ticker,
+        spot=ctx.get("spot"),
+        exposure=ctx.get("exposure_series"),
+        previous_exposure=ctx.get("previous_exposure"),
+        snapshot=ctx.get("selected"),
+        prev_spot=prev_spot,
+    )
+    return jsonify(payload)
 
 
 @APP.get("/api/trader/suggestions")

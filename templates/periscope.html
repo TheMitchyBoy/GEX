@@ -3,102 +3,50 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SPX · Market Maker Exposure · Periscope</title>
+    <title>SPX · Gamma Auto-Trader · Strategy</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"
           integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     <style>
       :root {
-        --bg: #06080d;
-        --panel: #0a0e14;
-        --border: rgba(148, 163, 184, 0.12);
-        --txt: #e2e8f0;
-        --muted: #64748b;
-        --label: #94a3b8;
-        --accent: #3b82f6;
-        --green: #10b981;
-        --red: #ef4444;
-        --amber: #f59e0b;
+        --bg: #06080d; --panel: #0a0e14; --border: rgba(148, 163, 184, 0.12);
+        --txt: #e2e8f0; --muted: #64748b; --label: #94a3b8;
+        --accent: #3b82f6; --green: #10b981; --red: #ef4444; --amber: #f59e0b; --purple: #a78bfa;
       }
-      body {
-        min-height: 100vh;
-        color: var(--txt);
-        background: var(--bg);
-        font-family: Inter, system-ui, sans-serif;
-      }
-      .uw-panel {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        overflow: hidden;
-      }
-      .uw-panel-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.55rem 0.75rem;
-        border-bottom: 1px solid var(--border);
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: var(--label);
-        letter-spacing: 0.01em;
-      }
+      body { min-height: 100vh; color: var(--txt); background: var(--bg); font-family: Inter, system-ui, sans-serif; }
+      .uw-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+      .uw-panel-head { display: flex; justify-content: space-between; align-items: center; padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.8rem; font-weight: 600; color: var(--label); }
       .uw-panel-body { padding: 0.25rem 0.35rem 0.35rem; }
-      #gexLadderChart { min-height: 720px; }
-      .chip {
-        border-radius: 999px;
-        border: 1px solid rgba(59,130,246,0.35);
-        color: #93c5fd;
-        font-size: 0.68rem;
-        padding: 0.15rem 0.5rem;
-      }
-      .chip.live-pulse {
-        border-color: rgba(245, 158, 11, 0.5);
-        color: var(--amber);
-        animation: pulse 2s ease-in-out infinite;
-      }
-      @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.55; }
-      }
-      .exposure-toggle .btn {
-        font-size: 0.75rem;
-        padding: 0.2rem 0.65rem;
-        border-color: var(--border);
-        color: var(--label);
-      }
-      .exposure-toggle .btn.active {
-        background: rgba(59,130,246,0.18);
-        border-color: var(--accent);
-        color: #dbeafe;
-      }
-      .regime-long { color: var(--green); }
-      .regime-short { color: var(--red); }
+      #strategyChart { min-height: 720px; }
+      .chip { border-radius: 999px; border: 1px solid rgba(59,130,246,0.35); color: #93c5fd; font-size: 0.68rem; padding: 0.15rem 0.5rem; }
+      .chip.live-pulse { border-color: rgba(245, 158, 11, 0.5); color: var(--amber); animation: pulse 2s ease-in-out infinite; }
+      .chip.pass { border-color: rgba(16,185,129,0.4); color: var(--green); }
+      .chip.fail { border-color: rgba(239,68,68,0.4); color: var(--red); }
+      .chip.pending { border-color: var(--border); color: var(--muted); }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+      .regime-long { color: var(--green); } .regime-short { color: var(--red); }
       .mono { font-family: ui-monospace, monospace; }
       .muted { color: var(--muted); }
       .spot-live { color: var(--amber); }
-      .time-nav .form-control, .time-nav .form-select {
-        background: #06080d;
-        border-color: var(--border);
-        color: var(--txt);
-        font-size: 0.85rem;
-      }
+      .time-nav .form-control, .time-nav .form-select { background: #06080d; border-color: var(--border); color: var(--txt); font-size: 0.85rem; }
       .agent-card { border-left: 3px solid var(--accent); }
-      .chat-panel { display: flex; flex-direction: column; min-height: 320px; max-height: 440px; }
+      .chat-panel { display: flex; flex-direction: column; min-height: 280px; max-height: 380px; }
       .chat-messages { flex: 1; overflow-y: auto; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
       .chat-bubble { max-width: 88%; padding: 0.5rem 0.7rem; border-radius: 8px; font-size: 0.84rem; line-height: 1.45; white-space: pre-wrap; }
       .chat-bubble.user { align-self: flex-end; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); }
       .chat-bubble.assistant { align-self: flex-start; background: #0f1419; border: 1px solid var(--border); }
       .chat-input-row { border-top: 1px solid var(--border); padding: 0.65rem; display: flex; gap: 0.5rem; }
-      .chat-input-row textarea {
-        flex: 1; resize: none; background: #06080d; border: 1px solid var(--border);
-        color: var(--txt); border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.84rem;
-      }
+      .chat-input-row textarea { flex: 1; resize: none; background: #06080d; border: 1px solid var(--border); color: var(--txt); border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.84rem; }
       .trader-stat { font-size: 0.78rem; color: var(--label); }
       .trader-stat strong { color: var(--txt); }
-      .suggestion-list { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; color: var(--muted); }
+      .signal-card { background: #06080d; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; height: 100%; }
+      .signal-card h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.5rem; }
+      .signal-row { display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 0.35rem; }
+      .signal-val { font-family: ui-monospace, monospace; color: var(--txt); }
+      .rule-pill { display: inline-block; font-size: 0.68rem; padding: 0.12rem 0.45rem; border-radius: 4px; background: rgba(59,130,246,0.1); color: #93c5fd; margin: 0.1rem; }
       .badge-armed { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.35); }
       .badge-disarmed { background: rgba(100,116,139,0.15); color: var(--muted); border: 1px solid var(--border); }
+      .suggestion-list { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; color: var(--muted); }
     </style>
   </head>
   <body>
@@ -111,33 +59,36 @@
       <div class="alert alert-secondary py-2 small">Set UW_API_KEY for live 10-minute exposure updates.</div>
       {% endif %}
 
+      {% set sig = strategy_state.signals if strategy_state else {} %}
+      {% set rec = sig.recommended if sig.get('available') else {} %}
+      {% set advice = strategy_state.advice if strategy_state else {} %}
+      {% set filters = strategy_state.filters if strategy_state else {} %}
+
       <header class="uw-panel mb-3 p-3">
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
           <div>
-            <div class="d-flex gap-2 mb-2">
-              <span class="chip">PERISCOPE</span>
+            <div class="d-flex gap-2 mb-2 flex-wrap">
+              <span class="chip">AUTO-TRADER</span>
               <span class="chip">SPX</span>
-              {% if timeline.is_latest %}
-              <span class="chip live-pulse" id="liveChip">LIVE</span>
-              {% else %}
-              <span class="chip">REPLAY</span>
-              {% endif %}
+              {% if timeline.is_latest %}<span class="chip live-pulse" id="liveChip">LIVE</span>{% else %}<span class="chip">REPLAY</span>{% endif %}
+              <span class="chip {% if advice.get('approve') %}pass{% elif sig.get('available') %}fail{% else %}pending{% endif %}" id="entryChip">
+                {% if advice.get('approve') %}ENTRY OK{% elif sig.get('available') %}NO ENTRY{% else %}NO SIGNAL{% endif %}
+              </span>
             </div>
-            <h1 class="h5 mb-1">Market Maker Exposure</h1>
+            <h1 class="h5 mb-1">Gamma Magnet Strategy</h1>
             <div class="small muted">{{ data_source }}</div>
           </div>
-          <div class="btn-group exposure-toggle" role="group">
-            {% for kind in ['gamma', 'vanna', 'charm'] %}
-            <a class="btn btn-outline-secondary {% if exposure == kind %}active{% endif %}"
-               href="?exposure={{ kind }}{% if selected_ts %}&ts={{ selected_ts }}{% endif %}">{{ kind|title }}</a>
-            {% endfor %}
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">{% if auto_trader.armed %}ARMED{% else %}DISARMED{% endif %}</span>
+            {% if auto_trader.live_mode %}<span class="chip live-pulse" style="border-color:rgba(239,68,68,0.5);color:var(--red);">WEBULL LIVE</span>{% else %}<span class="chip">PAPER</span>{% endif %}
           </div>
         </div>
         <div class="d-flex flex-wrap gap-3 mt-2 small">
           <span><strong>Spot</strong> <span class="mono spot-live" id="spotValue">{{ '%.2f'|format(spot) if spot else 'N/A' }}</span></span>
           <span><strong>Regime</strong> <span class="{{ 'regime-long' if 'LONG' in regime else 'regime-short' }}">{{ regime }}</span></span>
-          <span><strong>Net GEX</strong> <span class="mono">{{ '%+.3f'|format(total_gex) }} Bn$</span></span>
           <span><strong>Flip</strong> <span class="mono">{{ '%.0f'|format(gamma_flip) if gamma_flip else 'N/A' }}</span></span>
+          <span><strong>WR</strong> <span class="mono">{{ '%.0f'|format((auto_trader.performance.win_rate or 0) * 100) }}%</span></span>
+          <span><strong>PnL</strong> <span class="mono">${{ '%.0f'|format(auto_trader.performance.total_pnl_usd or 0) }}</span></span>
         </div>
       </header>
 
@@ -148,93 +99,96 @@
           <div class="small mono muted">{{ selected_label }} · {{ timeline.day_slice_index }}/{{ timeline.day_slice_count }}</div>
         </div>
         <div class="d-flex flex-wrap gap-2 mb-3">
-          {% if timeline.prev_ts %}
-          <a class="btn btn-sm btn-primary" id="rewindBtn" href="?ts={{ timeline.prev_ts }}&exposure={{ exposure }}">← 10 min</a>
-          {% else %}<button class="btn btn-sm btn-primary" disabled>← 10 min</button>{% endif %}
-          {% if timeline.next_ts %}
-          <a class="btn btn-sm btn-outline-light" href="?ts={{ timeline.next_ts }}&exposure={{ exposure }}">10 min →</a>
-          {% else %}<button class="btn btn-sm btn-outline-light" disabled>10 min →</button>{% endif %}
-          {% if not timeline.is_latest %}
-          <a class="btn btn-sm btn-outline-info" href="?exposure={{ exposure }}">Latest</a>
-          {% endif %}
+          {% if timeline.prev_ts %}<a class="btn btn-sm btn-primary" id="rewindBtn" href="?ts={{ timeline.prev_ts }}">← 10 min</a>{% else %}<button class="btn btn-sm btn-primary" disabled>← 10 min</button>{% endif %}
+          {% if timeline.next_ts %}<a class="btn btn-sm btn-outline-light" href="?ts={{ timeline.next_ts }}">10 min →</a>{% else %}<button class="btn btn-sm btn-outline-light" disabled>10 min →</button>{% endif %}
+          {% if not timeline.is_latest %}<a class="btn btn-sm btn-outline-info" href="?">Latest</a>{% endif %}
         </div>
         <div class="row g-2">
-          <div class="col-md-4">
-            <input type="date" class="form-control form-control-sm" id="sessionDate"
-                   value="{{ selected_date or '' }}" min="{{ timeline.available_dates[0] }}" max="{{ timeline.available_dates[-1] }}">
-          </div>
+          <div class="col-md-4"><input type="date" class="form-control form-control-sm" id="sessionDate" value="{{ selected_date or '' }}" min="{{ timeline.available_dates[0] }}" max="{{ timeline.available_dates[-1] }}"></div>
           <div class="col-md-4">
             <select class="form-select form-select-sm" id="sessionTime">
-              {% for slice in timeline.day_slices %}
-              <option value="{{ slice.ts }}" {% if slice.ts == selected_ts %}selected{% endif %}>{{ slice.time }}</option>
-              {% endfor %}
+              {% for slice in timeline.day_slices %}<option value="{{ slice.ts }}" {% if slice.ts == selected_ts %}selected{% endif %}>{{ slice.time }}</option>{% endfor %}
             </select>
           </div>
         </div>
       </section>
       {% endif %}
 
-      <section class="uw-panel mb-3">
-        <div class="uw-panel-head">
-          <span>Gamma Ladder · {{ exposure|title }}</span>
-          <span class="small muted fw-normal">center = strikes · bars = net exposure · amber = spot</span>
+      <div class="row g-3 mb-3">
+        <div class="col-lg-8">
+          <section class="uw-panel">
+            <div class="uw-panel-head">
+              <span>Strategy map</span>
+              <span class="small muted fw-normal">γ magnets · spot · open positions · equity curve</span>
+            </div>
+            <div class="uw-panel-body"><div id="strategyChart"></div></div>
+          </section>
         </div>
-        <div class="uw-panel-body"><div id="gexLadderChart"></div></div>
-      </section>
+        <div class="col-lg-4 d-flex flex-column gap-3">
+          <div class="signal-card">
+            <h3>Entry signal</h3>
+            {% if sig.get('available') %}
+            <div class="signal-row"><span>Recommended</span><span class="signal-val">{{ rec.option_type|upper }} {{ '%.0f'|format(rec.strike) }}</span></div>
+            <div class="signal-row"><span>Type</span><span class="signal-val">{{ rec.signal_type }}</span></div>
+            <div class="signal-row"><span>γ at strike</span><span class="signal-val">{{ '%+.3f'|format(rec.gamma_bn) }} Bn</span></div>
+            <div class="signal-row"><span>Δγ (10m)</span><span class="signal-val">{{ '%+.3f'|format(rec.gamma_delta) }} Bn</span></div>
+            <div class="signal-row"><span>Confidence</span><span class="signal-val">{{ '%.0f'|format((advice.confidence or 0) * 100) }}%</span></div>
+            <div class="small muted mt-2">{{ advice.reason or rec.rationale }}</div>
+            {% else %}
+            <div class="small muted">{{ sig.reason or 'Waiting for gamma data…' }}</div>
+            {% endif %}
+          </div>
+          <div class="signal-card">
+            <h3>Filter checklist</h3>
+            <div class="signal-row"><span>Gamma signal</span><span class="chip {% if sig.get('available') %}pass{% else %}fail{% endif %}">{% if sig.get('available') %}OK{% else %}SKIP{% endif %}</span></div>
+            <div class="signal-row"><span>Entry filters</span><span class="chip {% if filters.get('approve') %}pass{% else %}fail{% endif %}" id="filterChip">{% if filters.get('approve') %}PASS{% else %}BLOCK{% endif %}</span></div>
+            <div class="signal-row"><span>AI advisor</span><span class="chip {% if advice.get('approve') %}pass{% else %}fail{% endif %}">{% if advice.get('approve') %}APPROVE{% else %}WAIT{% endif %}</span></div>
+            {% if not filters.get('approve') and filters.get('reason') %}<div class="small muted mt-1">{{ filters.reason }}</div>{% endif %}
+          </div>
+          <div class="signal-card">
+            <h3>Exit rules {% if strategy_state.exit_profile and strategy_state.exit_profile.hold_for_target %}<span class="chip pass">RUNNER</span>{% endif %}</h3>
+            <span class="rule-pill">Stop −{{ '%.0f'|format((strategy_state.rules.stop_loss_pct or 0.05) * 100) }}%</span>
+            <span class="rule-pill">Target +{{ '%.0f'|format((strategy_state.rules.take_profit_pct or 0.35) * 100) }}%</span>
+            <span class="rule-pill">Partial +{{ '%.0f'|format((strategy_state.rules.partial_take_profit_pct or 0.15) * 100) }}%</span>
+            <span class="rule-pill">Trail +{{ '%.0f'|format((strategy_state.rules.trail_trigger_pct or 0.10) * 100) }}/+{{ '%.0f'|format((strategy_state.rules.trail_floor_pct or 0.05) * 100) }}%</span>
+            <span class="rule-pill">Max dist {{ '%.1f'|format((strategy_state.rules.max_strike_distance_pct or 0.01) * 100) }}%</span>
+          </div>
+        </div>
+      </div>
 
       <section class="uw-panel mb-3 p-3">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-          <div>
-            <h2 class="h6 mb-0">Gamma Auto-Trader</h2>
-            <div class="small muted">{% if auto_trader.live_mode %}Live Webull · {{ auto_trader.webull_underlying }} options{% else %}Paper options{% endif %} · max +γ strike or fastest γ increase · AI-gated entries</div>
-          </div>
-          <div class="d-flex gap-2 align-items-center">
-            <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">
-              {% if auto_trader.armed %}ARMED{% else %}DISARMED{% endif %}
-            </span>
-            {% if auto_trader.live_mode %}
-            <span class="chip live-pulse" style="border-color:rgba(239,68,68,0.5);color:var(--red);">WEBULL LIVE</span>
-            {% else %}
-            <span class="chip">PAPER</span>
-            {% endif %}
-          </div>
+          <div><h2 class="h6 mb-0">Trader controls</h2><div class="small muted">Arm · run cycle · manage positions</div></div>
         </div>
         <div class="d-flex flex-wrap gap-3 mb-2 trader-stat">
-          <span><strong>Win rate</strong> {{ '%.0f'|format((auto_trader.performance.win_rate or 0) * 100) }}%</span>
           <span><strong>Trades</strong> {{ auto_trader.performance.total_trades or 0 }}</span>
-          <span><strong>Stop</strong> {{ '%.0f'|format((auto_trader.stop_loss_pct or 0.05) * 100) }}%</span>
-          <span><strong>Target</strong> {{ '%.0f'|format((auto_trader.take_profit_pct or 0.35) * 100) }}%</span>
           <span><strong>Open</strong> {{ (auto_trader.open_positions or [])|length }}</span>
+          <span><strong>Broker</strong> {{ auto_trader.broker_mode or 'paper' }}</span>
         </div>
         <div class="d-flex flex-wrap gap-2 mb-3">
           <button class="btn btn-sm btn-success" id="traderArmBtn" type="button">Arm trader</button>
           <button class="btn btn-sm btn-outline-secondary" id="traderDisarmBtn" type="button">Disarm</button>
           <button class="btn btn-sm btn-outline-info" id="traderRunBtn" type="button">Run cycle now</button>
+          <button class="btn btn-sm btn-outline-secondary" id="strategyRefreshBtn" type="button">Refresh strategy</button>
         </div>
-        {% if auto_trader.open_positions %}
-        <div class="small mb-2 fw-semibold">Open positions</div>
+        {% if strategy_state.open_positions or auto_trader.open_positions %}
         <div class="table-responsive mb-2">
           <table class="table table-sm table-dark table-borderless small mb-0">
-            <thead><tr><th>Type</th><th>Strike</th><th>Entry</th><th>Signal</th><th>AI conf</th></tr></thead>
-            <tbody>
-              {% for p in auto_trader.open_positions %}
+            <thead><tr><th>Type</th><th>Strike</th><th>Entry</th><th>PnL</th><th>Stop</th><th>Target</th></tr></thead>
+            <tbody id="openPositionsBody">
+              {% for p in strategy_state.open_positions or auto_trader.open_positions %}
               <tr>
                 <td>{{ p.option_type|upper }}</td>
                 <td>{{ '%.0f'|format(p.strike) }}</td>
                 <td>{{ '%.2f'|format(p.entry_spot) }}</td>
-                <td>{{ p.signal_type }}</td>
-                <td>{{ '%.0f'|format((p.ai_confidence or 0) * 100) }}%</td>
+                <td class="{% if (p.pnl_pct or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">{% if p.pnl_pct is not none %}{{ '%+.1f'|format(p.pnl_pct * 100) }}%{% else %}—{% endif %}</td>
+                <td>{{ '%.0f'|format((p.stop_pct or -0.05) * 100) }}%</td>
+                <td>+{{ '%.0f'|format((p.target_pct or 0.35) * 100) }}%</td>
               </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
-        {% endif %}
-        {% if auto_trader.suggestions %}
-        <div class="small fw-semibold mb-1">AI suggestions (from trade memory)</div>
-        <ul class="suggestion-list" id="traderSuggestions">
-          {% for s in auto_trader.suggestions %}<li>{{ s }}</li>{% endfor %}
-        </ul>
         {% endif %}
         <div class="small muted" id="traderStatusMsg"></div>
       </section>
@@ -247,44 +201,32 @@
         <div class="chat-panel">
           <div class="chat-messages" id="chatMessages"></div>
           <div class="chat-input-row">
-            <textarea id="chatInput" rows="1" placeholder="Ask about gamma, flip, walls…"></textarea>
+            <textarea id="chatInput" rows="1" placeholder="Ask about gamma magnets, entries, exits…"></textarea>
             <button class="btn btn-sm btn-primary" id="chatSend" type="button">Send</button>
           </div>
-          <div class="px-3 pb-2 small muted" id="chatStatus"></div>
         </div>
       </section>
     </main>
 
     <script>
-      const ladderSpec = {{ ladder_chart_json|safe if ladder_chart_json else 'null' }};
+      const strategySpec = {{ strategy_chart_json|safe if strategy_chart_json else 'null' }};
       const plotConfig = {responsive: true, displayModeBar: false};
-      const exposure = '{{ exposure }}';
       const timelineData = {{ timeline|tojson }};
       const chatWelcome = {{ chat_welcome|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
       const ticker = '{{ ticker }}';
 
-      let spotTraceIndex = -1;
-      const ladderEl = document.getElementById('gexLadderChart');
+      const chartEl = document.getElementById('strategyChart');
 
-      function findSpotTraceIndex(data) {
-        if (!data) return -1;
-        return data.findIndex(t => t.uid === 'spot-line' || t.name === 'spot-line');
+      function renderStrategyChart(spec) {
+        if (!spec || !chartEl) return;
+        Plotly.newPlot(chartEl, spec.data, spec.layout || {}, plotConfig);
       }
 
-      function renderLadder() {
-        if (!ladderSpec || !ladderEl) return;
-        Plotly.newPlot(ladderEl, ladderSpec.data, ladderSpec.layout || {}, plotConfig).then(() => {
-          spotTraceIndex = findSpotTraceIndex(ladderEl.data);
-        });
-      }
-
-      function updateSpotLine(price) {
+      function updateSpotDisplay(price) {
         if (!price || price <= 0) return;
-        const spotEl = document.getElementById('spotValue');
-        if (spotEl) spotEl.textContent = Number(price).toFixed(2);
-        if (!ladderEl || spotTraceIndex < 0) return;
-        Plotly.restyle(ladderEl, {y: [[price, price]]}, [spotTraceIndex]);
+        const el = document.getElementById('spotValue');
+        if (el) el.textContent = Number(price).toFixed(2);
       }
 
       function startSpotStream() {
@@ -293,21 +235,29 @@
         source.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.spot) updateSpotLine(data.spot);
+            if (data.spot) updateSpotDisplay(data.spot);
           } catch (_) {}
         };
-        source.onerror = () => {
-          source.close();
-          window.setTimeout(startSpotStream, 5000);
-        };
+        source.onerror = () => { source.close(); window.setTimeout(startSpotStream, 5000); };
       }
 
-      renderLadder();
+      async function refreshStrategy() {
+        const params = new URLSearchParams(window.location.search);
+        const qs = params.toString() ? '?' + params.toString() : '';
+        try {
+          const res = await fetch('/api/trader/strategy' + qs);
+          const data = await res.json();
+          if (data.chart_json) renderStrategyChart(JSON.parse(data.chart_json));
+          if (data.state?.spot) updateSpotDisplay(data.state.spot);
+        } catch (_) {}
+      }
+
+      renderStrategyChart(strategySpec);
       startSpotStream();
+      if (isLiveSlice) window.setInterval(refreshStrategy, 60000);
 
       function navigateTime({ ts = null, date = null } = {}) {
         const params = new URLSearchParams();
-        params.set('exposure', exposure);
         if (ts) params.set('ts', ts);
         else if (date) params.set('date', date);
         window.location.href = '?' + params.toString();
@@ -317,6 +267,7 @@
       document.getElementById('rewindBtn')?.addEventListener('click', e => {
         if (timelineData?.prev_ts) { e.preventDefault(); navigateTime({ts: timelineData.prev_ts}); }
       });
+      document.getElementById('strategyRefreshBtn')?.addEventListener('click', refreshStrategy);
 
       let chatSessionId = null, chatBusy = false;
       function appendChatBubble(role, text) {
@@ -340,7 +291,7 @@
           const res = await fetch('/api/chat', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({message, session_id: chatSessionId, exposure: params.get('exposure') || exposure, ts: params.get('ts')}),
+            body: JSON.stringify({message, session_id: chatSessionId, ts: params.get('ts')}),
           });
           const data = await res.json();
           if (res.ok) { chatSessionId = data.session_id; appendChatBubble('assistant', data.reply); }
@@ -361,30 +312,20 @@
       appendChatBubble('assistant', chatWelcome);
 
       async function traderPost(url, body) {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(body || {}),
-        });
+        const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
         return res.json();
       }
       document.getElementById('traderArmBtn')?.addEventListener('click', async () => {
         const live = {{ auto_trader.live_mode|tojson }};
         const body = {armed: true};
-        if (live && !window.confirm('Arm LIVE Webull trading? Real orders will be placed.')) return;
+        if (live && !window.confirm('Arm LIVE Webull trading?')) return;
         if (live) body.live_confirm = true;
         const data = await traderPost('/api/trader/arm', body);
-        if (data.error) {
-          document.getElementById('traderStatusMsg').textContent = data.error;
-          return;
-        }
         document.getElementById('traderArmBadge').textContent = data.armed ? 'ARMED' : 'DISARMED';
-        document.getElementById('traderStatusMsg').textContent = data.armed
-          ? (live ? 'Live Webull trader armed.' : 'Paper trader armed — cycles run on each refresh.')
-          : '';
+        document.getElementById('traderStatusMsg').textContent = data.armed ? 'Trader armed.' : '';
       });
       document.getElementById('traderDisarmBtn')?.addEventListener('click', async () => {
-        const data = await traderPost('/api/trader/arm', {armed: false});
+        await traderPost('/api/trader/arm', {armed: false});
         document.getElementById('traderArmBadge').textContent = 'DISARMED';
         document.getElementById('traderStatusMsg').textContent = 'Trader disarmed.';
       });
@@ -392,11 +333,10 @@
         document.getElementById('traderStatusMsg').textContent = 'Running cycle…';
         const data = await traderPost('/api/trader/run', {});
         const entry = data.entry;
-        const exits = data.exits || [];
         let msg = data.reason || 'Cycle complete.';
         if (entry?.action === 'opened') msg = `Opened ${entry.option_type?.toUpperCase()} @ ${entry.strike}`;
-        if (exits.length) msg += ` · ${exits.length} exit(s)`;
         document.getElementById('traderStatusMsg').textContent = msg;
+        await refreshStrategy();
       });
     </script>
   </body>
