@@ -251,8 +251,9 @@ def build_periscope_context(
                 market_date=ts_market_date(prev_ts),
             )
 
+    is_latest_slice = resolved_ts == timestamps[-1] if timestamps and resolved_ts else True
     spot = safe_float(selected.get("spot"), 0.0)
-    if uw_entry and uw_entry.get("spot"):
+    if uw_entry and uw_entry.get("spot") and is_latest_slice:
         spot = safe_float(uw_entry["spot"], spot)
 
     strike_series = selected.get("strike")
@@ -291,8 +292,7 @@ def build_periscope_context(
     regime = selected.get("regime", "N/A")
     total_gex = safe_float(selected.get("total_gex"), 0.0)
     if uw_entry and uw_entry.get("spot_gamma_bn") is not None:
-        is_latest = resolved_ts == timestamps[-1] if timestamps and resolved_ts else True
-        if is_latest:
+        if is_latest_slice:
             total_gex = safe_float(uw_entry["spot_gamma_bn"], total_gex)
             regime = "LONG gamma" if total_gex >= 0 else "SHORT gamma"
 

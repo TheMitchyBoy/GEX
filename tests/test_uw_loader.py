@@ -4,7 +4,13 @@ import pandas as pd
 import pytest
 import requests
 
-from gex_core.uw_loader import _get, _normalize_net_exposure, fetch_uw_gex, fetch_uw_greek_exposure
+from gex_core.uw_loader import (
+    _get,
+    _normalize_net_exposure,
+    fetch_uw_best_spot_price,
+    fetch_uw_gex,
+    fetch_uw_greek_exposure,
+)
 
 
 def _resp(status: int, json_payload=None, headers=None):
@@ -21,13 +27,14 @@ def _resp(status: int, json_payload=None, headers=None):
     return r
 
 
+@patch("gex_core.uw_loader.fetch_uw_best_spot_price", return_value=5000.0)
 @patch("gex_core.uw_loader.fetch_uw_greek_exposure_by_expiration", return_value=pd.Series(dtype=float))
 @patch(
     "gex_core.uw_loader.fetch_uw_spot_exposures",
     return_value=pd.DataFrame({"price": [5000.0], "strike": [5000.0]}),
 )
 @patch("gex_core.uw_loader.fetch_uw_greek_exposure")
-def test_fetch_uw_gex_aggregates(mock_greek, mock_spot_df, _mock_exp):
+def test_fetch_uw_gex_aggregates(mock_greek, mock_spot_df, mock_exp, mock_best_spot):
     mock_greek.return_value = pd.DataFrame(
         {
             "strike": [4900.0, 5000.0],
@@ -72,6 +79,38 @@ def test_normalize_net_exposure_uses_signed_put_sum_when_puts_negative():
         put_col="put_gamma_oi",
     )
     assert list(result) == [4.0, 5.0, 3.0]
+
+
+@patch("gex_core.uw_loader.fetch_uw_spot", return_value=7355.0)
+@patch("gex_core.uw_loader.fetch_uw_spot_exposures", return_value=pd.DataFrame({"price": [7355.0]}))
+@patch(
+    "gex_core.uw_loader.fetch_uw_spot_exposures_intraday",
+    return_value=pd.DataFrame({"price": [7383.85]}),
+)
+@patch("gex_core.uw_loader.fetch_uw_stock_state_price", return_value=7383.85)
+def test_fetch_uw_best_spot_price_prefers_stock_state_live(
+    _mock_state,
+    _mock_intraday,
+    _mock_spot_strike,
+    _mock_spot,
+):
+    assert fetch_uw_best_spot_price("SPX", api_key="test-key") == 7383.85
+
+
+@patch("gex_core.uw_loader.fetch_uw_spot", return_value=7355.0)
+@patch("gex_core.uw_loader.fetch_uw_spot_exposures", return_value=pd.DataFrame({"price": [7355.0]}))
+@patch(
+    "gex_core.uw_loader.fetch_uw_spot_exposures_intraday",
+    return_value=pd.DataFrame({"price": [7385.0]}),
+)
+@patch("gex_core.uw_loader.fetch_uw_stock_state_price", return_value=7383.85)
+def test_fetch_uw_best_spot_price_uses_intraday_for_historical_date(
+    _mock_state,
+    _mock_intraday,
+    _mock_spot_strike,
+    _mock_spot,
+):
+    assert fetch_uw_best_spot_price("SPX", api_key="test-key", date="2026-06-05") == 7385.0
 
 
 @patch("gex_core.uw_loader._get")

@@ -105,16 +105,14 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
     """Build a Periscope snapshot from live UW spot-exposures (matches UW Periscope)."""
     agg = uw_entry["agg"]
     spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
+    spot = safe_float(uw_entry.get("spot"), 0.0)
     if isinstance(spot_df, pd.DataFrame) and not spot_df.empty:
         strike = spot_exposure_net_series(spot_df, "gamma")
-        spot = safe_float(
-            spot_df["price"].dropna().iloc[0] if "price" in spot_df.columns else None,
-            safe_float(uw_entry.get("spot"), 0.0),
-        )
+        if spot <= 0 and "price" in spot_df.columns:
+            spot = safe_float(spot_df["price"].dropna().iloc[0], 0.0)
     else:
         spot_df = None
         strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
-        spot = safe_float(uw_entry.get("spot"), 0.0)
     total_gex = safe_float(
         uw_entry.get("spot_gamma_bn"),
         safe_float(agg.total_gex_bn, float(strike.sum())),

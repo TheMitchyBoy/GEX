@@ -277,6 +277,46 @@ def fetch_uw_spot(
     return float(price)
 
 
+def fetch_uw_best_spot_price(
+    ticker: str,
+    api_key: str | None = None,
+    date: str | None = None,
+) -> float:
+    """
+    Best available UW spot for dashboards.
+
+    ``spot-exposures/strike`` ``price`` can lag the cash index (e.g. SPX close
+    vs stale 7355). Prefer stock-state for live quotes and spot-exposures
+    intraday ``price`` for session/historical slices.
+    """
+    state_price = fetch_uw_stock_state_price(ticker, api_key=api_key)
+
+    minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key, date=date)
+    intraday_price = 0.0
+    if not minute_df.empty and "price" in minute_df.columns:
+        prices = pd.to_numeric(minute_df["price"], errors="coerce").dropna()
+        if not prices.empty:
+            intraday_price = float(prices.iloc[-1])
+
+    if date is None and state_price > 0:
+        return state_price
+    if intraday_price > 0:
+        return intraday_price
+    if state_price > 0:
+        return state_price
+
+    try:
+        spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=date)
+        if not spot_df.empty and "price" in spot_df.columns:
+            prices = pd.to_numeric(spot_df["price"], errors="coerce").dropna()
+            if not prices.empty:
+                return float(prices.iloc[0])
+    except Exception:
+        logger.debug("spot-exposures/strike price fallback failed for %s", ticker, exc_info=True)
+
+    return fetch_uw_spot(ticker, api_key=api_key, date=date)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Greek exposure by strike
 # ─────────────────────────────────────────────────────────────────────────────
@@ -483,9 +523,7 @@ def fetch_uw_gex(
     """
     df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
     spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=date)
-    spot = float(spot_df["price"].dropna().iloc[0]) if not spot_df.empty and "price" in spot_df.columns else fetch_uw_spot(
-        ticker, api_key=api_key, date=date
-    )
+    spot = fetch_uw_best_spot_price(ticker, api_key=api_key, date=date)
     logger.info("UW spot price for %s: %.2f", ticker, spot)
 
     gex_by_expiration = fetch_uw_greek_exposure_by_expiration(ticker, api_key=api_key, date=date)
