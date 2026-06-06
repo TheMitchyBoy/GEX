@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -11,15 +12,23 @@ from gex_core.trading.config import (
     webull_app_key,
     webull_app_secret,
     webull_endpoint,
+    webull_fill_poll_sec,
+    webull_fill_timeout_sec,
     webull_limit_buffer_pct,
+    webull_option_category,
     webull_region,
 )
+from gex_core.trading.execution import build_webull_option_symbol
 from gex_core.trading.paper_broker import estimate_entry_premium, estimate_option_pnl_pct
 
 logger = logging.getLogger(__name__)
 
 _client = None
 _trade_client = None
+_data_client = None
+
+_FILLED = frozenset({"FILLED", "PARTIAL FILLED", "PARTIAL_FILLED", 4, 5, "4", "5"})
+_TERMINAL_BAD = frozenset({"CANCELLED", "FAILED", "REJECTED", 2, 3, "2", "3"})
 
 
 def _ensure_client():
@@ -38,6 +47,17 @@ def _ensure_client():
     return _trade_client
 
 
+def _ensure_data_client():
+    global _data_client
+    if _data_client is not None:
+        return _data_client
+    from webull.data.data_client import DataClient
+
+    _ensure_client()
+    _data_client = DataClient(_client)
+    return _data_client
+
+
 def _response_body(response: Any) -> dict[str, Any]:
     if response is None:
         return {}
@@ -52,6 +72,14 @@ def _response_body(response: Any) -> dict[str, Any]:
     return {"raw": str(response)}
 
 
+def _unwrap_data(body: dict[str, Any]) -> Any:
+    if not isinstance(body, dict):
+        return body
+    if "data" in body:
+        return body["data"]
+    return body
+
+
 def _is_ok(body: dict[str, Any]) -> bool:
     code = body.get("code") or body.get("status")
     if code in (0, "0", 200, "200", "SUCCESS", "success"):
@@ -59,6 +87,202 @@ def _is_ok(body: dict[str, Any]) -> bool:
     if body.get("success") is True:
         return True
     return not body.get("error") and not body.get("msg")
+
+
+def _order_status(order: dict[str, Any]) -> str:
+    status = order.get("status") or order.get("order_status") or order.get("orderStatus") or ""
+    return str(status).upper().replace("_", " ")
+
+
+def _order_filled_qty(order: dict[str, Any]) -> int:
+    for key in ("filled_quantity", "filled_qty", "filledQty", "quantity_filled", "filledQuantity"):
+        val = order.get(key)
+        if val is not None:
+            try:
+                return max(0, int(float(val)))
+            except (TypeError, ValueError):
+                continue
+    status = _order_status(order)
+    if status == "FILLED":
+        for key in ("quantity", "qty", "entrust_qty"):
+            val = order.get(key)
+            if val is not None:
+                try:
+                    return max(1, int(float(val)))
+                except (TypeError, ValueError):
+                    pass
+    return 0
+
+
+def _order_avg_price(order: dict[str, Any]) -> float | None:
+    for key in ("avg_fill_price", "average_price", "filled_price", "price", "limit_price"):
+        val = order.get(key)
+        if val is not None:
+            try:
+                px = float(val)
+                if px > 0:
+                    return px
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _extract_quote(snapshot: dict[str, Any]) -> dict[str, float | None]:
+    ask = bid = last = None
+    for key, target in (
+        ("ask", "ask"),
+        ("ask_price", "ask"),
+        ("best_ask", "ask"),
+        ("bid", "bid"),
+        ("bid_price", "bid"),
+        ("best_bid", "bid"),
+        ("latest_price", "last"),
+        ("last_price", "last"),
+        ("close", "last"),
+        ("trade_price", "last"),
+    ):
+        val = snapshot.get(key)
+        if val is None:
+            continue
+        try:
+            px = float(val)
+        except (TypeError, ValueError):
+            continue
+        if px <= 0:
+            continue
+        if target == "ask":
+            ask = px
+        elif target == "bid":
+            bid = px
+        else:
+            last = px
+    return {"ask": ask, "bid": bid, "last": last}
+
+
+def fetch_option_quote(
+    *,
+    underlying: str,
+    option_type: str,
+    strike: float,
+    expire_date: str,
+) -> dict[str, float | None]:
+    """Fetch bid/ask/last for a single option contract."""
+    symbol = build_webull_option_symbol(
+        underlying=underlying,
+        expire_date=expire_date,
+        option_type=option_type,
+        strike=strike,
+    )
+    try:
+        data = _ensure_data_client()
+        resp = _response_body(
+            data.option_market_data.get_option_snapshot(symbol, webull_option_category())
+        )
+        payload = _unwrap_data(resp)
+        rows: list[Any]
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("items") or payload.get("snapshots") or payload.get("data") or [payload]
+        else:
+            rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_symbol = str(row.get("symbol") or row.get("ticker") or "")
+            if row_symbol and row_symbol != symbol:
+                continue
+            quote = _extract_quote(row)
+            if any(quote.values()):
+                quote["symbol"] = symbol
+                return quote
+        if isinstance(payload, dict) and payload:
+            quote = _extract_quote(payload)
+            quote["symbol"] = symbol
+            return quote
+    except Exception as exc:
+        logger.debug("Webull option quote failed for %s: %s", symbol, exc)
+    return {"ask": None, "bid": None, "last": None, "symbol": symbol}
+
+
+def limit_price_for_buy(
+    spot: float,
+    strike: float,
+    *,
+    side: str = "buy",
+    underlying: str | None = None,
+    option_type: str = "call",
+    expire_date: str | None = None,
+) -> float:
+    """Quote-aware limit price with paper-estimate fallback."""
+    buf = webull_limit_buffer_pct()
+    quote: dict[str, float | None] = {}
+    if underlying and expire_date:
+        quote = fetch_option_quote(
+            underlying=underlying,
+            option_type=option_type,
+            strike=strike,
+            expire_date=expire_date,
+        )
+    if side == "buy":
+        ref = quote.get("ask") or quote.get("last")
+        if ref and ref > 0:
+            return round(float(ref) * (1.0 + buf), 2)
+        est = estimate_entry_premium(spot, strike)
+        return round(max(0.05, est * (1.0 + buf)), 2)
+    ref = quote.get("bid") or quote.get("last")
+    if ref and ref > 0:
+        return round(max(0.01, float(ref) * (1.0 - buf * 0.5)), 2)
+    est = estimate_entry_premium(spot, strike)
+    return round(max(0.01, est * (1.0 - buf * 0.5)), 2)
+
+
+def wait_for_order_fill(
+    client_order_id: str,
+    *,
+    timeout_sec: float | None = None,
+    poll_sec: float | None = None,
+    cancel_on_timeout: bool = True,
+) -> dict[str, Any] | None:
+    """Poll order detail until filled, failed, or timeout."""
+    timeout_sec = timeout_sec if timeout_sec is not None else webull_fill_timeout_sec()
+    poll_sec = poll_sec if poll_sec is not None else webull_fill_poll_sec()
+    trade = _ensure_client()
+    account_id = webull_account_id()
+    deadline = time.time() + timeout_sec
+    last_detail: dict[str, Any] = {}
+
+    while time.time() < deadline:
+        detail = _response_body(trade.order_v2.get_order_detail(account_id, client_order_id))
+        if not _is_ok(detail):
+            time.sleep(poll_sec)
+            continue
+        order_raw = _unwrap_data(detail)
+        order = order_raw if isinstance(order_raw, dict) else {}
+        if isinstance(order_raw, list) and order_raw:
+            order = order_raw[0] if isinstance(order_raw[0], dict) else {}
+        last_detail = order
+        status = _order_status(order)
+        filled_qty = _order_filled_qty(order)
+        if status in _FILLED or filled_qty > 0:
+            avg = _order_avg_price(order)
+            return {
+                "status": status,
+                "filled_qty": filled_qty or int(float(order.get("quantity") or order.get("qty") or 1)),
+                "filled_premium": avg,
+                "order": order,
+                "detail": detail,
+            }
+        if status in _TERMINAL_BAD:
+            return None
+        time.sleep(poll_sec)
+
+    if cancel_on_timeout:
+        try:
+            trade.order_v2.cancel_option(account_id, client_order_id)
+        except Exception as exc:
+            logger.warning("Webull cancel after timeout failed for %s: %s", client_order_id, exc)
+    return None
 
 
 def build_option_order(
@@ -125,6 +349,7 @@ class WebullBroker:
         limit_price: float,
         spot: float,
     ) -> dict[str, Any]:
+        del spot  # quote path uses option chain; spot kept for interface compatibility
         client_order_id = uuid.uuid4().hex
         order = build_option_order(
             client_order_id=client_order_id,
@@ -144,16 +369,35 @@ class WebullBroker:
             return {"ok": False, "stage": "preview", "response": preview, "client_order_id": client_order_id}
 
         placed = _response_body(trade.order_v2.place_option(account_id, [order]))
-        ok = _is_ok(placed)
-        if not ok:
+        if not _is_ok(placed):
             logger.error("Webull place_option failed: %s", placed)
+            return {"ok": False, "stage": "place", "response": placed, "client_order_id": client_order_id}
+
+        fill = wait_for_order_fill(client_order_id)
+        if not fill:
+            return {
+                "ok": False,
+                "stage": "fill_timeout",
+                "client_order_id": client_order_id,
+                "limit_price": limit_price,
+                "preview": preview,
+                "response": placed,
+                "broker": self.name,
+            }
+
+        filled_premium = float(fill.get("filled_premium") or limit_price)
+        filled_qty = int(fill.get("filled_qty") or quantity)
         return {
-            "ok": ok,
-            "stage": "place",
+            "ok": True,
+            "stage": "filled",
             "client_order_id": client_order_id,
             "limit_price": limit_price,
+            "filled_premium": filled_premium,
+            "filled_qty": filled_qty,
+            "fill_status": fill.get("status"),
             "preview": preview,
             "response": placed,
+            "fill_detail": fill,
             "broker": self.name,
         }
 
@@ -168,7 +412,8 @@ class WebullBroker:
         limit_price: float,
         client_order_id: str | None = None,
     ) -> dict[str, Any]:
-        cid = (client_order_id or uuid.uuid4().hex)[:32]
+        del client_order_id  # always use a fresh id for sell orders
+        cid = uuid.uuid4().hex[:32]
         order = build_option_order(
             client_order_id=cid,
             symbol=underlying,
@@ -180,11 +425,29 @@ class WebullBroker:
             limit_price=max(0.01, limit_price),
         )
         trade = _ensure_client()
-        placed = _response_body(trade.order_v2.place_option(self._account(), [order]))
-        ok = _is_ok(placed)
+        account_id = self._account()
+        placed = _response_body(trade.order_v2.place_option(account_id, [order]))
+        if not _is_ok(placed):
+            return {"ok": False, "stage": "place", "client_order_id": cid, "response": placed, "broker": self.name}
+
+        fill = wait_for_order_fill(client_order_id=cid, cancel_on_timeout=False)
+        if fill:
+            filled_premium = float(fill.get("filled_premium") or limit_price)
+            filled_qty = int(fill.get("filled_qty") or quantity)
+            return {
+                "ok": True,
+                "stage": "filled",
+                "client_order_id": cid,
+                "limit_price": limit_price,
+                "filled_premium": filled_premium,
+                "filled_qty": filled_qty,
+                "response": placed,
+                "fill_detail": fill,
+                "broker": self.name,
+            }
         return {
-            "ok": ok,
-            "stage": "sell",
+            "ok": True,
+            "stage": "submitted",
             "client_order_id": cid,
             "limit_price": limit_price,
             "response": placed,
@@ -231,11 +494,3 @@ class WebullBroker:
             current_spot=spot,
             strike=float(trade["strike"]),
         )
-
-
-def limit_price_for_buy(spot: float, strike: float, *, side: str = "buy") -> float:
-    est = estimate_entry_premium(spot, strike)
-    buf = webull_limit_buffer_pct()
-    if side == "buy":
-        return round(est * (1.0 + buf), 2)
-    return round(max(0.01, est * (1.0 - buf * 0.5)), 2)

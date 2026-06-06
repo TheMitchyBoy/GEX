@@ -208,6 +208,15 @@ def close_trade(
         conn.commit()
 
 
+def reduce_trade_qty(trade_id: int, new_qty: float) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE trades SET qty = ? WHERE id = ? AND status = 'open'",
+            (max(0.0, float(new_qty)), trade_id),
+        )
+        conn.commit()
+
+
 def list_open_trades(ticker: str | None = None) -> list[dict[str, Any]]:
     with _connect() as conn:
         if ticker:
@@ -252,7 +261,7 @@ def strike_stop_cooldown_active(
             continue
         if str(trade.get("exit_reason", "")) != "stop_loss":
             continue
-        if float(trade.get("strike") or 0) != float(strike):
+        if float(trade.get("signal_strike") or trade.get("strike") or 0) != float(strike):
             continue
         if str(trade.get("option_type", "")).lower() != opt:
             continue

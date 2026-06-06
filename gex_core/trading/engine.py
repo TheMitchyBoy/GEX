@@ -13,9 +13,11 @@ from gex_core.trading.advisor import advise_entry, build_suggestions
 from gex_core.trading.broker import broker_mode_label, get_broker
 from gex_core.trading.config import (
     auto_trader_enabled,
+    execution_ticker,
     live_trading_allowed,
     max_open_positions,
     paper_trading_only,
+    signal_ticker,
     stop_loss_pct,
     take_profit_pct,
     trader_bar_minutes,
@@ -23,6 +25,7 @@ from gex_core.trading.config import (
     trader_session_only,
     webull_underlying,
 )
+from gex_core.trading.execution import execution_summary, map_execution_strike, resolve_execution_spot
 from gex_core.trading.exits import ExitProfile, ExitState, build_exit_profile, contracts_for_confidence, evaluate_exit
 from gex_core.trading.filters import MarketContext, market_context_from_snapshot
 from gex_core.trading.journal import (
@@ -33,6 +36,7 @@ from gex_core.trading.journal import (
     open_trade,
     patch_trade_meta,
     record_decision,
+    reduce_trade_qty,
     set_trader_armed,
     strike_stop_cooldown_active,
 )
@@ -56,6 +60,8 @@ def trader_status(ticker: str = "SPX") -> dict[str, Any]:
         "paper_mode": paper_trading_only(),
         "live_mode": live_trading_allowed(),
         "broker_mode": mode,
+        "signal_ticker": signal_ticker(),
+        "execution_ticker": execution_ticker(),
         "webull_underlying": webull_underlying(),
         "stop_loss_pct": stop_loss_pct(),
         "take_profit_pct": take_profit_pct(),
@@ -100,12 +106,104 @@ def _exit_profile_from_meta(meta: dict[str, Any], pos: dict[str, Any]) -> ExitPr
     )
 
 
+def _uses_execution_mapping() -> bool:
+    return execution_ticker().upper() != signal_ticker().upper()
+
+
+def _resolve_execution_context(signal_spot: float) -> tuple[float, str]:
+    underlying = webull_underlying()
+    exec_spot = resolve_execution_spot(signal_spot=signal_spot)
+    if exec_spot is None or exec_spot <= 0:
+        exec_spot = float(signal_spot)
+    return float(exec_spot), underlying
+
+
+def _apply_exit(
+    *,
+    ticker: str,
+    pos: dict[str, Any],
+    meta: dict[str, Any],
+    spot: float,
+    exit_reason: str,
+    exit_pnl: float,
+    sell_qty: int,
+    broker: Any,
+) -> dict[str, Any] | None:
+    entry_premium = float(pos["entry_premium"])
+    exit_premium = mark_to_market_premium(entry_premium, exit_pnl)
+    qty = int(pos.get("qty") or 1)
+    underlying = meta.get("underlying") or webull_underlying()
+    expire_date = meta.get("expire_date") or _option_expire_date()
+    strike = float(pos["strike"])
+
+    if live_trading_allowed():
+        sell_limit = limit_price_for_buy(
+            spot,
+            strike,
+            side="sell",
+            underlying=underlying,
+            option_type=str(pos["option_type"]),
+            expire_date=expire_date,
+        )
+        sell_result = broker.sell_option(
+            underlying=underlying,
+            option_type=pos["option_type"],
+            strike=strike,
+            expire_date=expire_date,
+            quantity=sell_qty,
+            limit_price=sell_limit,
+        )
+        if not sell_result.get("ok"):
+            logger.error("Webull sell failed for trade %s: %s", pos["id"], sell_result)
+            record_decision(
+                ticker=ticker,
+                action="exit_failed",
+                payload={"trade_id": pos["id"], "sell_result": sell_result},
+                ai_verdict="error",
+            )
+            return None
+        exit_premium = float(sell_result.get("filled_premium") or sell_limit)
+
+    usd = pnl_usd(entry_premium, exit_premium, sell_qty)
+    is_partial = exit_reason == "take_profit_partial" and sell_qty < qty
+    if is_partial:
+        reduce_trade_qty(int(pos["id"]), qty - sell_qty)
+        patch_trade_meta(int(pos["id"]), {"partial_taken": True, "partial_pnl_usd": usd})
+        record_decision(
+            ticker=ticker,
+            action="exit_partial",
+            payload={"trade_id": pos["id"], "pnl_pct": exit_pnl, "reason": exit_reason, "sold_qty": sell_qty},
+            ai_verdict="partial",
+            ai_notes=f"Partial exit {exit_reason} at {exit_pnl:+.1%}",
+        )
+        return {"trade_id": pos["id"], "exit_reason": exit_reason, "pnl_pct": exit_pnl, "partial": True}
+
+    close_trade(
+        int(pos["id"]),
+        exit_spot=spot,
+        exit_premium=exit_premium,
+        pnl_pct=exit_pnl,
+        pnl_usd=usd,
+        exit_reason=exit_reason,
+    )
+    record_decision(
+        ticker=ticker,
+        action="exit",
+        payload={"trade_id": pos["id"], "pnl_pct": exit_pnl, "reason": exit_reason, "broker": broker.name},
+        ai_verdict="closed",
+        ai_notes=f"Exit {exit_reason} at {exit_pnl:+.1%}",
+    )
+    return {"trade_id": pos["id"], "exit_reason": exit_reason, "pnl_pct": exit_pnl}
+
+
 def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
     broker = get_broker()
     exits: list[dict[str, Any]] = []
     bar_minutes = trader_bar_minutes()
+    exec_spot, _ = _resolve_execution_context(signal_spot=spot)
+    mark_spot = exec_spot if _uses_execution_mapping() else spot
     for pos in list_open_trades(ticker):
-        pnl_pct = broker.position_pnl_pct(pos, spot=spot)
+        pnl_pct = broker.position_pnl_pct(pos, spot=mark_spot)
         if pnl_pct is None:
             continue
 
@@ -119,7 +217,7 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
             bars_held=bars_held,
             entry_spot=float(pos["entry_spot"]),
             strike=float(pos["strike"]),
-            current_spot=float(spot),
+            current_spot=float(mark_spot),
             option_type=str(pos["option_type"]),
             profile=profile,
         )
@@ -133,49 +231,25 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
         if not exit_reason:
             continue
 
-        entry_premium = float(pos["entry_premium"])
-        exit_premium = mark_to_market_premium(entry_premium, exit_pnl)
         qty = int(pos.get("qty") or 1)
+        sell_qty = qty
+        if exit_reason == "take_profit_partial" and qty > 1:
+            sell_qty = max(1, qty // 2)
+        elif exit_reason == "take_profit_partial":
+            exit_reason = "take_profit"
 
-        if live_trading_allowed():
-            sell_limit = max(0.01, entry_premium * (1.0 + exit_pnl) * 0.98)
-            sell_result = broker.sell_option(
-                underlying=meta.get("underlying") or webull_underlying(),
-                option_type=pos["option_type"],
-                strike=float(pos["strike"]),
-                expire_date=meta.get("expire_date") or _option_expire_date(),
-                quantity=qty,
-                limit_price=sell_limit,
-                client_order_id=meta.get("webull_client_order_id"),
-            )
-            if not sell_result.get("ok"):
-                logger.error("Webull sell failed for trade %s: %s", pos["id"], sell_result)
-                record_decision(
-                    ticker=ticker,
-                    action="exit_failed",
-                    payload={"trade_id": pos["id"], "sell_result": sell_result},
-                    ai_verdict="error",
-                )
-                continue
-            exit_premium = sell_limit
-
-        usd = pnl_usd(entry_premium, exit_premium, qty)
-        close_trade(
-            int(pos["id"]),
-            exit_spot=spot,
-            exit_premium=exit_premium,
-            pnl_pct=exit_pnl,
-            pnl_usd=usd,
-            exit_reason=exit_reason,
-        )
-        record_decision(
+        result = _apply_exit(
             ticker=ticker,
-            action="exit",
-            payload={"trade_id": pos["id"], "pnl_pct": exit_pnl, "reason": exit_reason, "broker": broker.name},
-            ai_verdict="closed",
-            ai_notes=f"Exit {exit_reason} at {exit_pnl:+.1%}",
+            pos=pos,
+            meta=meta,
+            spot=mark_spot,
+            exit_reason=exit_reason,
+            exit_pnl=exit_pnl,
+            sell_qty=sell_qty,
+            broker=broker,
         )
-        exits.append({"trade_id": pos["id"], "exit_reason": exit_reason, "pnl_pct": exit_pnl})
+        if result:
+            exits.append(result)
     return exits
 
 
@@ -209,9 +283,9 @@ def _maybe_enter(
 
     rec = signals["recommended"]
     option_type = advice.get("option_type") or rec["option_type"]
-    strike = float(rec["strike"])
-    if strike_stop_cooldown_active(ticker, strike, str(option_type)):
-        return {"action": "skipped", "reason": f"Cooldown active after stop at {strike:.0f}", "advice": advice}
+    signal_strike = float(rec["strike"])
+    if strike_stop_cooldown_active(ticker, signal_strike, str(option_type)):
+        return {"action": "skipped", "reason": f"Cooldown active after stop at {signal_strike:.0f}", "advice": advice}
 
     broker = get_broker()
     confidence = float(advice.get("confidence", 0.5))
@@ -219,12 +293,21 @@ def _maybe_enter(
     underlying = webull_underlying()
     expire_date = _option_expire_date()
     regime = str((market.regime if market else "") or "")
+
+    exec_spot, _ = _resolve_execution_context(signal_spot=spot)
+    exec_strike = (
+        map_execution_strike(signal_strike, signal_spot=spot, execution_spot=exec_spot)
+        if _uses_execution_mapping()
+        else signal_strike
+    )
+    exec_map = execution_summary(signal_strike=signal_strike, signal_spot=spot, execution_spot=exec_spot)
+
     exit_profile = build_exit_profile(
         ai_confidence=confidence,
         gamma_delta=float(rec["gamma_delta"]),
         regime=regime,
-        entry_spot=float(spot),
-        strike=strike,
+        entry_spot=float(exec_spot if _uses_execution_mapping() else spot),
+        strike=float(exec_strike),
     )
     profile_meta = {
         "hold_for_target": exit_profile.hold_for_target,
@@ -236,18 +319,30 @@ def _maybe_enter(
     }
 
     if live_trading_allowed():
-        limit_price = limit_price_for_buy(spot, strike, side="buy")
+        limit_price = limit_price_for_buy(
+            exec_spot,
+            exec_strike,
+            side="buy",
+            underlying=underlying,
+            option_type=str(option_type),
+            expire_date=expire_date,
+        )
         order = broker.buy_option(
             underlying=underlying,
             option_type=option_type,
-            strike=strike,
+            strike=exec_strike,
             expire_date=expire_date,
             quantity=qty,
             limit_price=limit_price,
-            spot=spot,
+            spot=exec_spot,
         )
         if not order.get("ok"):
-            return {"action": "order_failed", "reason": "Webull order rejected", "order": order, "advice": advice}
+            reason = order.get("stage") or "Webull order rejected"
+            return {"action": "order_failed", "reason": reason, "order": order, "advice": advice}
+        filled_qty = int(order.get("filled_qty") or qty)
+        if filled_qty <= 0:
+            return {"action": "order_failed", "reason": "No fill received", "order": order, "advice": advice}
+        qty = filled_qty
         premium = float(order.get("filled_premium") or order.get("limit_price") or limit_price)
         meta = {
             "paper": False,
@@ -255,25 +350,25 @@ def _maybe_enter(
             "underlying": underlying,
             "expire_date": expire_date,
             "webull_client_order_id": order.get("client_order_id"),
+            "execution_map": exec_map,
             "signals": signals,
-            "order": {"preview": order.get("preview"), "response": order.get("response")},
+            "order": {"preview": order.get("preview"), "response": order.get("response"), "fill": order.get("fill_detail")},
             "peak_pnl_pct": 0.0,
             "partial_taken": False,
-            "bars_held": 0,
             "regime": regime,
             "exit_profile": profile_meta,
         }
     else:
-        premium = estimate_entry_premium(spot, strike)
+        premium = estimate_entry_premium(exec_spot if _uses_execution_mapping() else spot, exec_strike)
         meta = {
             "paper": True,
             "broker": "paper",
             "underlying": underlying,
             "expire_date": expire_date,
+            "execution_map": exec_map if _uses_execution_mapping() else None,
             "signals": signals,
             "peak_pnl_pct": 0.0,
             "partial_taken": False,
-            "bars_held": 0,
             "regime": regime,
             "exit_profile": profile_meta,
         }
@@ -281,11 +376,11 @@ def _maybe_enter(
     trade_id = open_trade(
         ticker=ticker,
         option_type=option_type,
-        strike=strike,
-        entry_spot=spot,
+        strike=exec_strike,
+        entry_spot=exec_spot if _uses_execution_mapping() else spot,
         entry_premium=premium,
         signal_type=rec["signal_type"],
-        signal_strike=strike,
+        signal_strike=signal_strike,
         signal_gamma=float(rec["gamma_bn"]),
         gamma_delta=float(rec["gamma_delta"]),
         ai_confidence=float(advice.get("confidence", 0.5)),
@@ -300,7 +395,9 @@ def _maybe_enter(
         "action": "opened",
         "trade_id": trade_id,
         "option_type": option_type,
-        "strike": strike,
+        "strike": exec_strike,
+        "signal_strike": signal_strike,
+        "execution_map": exec_map,
         "premium": premium,
         "broker": broker.name,
         "advice": advice,

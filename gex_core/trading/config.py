@@ -232,9 +232,41 @@ def webull_endpoint() -> str:
     return os.environ.get("GEX_WEBULL_ENDPOINT", "us-openapi.webullbroker.com").strip()
 
 
+def signal_ticker() -> str:
+    """Ticker used for gamma signals and GEX data (default SPX)."""
+    return os.environ.get("GEX_SIGNAL_TICKER", "SPX").strip().upper() or "SPX"
+
+
+def execution_ticker() -> str:
+    """Underlying symbol for live/paper option orders (default SPY)."""
+    raw = os.environ.get("GEX_EXECUTION_TICKER", os.environ.get("GEX_WEBULL_UNDERLYING", "SPY"))
+    return raw.strip().upper() or "SPY"
+
+
+def webull_fill_timeout_sec() -> float:
+    try:
+        return max(5.0, float(os.environ.get("GEX_WEBULL_FILL_TIMEOUT_SEC", "45")))
+    except (TypeError, ValueError):
+        return 45.0
+
+
+def webull_fill_poll_sec() -> float:
+    try:
+        return max(0.5, float(os.environ.get("GEX_WEBULL_FILL_POLL_SEC", "2")))
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def webull_option_category() -> str:
+    return os.environ.get("GEX_WEBULL_OPTION_CATEGORY", "US_OPTION").strip() or "US_OPTION"
+
+
 def webull_underlying() -> str:
-    """Webull option root symbol (SPX index options often SPX / SPXW)."""
-    return os.environ.get("GEX_WEBULL_UNDERLYING", "SPX").strip().upper() or "SPX"
+    """Webull option root symbol — defaults to execution ticker (SPY)."""
+    raw = os.environ.get("GEX_WEBULL_UNDERLYING", "")
+    if raw.strip():
+        return raw.strip().upper()
+    return execution_ticker()
 
 
 def webull_contracts() -> int:

@@ -1667,8 +1667,18 @@ def start_background_refresh():
 
 deferred_web_startup(
     refresh_fn=start_background_refresh,
-    price_stream_fn=lambda: start_uw_price_stream(REFRESH_TICKERS),
+    price_stream_fn=lambda: start_uw_price_stream(_price_stream_tickers()),
 )
+
+
+def _price_stream_tickers() -> list[str]:
+    from gex_core.trading.config import execution_ticker, signal_ticker
+
+    tickers = list(REFRESH_TICKERS)
+    for symbol in (signal_ticker(), execution_ticker()):
+        if symbol and symbol not in tickers:
+            tickers.append(symbol)
+    return tickers
 
 
 if __name__ == "__main__":
