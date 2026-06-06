@@ -48,6 +48,7 @@ from gex_core.market_features import (
     fetch_spx_price_history,
     fetch_spx_price_series_for_dashboard,
 )
+from gex_core.startup import deferred_web_startup
 from gex_core.uw_price_stream import start_uw_price_stream
 from gex_core.intelligence import (
     build_gamma_analysis_panel,
@@ -243,12 +244,8 @@ def _dashboard_history(ticker: str) -> list[dict]:
 
 
 def _dashboard_skip_backtest() -> bool:
-    return os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    raw = os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _prediction_history(ticker: str) -> list[dict]:
@@ -1058,8 +1055,10 @@ def start_background_refresh():
         )
 
 
-start_background_refresh()
-start_uw_price_stream(REFRESH_TICKERS)
+deferred_web_startup(
+    refresh_fn=start_background_refresh,
+    price_stream_fn=lambda: start_uw_price_stream(REFRESH_TICKERS),
+)
 
 
 if __name__ == "__main__":
