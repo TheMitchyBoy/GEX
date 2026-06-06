@@ -14,9 +14,8 @@ def test_index_renders_periscope_dashboard():
     client = APP.test_client()
     response = client.get("/")
     assert response.status_code == 200
-    assert b"PERISCOPE" in response.data
-    assert b"10 min" in response.data
-    assert b"sessionDate" in response.data
+    assert b"Gamma Ladder" in response.data
+    assert b"gexLadderChart" in response.data
 
 
 def test_api_periscope_returns_json():

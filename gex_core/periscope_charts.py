@@ -1,11 +1,8 @@
 """
 Periscope charts tuned for options / dealer-gamma trading.
 
-Four focused panels:
-  1. Session price
-  2. Net exposure by strike (ATM vertical profile + key levels)
-  3. 10-minute change vs prior slice
-  4. Cumulative exposure (gamma flip visualization)
+Primary view: symmetric strike ladder (gamma spans outward from center spine).
+Legacy panels remain available via build_periscope_charts for tests/API use.
 """
 
 from __future__ import annotations
@@ -91,6 +88,112 @@ def _strike_tick_step(strikes: list[float]) -> float | None:
     if step <= 10:
         return 25.0
     return 50.0
+
+
+def _symmetric_x_range(values: list[float], pad: float = 1.15) -> list[float]:
+    if not values:
+        return [-1, 1]
+    m = max(abs(min(values)), abs(max(values)), 0.05)
+    m *= pad
+    return [-m, m]
+
+
+def strike_ladder_chart(
+    series: pd.Series | None,
+    *,
+    spot: float | None,
+    exposure_type: str = "gamma",
+    gamma_flip: float | None = None,
+    max_bars: int = _PROFILE_BARS,
+) -> str | None:
+    """Symmetric GEX ladder — strikes on center spine, gamma bars span left/right."""
+    if series is None or series.empty:
+        return None
+
+    window = _atm_series(series, spot, max_bars=max_bars)
+    if window.empty:
+        return None
+
+    strikes = [float(s) for s in window.index]
+    values = [float(v) for v in window.values]
+    colors = [_GREEN if v >= 0 else _RED for v in values]
+    bar_w = _bar_width(strikes)
+    x_range = _symmetric_x_range(values)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            y=strikes,
+            x=values,
+            orientation="h",
+            width=bar_w,
+            marker=dict(color=colors, line=dict(width=0)),
+            opacity=0.92,
+            hovertemplate="Strike %{y:.0f}<br>Net %{x:.3f} Bn<extra></extra>",
+            name="exposure",
+        )
+    )
+
+    # Center spine at zero gamma — strike ladder axis
+    fig.add_vline(x=0, line=dict(color="rgba(226, 232, 240, 0.55)", width=2))
+    for strike in strikes:
+        fig.add_annotation(
+            x=0,
+            y=strike,
+            xref="x",
+            yref="y",
+            text=f"{int(strike)}",
+            showarrow=False,
+            font=dict(size=9, color=_TEXT),
+            xanchor="center",
+            bgcolor="rgba(13, 17, 23, 0.85)",
+            borderpad=2,
+        )
+
+    if spot and spot > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=x_range,
+                y=[spot, spot],
+                mode="lines",
+                line=dict(color=_AMBER, width=2.5),
+                name="spot-line",
+                uid="spot-line",
+                hovertemplate=f"Spot %{{y:.2f}}<extra></extra>",
+                showlegend=False,
+            )
+        )
+
+    if gamma_flip is not None:
+        flip = _f(gamma_flip, 0.0)
+        if min(strikes) <= flip <= max(strikes):
+            fig.add_hline(y=flip, line=dict(color="rgba(226,232,240,0.35)", width=1, dash="dot"))
+
+    tick_step = _strike_tick_step(strikes)
+    yaxis = dict(
+        autorange=False,
+        range=[min(strikes) - (bar_w or 5) * 0.6, max(strikes) + (bar_w or 5) * 0.6],
+        showticklabels=False,
+        showgrid=True,
+        gridcolor=_GRID,
+        zeroline=False,
+    )
+    if tick_step:
+        yaxis["dtick"] = tick_step
+
+    fig.update_layout(
+        **_layout(height=720, title=_EXPOSURE_TITLE.get(exposure_type, "Exposure")),
+        bargap=0.08,
+        xaxis=dict(
+            title=dict(text="Bn$ / 1% move", font=dict(size=10, color=_MUTED)),
+            range=x_range,
+            zeroline=False,
+            gridcolor=_GRID,
+            tickfont=dict(size=10, color=_MUTED),
+        ),
+        yaxis=yaxis,
+    )
+    return _encode(fig)
 
 
 def _symmetric_y_range(values: list[float], pad: float = 1.15) -> list[float]:
@@ -424,10 +527,11 @@ def dealer_positions_chart(positions: dict[str, float] | None) -> str | None:
 
 @dataclass(frozen=True)
 class PeriscopeChartBundle:
-    price: str | None
-    exposures: str | None
-    change: str | None
-    cumulative: str | None
+    ladder: str | None
+    price: str | None = None
+    exposures: str | None = None
+    change: str | None = None
+    cumulative: str | None = None
     positions: str | None = None
 
 
@@ -452,6 +556,12 @@ def build_periscope_charts(
     cum_source = extended if len(extended) > len(profile) else profile
 
     return PeriscopeChartBundle(
+        ladder=strike_ladder_chart(
+            profile,
+            spot=spot,
+            exposure_type=exposure_type,
+            gamma_flip=gamma_flip,
+        ),
         price=session_price_chart(price_points, spot=spot, highlight_label=highlight_label),
         exposures=exposure_by_strike_chart(
             profile,

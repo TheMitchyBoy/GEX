@@ -10,6 +10,7 @@ from gex_core.periscope_charts import (
     exposure_by_strike_chart,
     exposure_change_chart,
     session_price_chart,
+    strike_ladder_chart,
 )
 
 
@@ -71,6 +72,17 @@ def test_dealer_positions_chart_vertical_bars():
     assert payload["data"][0].get("orientation") != "h"
 
 
+def test_strike_ladder_chart_horizontal_bars_from_center():
+    series = pd.Series([0.8, -0.5, 0.3, -0.2], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    payload = json.loads(strike_ladder_chart(series, spot=7395.0, gamma_flip=7390.0))
+    assert payload["data"][0]["orientation"] == "h"
+    assert payload["data"][0]["x"][0] == 0.8
+    assert payload["data"][0]["x"][1] == -0.5
+    spot_trace = next(t for t in payload["data"] if t.get("uid") == "spot-line")
+    assert spot_trace["y"] == [7395.0, 7395.0]
+    assert any(a.get("x") == 0 for a in payload["layout"].get("annotations", []))
+
+
 def test_build_periscope_charts_bundle():
     profile = pd.Series([1.0, -1.0], index=[7380.0, 7400.0])
     bundle = build_periscope_charts(
@@ -85,6 +97,7 @@ def test_build_periscope_charts_bundle():
         mm_positions={"net_call_gex_bn": 1.0, "net_put_gex_bn": -1.0, "net_call_delta_bn": 0.0, "net_put_delta_bn": 0.0},
         gamma_flip=7390.0,
     )
+    assert bundle.ladder is not None
     assert bundle.price is not None
     assert bundle.exposures is not None
     assert bundle.change is not None

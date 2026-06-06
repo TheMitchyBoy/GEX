@@ -18,6 +18,7 @@
         --accent: #3b82f6;
         --green: #10b981;
         --red: #ef4444;
+        --amber: #f59e0b;
       }
       body {
         min-height: 100vh;
@@ -43,23 +44,22 @@
         letter-spacing: 0.01em;
       }
       .uw-panel-body { padding: 0.25rem 0.35rem 0.35rem; }
-      .uw-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.75rem;
-      }
-      .uw-grid-extended { grid-template-columns: 5fr 7fr; }
-      @media (max-width: 991px) {
-        .uw-grid, .uw-grid-extended { grid-template-columns: 1fr; }
-      }
-      #priceChart, #exposureChart, #changeChart, #cumulativeChart { min-height: 400px; }
-      #positionsChart { min-height: 320px; }
+      #gexLadderChart { min-height: 720px; }
       .chip {
         border-radius: 999px;
         border: 1px solid rgba(59,130,246,0.35);
         color: #93c5fd;
         font-size: 0.68rem;
         padding: 0.15rem 0.5rem;
+      }
+      .chip.live-pulse {
+        border-color: rgba(245, 158, 11, 0.5);
+        color: var(--amber);
+        animation: pulse 2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.55; }
       }
       .exposure-toggle .btn {
         font-size: 0.75rem;
@@ -76,6 +76,7 @@
       .regime-short { color: var(--red); }
       .mono { font-family: ui-monospace, monospace; }
       .muted { color: var(--muted); }
+      .spot-live { color: var(--amber); }
       .time-nav .form-control, .time-nav .form-select {
         background: #06080d;
         border-color: var(--border);
@@ -111,7 +112,11 @@
             <div class="d-flex gap-2 mb-2">
               <span class="chip">PERISCOPE</span>
               <span class="chip">SPX</span>
-              {% if timeline.is_latest %}<span class="chip">LIVE</span>{% else %}<span class="chip">REPLAY</span>{% endif %}
+              {% if timeline.is_latest %}
+              <span class="chip live-pulse" id="liveChip">LIVE</span>
+              {% else %}
+              <span class="chip">REPLAY</span>
+              {% endif %}
             </div>
             <h1 class="h5 mb-1">Market Maker Exposure</h1>
             <div class="small muted">{{ data_source }}</div>
@@ -124,7 +129,7 @@
           </div>
         </div>
         <div class="d-flex flex-wrap gap-3 mt-2 small">
-          <span><strong>Spot</strong> <span class="mono">{{ '%.2f'|format(spot) if spot else 'N/A' }}</span></span>
+          <span><strong>Spot</strong> <span class="mono spot-live" id="spotValue">{{ '%.2f'|format(spot) if spot else 'N/A' }}</span></span>
           <span><strong>Regime</strong> <span class="{{ 'regime-long' if 'LONG' in regime else 'regime-short' }}">{{ regime }}</span></span>
           <span><strong>Net GEX</strong> <span class="mono">{{ '%+.3f'|format(total_gex) }} Bn$</span></span>
           <span><strong>Flip</strong> <span class="mono">{{ '%.0f'|format(gamma_flip) if gamma_flip else 'N/A' }}</span></span>
@@ -164,37 +169,13 @@
       </section>
       {% endif %}
 
-      <section class="uw-grid mb-3">
-        <div class="uw-panel">
-          <div class="uw-panel-head"><span>Session Price</span></div>
-          <div class="uw-panel-body"><div id="priceChart"></div></div>
-        </div>
-        <div class="uw-panel">
-          <div class="uw-panel-head">
-            <span>Exposure by Strike · {{ exposure|title }}</span>
-            <span class="small muted fw-normal">● prior 10m</span>
-          </div>
-          <div class="uw-panel-body"><div id="exposureChart"></div></div>
-        </div>
-      </section>
-
-      <section class="uw-grid mb-3">
-        <div class="uw-panel">
-          <div class="uw-panel-head"><span>10m Change · {{ exposure|title }}</span></div>
-          <div class="uw-panel-body"><div id="changeChart"></div></div>
-        </div>
-        <div class="uw-panel">
-          <div class="uw-panel-head"><span>Cumulative Exposure · Gamma Flip</span></div>
-          <div class="uw-panel-body"><div id="cumulativeChart"></div></div>
-        </div>
-      </section>
-
-      {% if positions_chart_json %}
       <section class="uw-panel mb-3">
-        <div class="uw-panel-head"><span>Dealer Positioning (Net)</span></div>
-        <div class="uw-panel-body"><div id="positionsChart"></div></div>
+        <div class="uw-panel-head">
+          <span>Gamma Ladder · {{ exposure|title }}</span>
+          <span class="small muted fw-normal">center = strikes · bars = net exposure · amber = spot</span>
+        </div>
+        <div class="uw-panel-body"><div id="gexLadderChart"></div></div>
       </section>
-      {% endif %}
 
       <section class="uw-panel p-3 agent-card">
         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -213,27 +194,54 @@
     </main>
 
     <script>
-      const charts = {
-        price: {{ price_chart_json|safe if price_chart_json else 'null' }},
-        exposure: {{ exposure_chart_json|safe if exposure_chart_json else 'null' }},
-        change: {{ change_chart_json|safe if change_chart_json else 'null' }},
-        cumulative: {{ cumulative_chart_json|safe if cumulative_chart_json else 'null' }},
-        positions: {{ positions_chart_json|safe if positions_chart_json else 'null' }},
-      };
+      const ladderSpec = {{ ladder_chart_json|safe if ladder_chart_json else 'null' }};
       const plotConfig = {responsive: true, displayModeBar: false};
       const exposure = '{{ exposure }}';
       const timelineData = {{ timeline|tojson }};
       const chatWelcome = {{ chat_welcome|tojson }};
+      const isLiveSlice = {{ is_live_slice|tojson }};
+      const ticker = '{{ ticker }}';
 
-      function renderChart(el, spec) {
-        if (!spec || !el) return;
-        Plotly.newPlot(el, spec.data, spec.layout || {}, plotConfig);
+      let spotTraceIndex = -1;
+      const ladderEl = document.getElementById('gexLadderChart');
+
+      function findSpotTraceIndex(data) {
+        if (!data) return -1;
+        return data.findIndex(t => t.uid === 'spot-line' || t.name === 'spot-line');
       }
-      renderChart(document.getElementById('priceChart'), charts.price);
-      renderChart(document.getElementById('exposureChart'), charts.exposure);
-      renderChart(document.getElementById('changeChart'), charts.change);
-      renderChart(document.getElementById('cumulativeChart'), charts.cumulative);
-      renderChart(document.getElementById('positionsChart'), charts.positions);
+
+      function renderLadder() {
+        if (!ladderSpec || !ladderEl) return;
+        Plotly.newPlot(ladderEl, ladderSpec.data, ladderSpec.layout || {}, plotConfig).then(() => {
+          spotTraceIndex = findSpotTraceIndex(ladderEl.data);
+        });
+      }
+
+      function updateSpotLine(price) {
+        if (!price || price <= 0) return;
+        const spotEl = document.getElementById('spotValue');
+        if (spotEl) spotEl.textContent = Number(price).toFixed(2);
+        if (!ladderEl || spotTraceIndex < 0) return;
+        Plotly.restyle(ladderEl, {y: [[price, price]]}, [spotTraceIndex]);
+      }
+
+      function startSpotStream() {
+        if (!isLiveSlice) return;
+        const source = new EventSource('/api/spot-stream?ticker=' + encodeURIComponent(ticker));
+        source.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.spot) updateSpotLine(data.spot);
+          } catch (_) {}
+        };
+        source.onerror = () => {
+          source.close();
+          window.setTimeout(startSpotStream, 5000);
+        };
+      }
+
+      renderLadder();
+      startSpotStream();
 
       function navigateTime({ ts = null, date = null } = {}) {
         const params = new URLSearchParams();

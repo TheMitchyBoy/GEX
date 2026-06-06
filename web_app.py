@@ -9,6 +9,7 @@ runs weighted-KNN forecasts, and optionally auto-refreshes via APScheduler when
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import os
 import secrets
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
 from gex_core.calibration import calibrate_confidence
@@ -498,6 +499,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     change_chart_json = charts.change
     cumulative_chart_json = charts.cumulative
     positions_chart_json = charts.positions
+    ladder_chart_json = charts.ladder
 
     cumulative = selected.get("cumulative")
     uw_agg = uw_entry.get("agg") if uw_entry else None
@@ -535,6 +537,8 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         change_chart_json=change_chart_json,
         cumulative_chart_json=cumulative_chart_json,
         positions_chart_json=positions_chart_json,
+        ladder_chart_json=ladder_chart_json,
+        is_live_slice=timeline.get("is_latest", False),
         chat_welcome=chat_welcome,
         bootstrap_status=bootstrap_status,
         refresh_message=refresh_message,
@@ -1018,6 +1022,49 @@ def api_spx_price():
             "points": len(points),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+    )
+
+
+@APP.get("/api/spot-stream")
+def api_spot_stream():
+    """SSE stream of live spot ticks from the UW price websocket cache."""
+    from gex_core.uw_price_stream import get_uw_price_stream
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+
+    def generate():
+        stream = get_uw_price_stream()
+        last_price: float | None = None
+        while True:
+            price = stream.get_latest_price(ticker)
+            if price <= 0:
+                try:
+                    from gex_core.market_features import fetch_spx_price
+
+                    price = float(fetch_spx_price(ticker) or 0.0)
+                except Exception:
+                    price = 0.0
+            if price > 0 and price != last_price:
+                last_price = price
+                payload = json.dumps(
+                    {
+                        "ticker": ticker,
+                        "spot": price,
+                        "source": "uw-live",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                yield f"data: {payload}\n\n"
+            time.sleep(0.5)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
