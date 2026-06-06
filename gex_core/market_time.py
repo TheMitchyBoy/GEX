@@ -46,3 +46,43 @@ def market_today() -> str:
 def market_now_export_ts() -> str:
     """Export-style key for the current instant (UTC, storage-compatible)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+
+
+def _parse_iso_ts(ts: str) -> datetime:
+    value = ts.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def bars_held_since_entry(entry_ts: str, *, bar_minutes: float) -> int:
+    """Gamma bars elapsed since trade entry (for time-stop semantics)."""
+    if bar_minutes <= 0:
+        return 0
+    try:
+        entry = _parse_iso_ts(entry_ts)
+    except (TypeError, ValueError):
+        return 0
+    elapsed = datetime.now(timezone.utc) - entry
+    return max(0, int(elapsed.total_seconds() // (bar_minutes * 60)))
+
+
+def is_trader_session_active(*, now: datetime | None = None) -> bool:
+    """True during configured US equity session (weekdays, market hours ET)."""
+    if os.environ.get("GEX_TRADER_SESSION_ONLY", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return True
+    anchor = (now or datetime.now(MARKET_TZ)).astimezone(MARKET_TZ)
+    if anchor.weekday() >= 5:
+        return False
+    try:
+        open_h = int(os.environ.get("GEX_TRADER_SESSION_OPEN_HOUR", "9"))
+        open_m = int(os.environ.get("GEX_TRADER_SESSION_OPEN_MIN", "30"))
+        close_h = int(os.environ.get("GEX_TRADER_SESSION_CLOSE_HOUR", "16"))
+        close_m = int(os.environ.get("GEX_TRADER_SESSION_CLOSE_MIN", "0"))
+    except (TypeError, ValueError):
+        open_h, open_m, close_h, close_m = 9, 30, 16, 0
+    open_minutes = open_h * 60 + open_m
+    close_minutes = close_h * 60 + close_m
+    now_minutes = anchor.hour * 60 + anchor.minute
+    return open_minutes <= now_minutes < close_minutes

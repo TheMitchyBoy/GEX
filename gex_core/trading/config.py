@@ -13,6 +13,29 @@ def auto_trader_enabled() -> bool:
     return _flag("GEX_AUTO_TRADER", "0")
 
 
+def trader_cycle_seconds() -> int:
+    """How often the auto-trader evaluates exits/entries (0 = only on gamma refresh)."""
+    try:
+        return max(0, int(os.environ.get("GEX_TRADER_CYCLE_SECONDS", "30")))
+    except (TypeError, ValueError):
+        return 30
+
+
+def trader_bar_minutes() -> float:
+    """Minutes per gamma bar for time stops and cooldown semantics."""
+    try:
+        explicit = os.environ.get("GEX_TRADER_BAR_MINUTES", "").strip()
+        if explicit:
+            return max(1.0, float(explicit))
+        return max(1.0, float(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10")))
+    except (TypeError, ValueError):
+        return 10.0
+
+
+def trader_session_only() -> bool:
+    return _flag("GEX_TRADER_SESSION_ONLY", "1")
+
+
 def paper_trading_only() -> bool:
     return _flag("GEX_TRADER_PAPER", "1")
 

@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from gex_core.features import safe_float
-from gex_core.market_time import market_today
+from gex_core.market_time import bars_held_since_entry, is_trader_session_active, market_today
 from gex_core.trading.advisor import advise_entry, build_suggestions
 from gex_core.trading.broker import broker_mode_label, get_broker
 from gex_core.trading.config import (
@@ -18,6 +18,9 @@ from gex_core.trading.config import (
     paper_trading_only,
     stop_loss_pct,
     take_profit_pct,
+    trader_bar_minutes,
+    trader_cycle_seconds,
+    trader_session_only,
     webull_underlying,
 )
 from gex_core.trading.exits import ExitProfile, ExitState, build_exit_profile, contracts_for_confidence, evaluate_exit
@@ -57,6 +60,9 @@ def trader_status(ticker: str = "SPX") -> dict[str, Any]:
         "stop_loss_pct": stop_loss_pct(),
         "take_profit_pct": take_profit_pct(),
         "max_open_positions": max_open_positions(),
+        "cycle_seconds": trader_cycle_seconds(),
+        "bar_minutes": trader_bar_minutes(),
+        "session_only": trader_session_only(),
         "open_positions": list_open_trades(ticker),
         "performance": perf,
         "suggestions": build_suggestions(ticker),
@@ -94,9 +100,10 @@ def _exit_profile_from_meta(meta: dict[str, Any], pos: dict[str, Any]) -> ExitPr
     )
 
 
-def _check_exits(ticker: str, spot: float, *, bar_count: int = 0) -> list[dict[str, Any]]:
+def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
     broker = get_broker()
     exits: list[dict[str, Any]] = []
+    bar_minutes = trader_bar_minutes()
     for pos in list_open_trades(ticker):
         pnl_pct = broker.position_pnl_pct(pos, spot=spot)
         if pnl_pct is None:
@@ -104,7 +111,7 @@ def _check_exits(ticker: str, spot: float, *, bar_count: int = 0) -> list[dict[s
 
         meta = pos.get("meta") or {}
         exit_state = _exit_state_from_meta(meta)
-        bars_held = int(meta.get("bars_held") or bar_count or 0)
+        bars_held = bars_held_since_entry(str(pos.get("entry_ts") or ""), bar_minutes=bar_minutes)
         profile = _exit_profile_from_meta(meta, pos)
         exit_reason, exit_pnl = evaluate_exit(
             pnl_pct,
@@ -120,7 +127,6 @@ def _check_exits(ticker: str, spot: float, *, bar_count: int = 0) -> list[dict[s
         meta_update = {
             "peak_pnl_pct": exit_state.peak_pnl_pct,
             "partial_taken": exit_state.partial_taken,
-            "bars_held": bars_held + 1,
         }
         patch_trade_meta(int(pos["id"]), meta_update)
 
@@ -316,6 +322,8 @@ def run_trading_cycle(
     ticker = ticker.upper()
     if not auto_trader_enabled() and not force:
         return {"ran": False, "reason": "Auto-trader disabled (set GEX_AUTO_TRADER=1)"}
+    if not force and trader_session_only() and not is_trader_session_active():
+        return {"ran": False, "reason": "Outside market session"}
     if not is_trader_armed() and not force:
         return {"ran": False, "reason": "Trader disarmed — enable from dashboard"}
     if live_trading_allowed() and not webull_underlying():

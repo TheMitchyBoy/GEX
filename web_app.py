@@ -17,6 +17,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -1495,14 +1496,26 @@ def _previous_spot_from_context(ctx: dict) -> float | None:
     return safe_float(selected.get("spot"), 0.0) or None
 
 
-def _run_auto_trader(ticker: str) -> None:
+def _resolve_trader_spot(ticker: str, fallback: float | None) -> float | None:
+    """Prefer UW websocket spot for high-frequency exit checks."""
+    from gex_core.uw_price_stream import get_uw_price_stream
+
+    live = get_uw_price_stream().get_latest_price(ticker)
+    if live and live > 0:
+        return float(live)
+    if fallback and fallback > 0:
+        return float(fallback)
+    return None
+
+
+def _run_auto_trader(ticker: str) -> dict[str, Any] | None:
     """Evaluate gamma signals and manage paper option trades."""
     from gex_core.trading.config import auto_trader_enabled
     from gex_core.trading.engine import run_trading_cycle
     from gex_core.uw_context_bundle import build_uw_context_bundle
 
     if not auto_trader_enabled():
-        return
+        return None
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
@@ -1510,9 +1523,9 @@ def _run_auto_trader(ticker: str) -> None:
         uw_entry=uw_entry,
         api_key=uw_api_key(),
     )
-    spot = ctx.get("spot")
+    spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
     if not spot:
-        return
+        return None
     uw_bundle = None
     if uw_entry and uw_entry.get("agg") is not None:
         uw_bundle = build_uw_context_bundle(
@@ -1524,7 +1537,7 @@ def _run_auto_trader(ticker: str) -> None:
             api_key=uw_api_key(),
             fetch_extras=False,
         )
-    run_trading_cycle(
+    return run_trading_cycle(
         ticker=ticker,
         spot=float(spot),
         exposure=ctx.get("exposure_series"),
@@ -1554,6 +1567,8 @@ def _scheduled_refresh():
     # Staleness-gated (not force=True): when a manual/page refresh already wrote
     # a fresh snapshot this interval, skip the redundant UW fetch. This avoids
     # burning the UW per-minute/daily request budget on duplicate pulls.
+    from gex_core.trading.config import trader_cycle_seconds
+
     try:
         refresh_tickers(REFRESH_TICKERS)
     except Exception:
@@ -1564,10 +1579,24 @@ def _scheduled_refresh():
             _auto_dispatch_alerts(ticker)
         except Exception:
             logger.exception("Auto-dispatch failed for %s", ticker)
+        if trader_cycle_seconds() <= 0:
+            try:
+                _run_auto_trader(ticker)
+            except Exception:
+                logger.exception("Auto-trader cycle failed for %s", ticker)
+
+
+def _scheduled_trader_tick():
+    """High-frequency trader loop — exits on live spot, entries on latest gamma."""
+    from gex_core.trading.config import auto_trader_enabled, trader_cycle_seconds
+
+    if not auto_trader_enabled() or trader_cycle_seconds() <= 0:
+        return
+    for ticker in REFRESH_TICKERS:
         try:
             _run_auto_trader(ticker)
         except Exception:
-            logger.exception("Auto-trader cycle failed for %s", ticker)
+            logger.exception("Auto-trader tick failed for %s", ticker)
 
 
 def _acquire_scheduler_lock() -> bool:
@@ -1586,6 +1615,8 @@ def _acquire_scheduler_lock() -> bool:
 
 def start_background_refresh():
     global _scheduler
+    from gex_core.trading.config import auto_trader_enabled, trader_cycle_seconds
+
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
     if os.environ.get("GEX_DISABLE_SCHEDULER", "").lower() in {"1", "true", "yes"}:
@@ -1610,6 +1641,19 @@ def start_background_refresh():
     )
     _scheduler.start()
     atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
+
+    cycle_sec = trader_cycle_seconds()
+    if auto_trader_enabled() and cycle_sec > 0:
+        _scheduler.add_job(
+            _scheduled_trader_tick,
+            trigger="interval",
+            seconds=cycle_sec,
+            id="gex_trader_tick",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("Auto-trader high-frequency loop every %ss", cycle_sec)
 
     if any(get_latest_ts(ticker) is None for ticker in REFRESH_TICKERS):
         _scheduler.add_job(
