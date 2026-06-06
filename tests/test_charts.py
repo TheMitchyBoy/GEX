@@ -55,7 +55,7 @@ def test_spx_price_chart_prefers_live_points():
     payload = json.loads(make_spx_price_chart(points, ticker="SPX"))
     line = payload["data"][0]
     assert line["y"] == [5000.0, 5012.5]
-    assert "live" in payload["layout"]["title"]["text"]
+    assert "Unusual Whales" in payload["layout"]["title"]["text"]
     # Latest price annotated as current marker.
     assert payload["data"][1]["y"] == [5012.5]
 

@@ -245,7 +245,7 @@ def make_spx_price_chart(
 ) -> str | None:
     """Current SPX price line.
 
-    Prefers live intraday prices (``price_points`` from yfinance); falls back to
+    Prefers live intraday prices (``price_points`` from UW websocket/OHLC); falls back to
     the per-snapshot spot series when the market feed is unavailable so the chart
     always renders. The most recent price is annotated as the current level.
     """
@@ -324,7 +324,9 @@ def make_spx_price_chart(
             )
 
     subtitle_map = {
-        "live": "live · Yahoo Finance",
+        "live": "live · Unusual Whales",
+        "uw-live": "live · Unusual Whales websocket",
+        "uw-live+snapshots": "UW live + 90d backfill",
         "live+snapshots": "live + 90d backfill",
         "snapshots": "from saved snapshots",
     }
