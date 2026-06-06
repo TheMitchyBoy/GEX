@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+_HEALTH_CACHE: dict[str, tuple[float, dict]] = {}
 
 from gex_core.env_bootstrap import uw_api_key_diagnostics
 from gex_core.exports import EXPORT_DIR, list_export_timestamps
@@ -16,8 +19,19 @@ from gex_core.storage import count_strike_exports_on_disk, db_path, export_age_m
 from gex_core.tickers import PRIMARY_TICKER
 
 
-def build_system_status(ticker: str | None = None) -> dict:
+def _health_cache_ttl() -> float:
+    try:
+        return max(5.0, float(os.environ.get("GEX_HEALTH_CACHE_SEC", "30")))
+    except (TypeError, ValueError):
+        return 30.0
+
+
+def build_system_status(ticker: str | None = None, *, use_cache: bool = True) -> dict:
     ticker = (ticker or PRIMARY_TICKER).upper()
+    if use_cache:
+        cached = _HEALTH_CACHE.get(ticker)
+        if cached and (time.monotonic() - cached[0]) < _health_cache_ttl():
+            return dict(cached[1])
     latest_ts = get_latest_ts(ticker, EXPORT_DIR)
     age_min = export_age_minutes(ticker, EXPORT_DIR)
     collected = collect_snapshot_files(ticker, EXPORT_DIR, lookback_days=90, max_snapshots=240)
@@ -43,7 +57,7 @@ def build_system_status(ticker: str | None = None) -> dict:
         pass
 
     ready = history_loaded > 0
-    return {
+    payload = {
         "ticker": ticker,
         "ready": ready,
         "healthy": ready and not stale,
@@ -71,3 +85,6 @@ def build_system_status(ticker: str | None = None) -> dict:
         "alert_auto_dispatch": os.environ.get("GEX_ALERT_AUTO_DISPATCH", "").lower() in {"1", "true", "yes"},
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if use_cache:
+        _HEALTH_CACHE[ticker] = (time.monotonic(), dict(payload))
+    return payload
