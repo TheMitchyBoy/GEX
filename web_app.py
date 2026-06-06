@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
@@ -27,12 +28,17 @@ from gex_core.charts import (
     make_0dte_movement_chart,
     make_cumulative_gex_chart,
     make_gex_profile_chart,
+    make_mm_positions_chart,
+    make_periscope_exposure_chart,
+    make_periscope_price_chart,
     make_positive_strike_chart,
     make_prediction_gamma_chart,
     make_spx_price_chart,
     make_timeline_chart,
     safe_float,
 )
+from gex_core.market_exposure_agent import analyze_market_exposure
+from gex_core.periscope import build_periscope_context
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import (
     build_gamma_levels_timeline,
@@ -406,7 +412,134 @@ def _prediction_public_view(prediction: dict | None) -> dict | None:
 def _spx_redirect(**extra):
     args = request.args.to_dict(flat=True)
     args.update(extra)
-    return redirect(url_for("ticker_page", ticker=PRIMARY_TICKER, **args))
+    return redirect(url_for("index", **args))
+
+
+def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
+    """Periscope-style market maker exposure view (replaces the legacy command center)."""
+    ticker = ticker.upper()
+    exposure = request.args.get("exposure", "gamma").lower()
+    requested_ts = request.args.get("ts")
+    force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
+    bootstrap_status = request.args.get("bootstrap")
+    refresh_message = None
+
+    if force_refresh:
+        refreshed_csv = False
+        refreshed_live = False
+        if uw_api_configured():
+            try:
+                refreshed_csv = refresh_ticker(ticker, force=True)
+            except Exception:
+                logger.exception("Force CSV refresh failed for %s", ticker)
+            try:
+                refreshed_live = refresh_uw_data(ticker, force=True) is not None
+            except Exception:
+                logger.exception("Force UW refresh failed for %s", ticker)
+        if refreshed_csv or refreshed_live:
+            bootstrap_status = "ok"
+        else:
+            bootstrap_status = "failed"
+            reason = _uw_failure_reason(ticker)
+            refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
+
+    history = _dashboard_history(ticker)
+    if bootstrap_status == "failed" and history:
+        bootstrap_status = "stale"
+
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    previous_snapshot = None
+    if history and requested_ts:
+        for i, row in enumerate(history):
+            if row.get("ts") == requested_ts and i > 0:
+                previous_snapshot = history[i - 1]
+                break
+    elif history and len(history) > 1:
+        previous_snapshot = history[-2]
+
+    price_points, _, price_source = _dashboard_spx_price_context(ticker)
+    ctx = build_periscope_context(
+        ticker=ticker,
+        selected_ts=requested_ts,
+        exposure=exposure,
+        uw_entry=uw_entry,
+        history=history,
+        price_points=price_points,
+        previous_snapshot=previous_snapshot,
+    )
+
+    selected = ctx.get("selected") or {}
+    gex_series = ctx.get("exposure_series")
+    prev_series = ctx.get("previous_exposure")
+    spot = ctx.get("spot")
+
+    price_chart_json = make_periscope_price_chart(
+        price_points,
+        history,
+        ticker=ticker,
+        spot=spot,
+        highlight_ts=selected.get("ts_label"),
+        price_source=price_source,
+    )
+    exposure_chart_json = make_periscope_exposure_chart(
+        ctx.get("exposure_window"),
+        ticker=ticker,
+        exposure_type=exposure,
+        spot=spot,
+        previous=prev_series,
+        compact=True,
+    )
+    extended_chart_json = make_periscope_exposure_chart(
+        ctx.get("exposure_extended"),
+        ticker=ticker,
+        exposure_type=exposure,
+        spot=spot,
+        previous=prev_series,
+        compact=False,
+    )
+    positions_chart_json = make_mm_positions_chart(ctx.get("mm_positions"), ticker=ticker)
+
+    cumulative = selected.get("cumulative")
+    agent = analyze_market_exposure(
+        ticker=ticker,
+        spot=safe_float(spot, 0.0) or 5000.0,
+        gex_by_strike=gex_series if gex_series is not None else pd.Series(dtype=float),
+        cumulative_gex=cumulative,
+        total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
+        gamma_flip=ctx.get("gamma_flip"),
+        history=history,
+        exposure_type=exposure,
+    )
+
+    csv_source = selected.get("data_source") or "unusual_whales"
+    data_source = f"Unusual Whales · {ctx.get('selected_label', 'latest')} ({csv_source})"
+    if uw_entry:
+        data_source += " · live API"
+
+    return render_template(
+        "periscope.html",
+        ticker=ticker,
+        exposure=exposure,
+        spot=spot,
+        regime=ctx.get("regime", "N/A"),
+        total_gex=ctx.get("total_gex", 0.0),
+        gamma_flip=ctx.get("gamma_flip"),
+        selected_ts=ctx.get("selected_ts"),
+        selected_label=ctx.get("selected_label"),
+        timestamps=ctx.get("timestamps", []),
+        replay_index=ctx.get("replay_index", 0),
+        data_source=data_source,
+        price_chart_json=price_chart_json,
+        exposure_chart_json=exposure_chart_json,
+        positions_chart_json=positions_chart_json,
+        extended_chart_json=extended_chart_json,
+        agent=agent,
+        bootstrap_status=bootstrap_status,
+        refresh_message=refresh_message,
+        uw_configured=uw_api_configured(),
+        refresh_minutes=REFRESH_MINUTES,
+        vanna_charm_available=ctx.get("vanna_charm_available", False),
+    )
 
 
 def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
@@ -485,29 +618,22 @@ def health():
 
 @APP.route("/")
 def index():
-    tickers = find_available_tickers(EXPORT_DIR)
-    watchlist_rows = build_watchlist_rows(tickers)
-    ticker_cards = []
-    for row in watchlist_rows:
-        ticker_cards.append(
-            {
-                **row,
-                "total_gex_text": f"{row['total_gex']:.3f}",
-                "flip_distance_text": (
-                    f"{row['flip_distance_pct'] * 100:.2f}%"
-                    if row.get("flip_distance_pct") is not None
-                    else "N/A"
-                ),
-                "confluence_text": f"{row['confluence_score']:.1f}",
-                "stability_text": f"{row['regime_stability'] * 100:.0f}%",
-            }
-        )
-    return render_template("index.html", tickers=ticker_cards)
+    return _render_periscope_dashboard(PRIMARY_TICKER)
 
 
 @APP.route("/ticker/<ticker>")
 @APP.route("/ticker/<ticker>/")
 def ticker_page(ticker):
+    ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        return _spx_redirect()
+    return _render_periscope_dashboard(ticker)
+
+
+@APP.route("/legacy/ticker/<ticker>")
+@APP.route("/legacy/ticker/<ticker>/")
+def legacy_ticker_page(ticker):
+    """Legacy full gamma dashboard (preserved for deep analysis)."""
     ticker = ticker.upper()
     if not is_supported_ticker(ticker):
         return _spx_redirect()
@@ -889,6 +1015,68 @@ def api_spx_price():
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
+
+
+@APP.get("/api/periscope")
+def api_periscope():
+    ticker = PRIMARY_TICKER
+    exposure = request.args.get("exposure", "gamma")
+    requested_ts = request.args.get("ts")
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    history = _dashboard_history(ticker)
+    price_points, _, _ = _dashboard_spx_price_context(ticker)
+    ctx = build_periscope_context(
+        ticker=ticker,
+        selected_ts=requested_ts,
+        exposure=exposure,
+        uw_entry=uw_entry,
+        history=history,
+        price_points=price_points,
+    )
+    return jsonify(
+        {
+            "ticker": ticker,
+            "exposure": exposure,
+            "spot": ctx.get("spot"),
+            "regime": ctx.get("regime"),
+            "total_gex": ctx.get("total_gex"),
+            "gamma_flip": ctx.get("gamma_flip"),
+            "selected_ts": ctx.get("selected_ts"),
+            "selected_label": ctx.get("selected_label"),
+            "mm_positions": ctx.get("mm_positions"),
+            "vanna_charm_available": ctx.get("vanna_charm_available"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+
+@APP.get("/api/agent/analyze")
+def api_agent_analyze():
+    ticker = PRIMARY_TICKER
+    exposure = request.args.get("exposure", "gamma")
+    requested_ts = request.args.get("ts")
+    history = _dashboard_history(ticker)
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        selected_ts=requested_ts,
+        exposure=exposure,
+        uw_entry=uw_entry,
+        history=history,
+    )
+    selected = ctx.get("selected") or {}
+    gex_series = ctx.get("exposure_series")
+    result = analyze_market_exposure(
+        ticker=ticker,
+        spot=safe_float(ctx.get("spot"), 0.0) or 5000.0,
+        gex_by_strike=gex_series if gex_series is not None else pd.Series(dtype=float),
+        cumulative_gex=selected.get("cumulative"),
+        total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
+        gamma_flip=ctx.get("gamma_flip"),
+        history=history,
+        exposure_type=exposure,
+    )
+    return jsonify(result)
 
 
 @APP.get("/api/latest-summary")

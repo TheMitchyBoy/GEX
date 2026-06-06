@@ -1,0 +1,5 @@
+# Optional AI agent dependencies (gex-llm-patterns integration)
+# Install: pip install -r requirements-agent.txt
+-r requirements.txt
+openai>=1.40.0
+pyyaml>=6.0
