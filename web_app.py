@@ -45,6 +45,11 @@ from gex_core.periscope import (
     group_timestamps_by_date,
     resolve_selected_timestamp,
 )
+from gex_core.periscope_api import (
+    clear_periscope_api_cache,
+    list_periscope_timestamps,
+    should_use_api_for_date,
+)
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import (
     build_gamma_levels_timeline,
@@ -429,6 +434,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     refresh_message = None
 
     if force_refresh:
+        clear_periscope_api_cache()
         refreshed_csv = False
         refreshed_live = False
         if uw_api_configured():
@@ -447,34 +453,21 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
             reason = _uw_failure_reason(ticker)
             refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
 
-    history = _dashboard_history(ticker)
-    if bootstrap_status == "failed" and history:
+    has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key()))
+    if bootstrap_status == "failed" and has_exports:
         bootstrap_status = "stale"
 
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
-    resolved_ts = resolve_selected_timestamp(
-        list_timestamps(ticker),
-        ts=requested_ts,
-        date=requested_date,
-    )
-    previous_snapshot = None
-    if history and resolved_ts:
-        for i, row in enumerate(history):
-            if row.get("ts") == resolved_ts and i > 0:
-                previous_snapshot = history[i - 1]
-                break
-
-    price_points, _, price_source = _dashboard_spx_price_context(ticker)
+    _, _, price_source = _dashboard_spx_price_context(ticker)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
         selected_date=requested_date,
         exposure=exposure,
         uw_entry=uw_entry,
-        history=history,
-        price_points=price_points,
-        previous_snapshot=previous_snapshot,
+        api_key=uw_api_key(),
     )
+    price_points = ctx.get("price_points") or []
     timeline = ctx.get("timeline") or {}
 
     selected = ctx.get("selected") or {}
@@ -484,11 +477,11 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
 
     price_chart_json = make_periscope_price_chart(
         price_points,
-        history,
+        None,
         ticker=ticker,
         spot=spot,
         highlight_ts=selected.get("ts_label"),
-        price_source=price_source,
+        price_source=price_source or ctx.get("data_path"),
     )
     exposure_chart_json = make_periscope_exposure_chart(
         ctx.get("exposure_window"),
@@ -516,11 +509,11 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         cumulative_gex=cumulative,
         total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
         gamma_flip=ctx.get("gamma_flip"),
-        history=history,
+        history=None,
         exposure_type=exposure,
     )
 
-    csv_source = selected.get("data_source") or "unusual_whales"
+    csv_source = selected.get("data_source") or ctx.get("data_path") or "unusual_whales"
     data_source = f"Unusual Whales · {ctx.get('selected_label', 'latest')} ({csv_source})"
     if uw_entry:
         data_source += " · live API"
@@ -1035,16 +1028,13 @@ def api_periscope():
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
-    history = _dashboard_history(ticker)
-    price_points, _, _ = _dashboard_spx_price_context(ticker)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
         selected_date=requested_date,
         exposure=exposure,
         uw_entry=uw_entry,
-        history=history,
-        price_points=price_points,
+        api_key=uw_api_key(),
     )
     timeline = ctx.get("timeline") or {}
     return jsonify(
@@ -1061,6 +1051,7 @@ def api_periscope():
             "mm_positions": ctx.get("mm_positions"),
             "vanna_charm_available": ctx.get("vanna_charm_available"),
             "timeline": timeline,
+            "data_path": ctx.get("data_path"),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
@@ -1070,22 +1061,26 @@ def api_periscope():
 def api_periscope_timeline():
     """Available dates and intraday slices for the session picker."""
     ticker = PRIMARY_TICKER
-    timestamps = list_timestamps(ticker)
+    timestamps = list_periscope_timestamps(ticker, api_key=uw_api_key())
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
     resolved = resolve_selected_timestamp(timestamps, ts=requested_ts, date=requested_date)
-    timeline = build_timeline_navigation(timestamps, resolved)
-    grouped = group_timestamps_by_date(timestamps)
-    slices_by_date = {
-        day: build_slice_options(timestamps, day)
-        for day in grouped
-    }
+    timeline = build_timeline_navigation(timestamps, resolved, ticker=ticker)
+    active_date = timeline.get("selected_date")
+    slices_by_date = {}
+    if active_date:
+        slices_by_date[active_date] = build_slice_options(timestamps, active_date)
     return jsonify(
         {
             "ticker": ticker,
             "dates": timeline.get("available_dates", []),
             "slices_by_date": slices_by_date,
             "timeline": timeline,
+            "data_path": (
+                "uw_api"
+                if active_date and should_use_api_for_date(active_date, api_key=uw_api_key())
+                else "exports"
+            ),
         }
     )
 
@@ -1095,14 +1090,13 @@ def api_agent_analyze():
     ticker = PRIMARY_TICKER
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
-    history = _dashboard_history(ticker)
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
         exposure=exposure,
         uw_entry=uw_entry,
-        history=history,
+        api_key=uw_api_key(),
     )
     selected = ctx.get("selected") or {}
     gex_series = ctx.get("exposure_series")
@@ -1113,7 +1107,7 @@ def api_agent_analyze():
         cumulative_gex=selected.get("cumulative"),
         total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
         gamma_flip=ctx.get("gamma_flip"),
-        history=history,
+        history=None,
         exposure_type=exposure,
     )
     return jsonify(result)

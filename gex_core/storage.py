@@ -131,6 +131,76 @@ def list_indexed_timestamps(ticker: str, path: Path | None = None) -> list[str]:
     return []
 
 
+def list_indexed_dates(ticker: str, path: Path | None = None) -> list[str]:
+    """Distinct trading days in the index (no CSV glob)."""
+    ticker = ticker.upper()
+    try:
+        with _connect(path) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT COALESCE(market_date, substr(ts, 1, 10)) AS day
+                FROM snapshots
+                WHERE ticker = ?
+                ORDER BY day ASC
+                """,
+                (ticker,),
+            ).fetchall()
+        return [str(r["day"]) for r in rows if r["day"]]
+    except sqlite3.Error as exc:
+        logger.warning("SQLite list_indexed_dates failed: %s", exc)
+        return []
+
+
+def list_indexed_timestamps_for_date(
+    ticker: str,
+    market_date: str,
+    path: Path | None = None,
+) -> list[str]:
+    """All slice timestamps for one day from the index."""
+    ticker = ticker.upper()
+    market_date = market_date[:10]
+    try:
+        with _connect(path) as conn:
+            rows = conn.execute(
+                """
+                SELECT ts FROM snapshots
+                WHERE ticker = ?
+                  AND COALESCE(market_date, substr(ts, 1, 10)) = ?
+                ORDER BY ts ASC
+                """,
+                (ticker, market_date),
+            ).fetchall()
+        return [str(r["ts"]) for r in rows]
+    except sqlite3.Error as exc:
+        logger.warning("SQLite list_indexed_timestamps_for_date failed: %s", exc)
+        return []
+
+
+def list_indexed_timestamps_before_date(
+    ticker: str,
+    market_date: str,
+    path: Path | None = None,
+) -> list[str]:
+    """Indexed timestamps strictly before a calendar day (historical fast path)."""
+    ticker = ticker.upper()
+    market_date = market_date[:10]
+    try:
+        with _connect(path) as conn:
+            rows = conn.execute(
+                """
+                SELECT ts FROM snapshots
+                WHERE ticker = ?
+                  AND COALESCE(market_date, substr(ts, 1, 10)) < ?
+                ORDER BY ts ASC
+                """,
+                (ticker, market_date),
+            ).fetchall()
+        return [str(r["ts"]) for r in rows]
+    except sqlite3.Error as exc:
+        logger.warning("SQLite list_indexed_timestamps_before_date failed: %s", exc)
+        return []
+
+
 def strike_export_path(ticker: str, ts: str, export_dir: Path | None = None) -> Path:
     export_dir = export_dir or EXPORT_DIR
     return export_dir / f"{ticker.upper()}_gex_by_strike_{ts}.csv"

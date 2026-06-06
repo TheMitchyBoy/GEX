@@ -11,25 +11,35 @@ from gex_core.charts import make_periscope_exposure_chart, make_mm_positions_cha
 
 
 def test_build_periscope_context_from_history():
+    from unittest.mock import patch
+
     strikes = pd.Series({5000: 1.0, 5050: -0.5, 5100: 0.3})
-    history = [
-        {
-            "ts": "2026-06-05_021908",
-            "ts_label": "2026-06-05 02:19",
-            "spot": 5025.0,
-            "total_gex": 0.8,
-            "regime": "LONG gamma",
-            "gamma_flip": 5000.0,
-            "call_wall": 5100.0,
-            "put_wall": 4950.0,
-            "strike": strikes,
-        }
-    ]
-    ctx = build_periscope_context(
-        ticker="SPX",
-        history=history,
-        selected_ts="2026-06-05_021908",
-    )
+    snapshot = {
+        "ts": "2026-06-05_021908",
+        "ts_label": "2026-06-05 02:19",
+        "spot": 5025.0,
+        "total_gex": 0.8,
+        "regime": "LONG gamma",
+        "gamma_flip": 5000.0,
+        "call_wall": 5100.0,
+        "put_wall": 4950.0,
+        "strike": strikes,
+        "cumulative": strikes.cumsum(),
+    }
+    with (
+        patch(
+            "gex_core.periscope.list_periscope_timestamps",
+            return_value=["2026-06-05_021908"],
+        ),
+        patch("gex_core.periscope.load_periscope_snapshot", return_value=snapshot),
+        patch("gex_core.periscope.periscope_price_points", return_value=[]),
+        patch("gex_core.periscope.list_periscope_dates", return_value=["2026-06-05"]),
+        patch("gex_core.periscope.uw_api_key", return_value=None),
+    ):
+        ctx = build_periscope_context(
+            ticker="SPX",
+            selected_ts="2026-06-05_021908",
+        )
     assert ctx["spot"] == 5025.0
     assert ctx["regime"] == "LONG gamma"
     assert not ctx["exposure_series"].empty

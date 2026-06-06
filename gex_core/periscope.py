@@ -7,9 +7,19 @@ from typing import Any
 import pandas as pd
 
 from gex_core.charts import safe_float
+from gex_core.env_bootstrap import uw_api_key
 from gex_core.exports import parse_timestamp
 from gex_core.features import estimate_gamma_flip
-from gex_core.history import build_history, list_timestamps, load_snapshot_at_ts, ts_label
+from gex_core.history import ts_label
+from gex_core.periscope_api import (
+    list_periscope_dates,
+    list_periscope_timestamps,
+    load_periscope_snapshot,
+    periscope_price_points,
+    should_use_api_for_date,
+    timestamp_date as api_timestamp_date,
+    utc_today,
+)
 from gex_core.tickers import PRIMARY_TICKER
 
 EXPOSURE_TYPES = ("gamma", "vanna", "charm")
@@ -32,7 +42,10 @@ def group_timestamps_by_date(timestamps: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
-def available_dates(timestamps: list[str]) -> list[str]:
+def available_dates(timestamps: list[str], *, ticker: str = PRIMARY_TICKER) -> list[str]:
+    indexed = list_periscope_dates(ticker, api_key=uw_api_key())
+    if indexed:
+        return indexed
     return sorted(group_timestamps_by_date(timestamps).keys())
 
 
@@ -47,10 +60,10 @@ def resolve_selected_timestamp(
     date: str | None = None,
 ) -> str | None:
     """Pick the active slice from explicit ts, a calendar day, or latest."""
+    if ts:
+        return ts
     if not timestamps:
         return None
-    if ts and ts in timestamps:
-        return ts
     if date:
         day_slices = slices_for_date(timestamps, date)
         if day_slices:
@@ -66,7 +79,12 @@ def build_slice_options(timestamps: list[str], date: str) -> list[dict[str, str]
     ]
 
 
-def build_timeline_navigation(timestamps: list[str], selected_ts: str | None) -> dict[str, Any]:
+def build_timeline_navigation(
+    timestamps: list[str],
+    selected_ts: str | None,
+    *,
+    ticker: str = PRIMARY_TICKER,
+) -> dict[str, Any]:
     """Navigation metadata for rewind, calendar, and per-day slice pickers."""
     if not timestamps:
         return {
@@ -86,7 +104,7 @@ def build_timeline_navigation(timestamps: list[str], selected_ts: str | None) ->
     selected_date = timestamp_date(active_ts)
 
     return {
-        "available_dates": available_dates(timestamps),
+        "available_dates": available_dates(timestamps, ticker=ticker),
         "day_slices": build_slice_options(timestamps, selected_date),
         "selected_date": selected_date,
         "selected_ts": active_ts,
@@ -160,19 +178,6 @@ def _mm_positions(greek_df: pd.DataFrame | None) -> dict[str, float]:
     return out
 
 
-def _snapshot_row(ticker: str, ts: str | None, history: list[dict]) -> dict:
-    if not history:
-        return {}
-    if ts:
-        for row in history:
-            if row.get("ts") == ts:
-                return row
-        loaded = load_snapshot_at_ts(ticker, ts)
-        if loaded:
-            return loaded
-    return history[-1]
-
-
 def build_periscope_context(
     *,
     ticker: str = PRIMARY_TICKER,
@@ -183,14 +188,42 @@ def build_periscope_context(
     history: list[dict] | None = None,
     price_points: list[dict] | None = None,
     previous_snapshot: dict | None = None,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """Assemble template/API payload for the Periscope exposure view."""
     exposure = exposure.lower() if exposure.lower() in EXPOSURE_TYPES else "gamma"
-    history = history or build_history(ticker)
-    timestamps = list_timestamps(ticker)
+    api_key = api_key or uw_api_key()
+    timestamps = list_periscope_timestamps(ticker, api_key=api_key)
     resolved_ts = resolve_selected_timestamp(timestamps, ts=selected_ts, date=selected_date)
-    timeline = build_timeline_navigation(timestamps, resolved_ts)
-    selected = _snapshot_row(ticker, resolved_ts, history)
+    timeline = build_timeline_navigation(timestamps, resolved_ts, ticker=ticker)
+    active_date = selected_date or (api_timestamp_date(resolved_ts) if resolved_ts else utc_today())
+
+    selected = load_periscope_snapshot(
+        ticker,
+        resolved_ts,
+        api_key=api_key,
+        uw_entry=uw_entry,
+        market_date=active_date,
+    ) or {}
+
+    if not price_points:
+        price_points = periscope_price_points(
+            ticker,
+            market_date=active_date,
+            api_key=api_key,
+            fallback_history=history,
+        )
+
+    if previous_snapshot is None and resolved_ts and resolved_ts in timestamps:
+        prev_idx = timestamps.index(resolved_ts) - 1
+        if prev_idx >= 0:
+            prev_ts = timestamps[prev_idx]
+            previous_snapshot = load_periscope_snapshot(
+                ticker,
+                prev_ts,
+                api_key=api_key,
+                market_date=api_timestamp_date(prev_ts),
+            )
 
     spot = safe_float(selected.get("spot"), 0.0)
     if uw_entry and uw_entry.get("spot"):
@@ -248,15 +281,16 @@ def build_periscope_context(
         "prev_ts": timeline.get("prev_ts"),
         "next_ts": timeline.get("next_ts"),
         "timeline": timeline,
-        "has_history": bool(history),
+        "has_history": bool(timestamps),
+        "price_points": price_points or [],
         "exposure_series": current_exposure,
         "previous_exposure": previous_exposure,
         "exposure_window": _strike_window(current_exposure, spot or 0.0, window_pct=0.035),
         "exposure_extended": _strike_window(current_exposure, spot or 0.0, window_pct=0.08),
         "mm_positions": _mm_positions(greek_df if isinstance(greek_df, pd.DataFrame) else None),
-        "price_points": price_points or [],
-        "history": history,
+        "history": history or [],
         "selected": selected,
+        "data_path": "uw_api" if should_use_api_for_date(active_date, api_key=api_key) else "exports",
         "uw_fetched_at": uw_entry.get("fetched_at") if uw_entry else None,
         "vanna_charm_available": bool(
             isinstance(greek_df, pd.DataFrame)
