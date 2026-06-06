@@ -8,7 +8,7 @@ import pandas as pd
 
 from gex_core.charts import safe_float
 from gex_core.env_bootstrap import uw_api_key
-from gex_core.features import estimate_gamma_flip
+from gex_core.features import estimate_gamma_flip, select_atm_strike_series, spot_covers_strike_grid
 from gex_core.market_time import (
     market_today,
     ts_display_label,
@@ -136,12 +136,42 @@ def build_timeline_navigation(
     }
 
 
-def _strike_window(series: pd.Series, spot: float, window_pct: float = 0.04) -> pd.Series:
-    if series.empty or spot <= 0:
-        return series.sort_index()
-    lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
-    window = series.loc[(series.index >= lo) & (series.index <= hi)]
-    return window.sort_index() if len(window) >= 5 else series.sort_index()
+def _strike_window(
+    series: pd.Series,
+    spot: float,
+    window_pct: float = 0.04,
+    *,
+    max_strikes: int | None = None,
+) -> pd.Series:
+    return select_atm_strike_series(
+        series,
+        spot,
+        window_pct=window_pct,
+        min_strikes=5,
+        max_strikes=max_strikes,
+    )
+
+
+def _greek_exposure_from_df(greek_df: pd.DataFrame | None, exposure: str) -> pd.Series:
+    if greek_df is None or greek_df.empty:
+        return pd.Series(dtype=float)
+    df = greek_df.set_index("strike") if "strike" in greek_df.columns else greek_df
+    if exposure == "gamma":
+        if "net_gex" in df.columns:
+            return pd.to_numeric(df["net_gex"], errors="coerce").dropna()
+        if "call_gex" in df.columns and "put_gex" in df.columns:
+            return pd.to_numeric(df["call_gex"], errors="coerce").fillna(0.0) + pd.to_numeric(
+                df["put_gex"], errors="coerce"
+            ).fillna(0.0)
+    elif exposure == "vanna" and "call_vanna" in df.columns:
+        return pd.to_numeric(df["call_vanna"], errors="coerce").fillna(0.0) + pd.to_numeric(
+            df["put_vanna"], errors="coerce"
+        ).fillna(0.0)
+    elif exposure == "charm" and "call_charm" in df.columns:
+        return pd.to_numeric(df["call_charm"], errors="coerce").fillna(0.0) + pd.to_numeric(
+            df["put_charm"], errors="coerce"
+        ).fillna(0.0)
+    return pd.Series(dtype=float)
 
 
 def _exposure_series(
@@ -149,32 +179,23 @@ def _exposure_series(
     greek_df: pd.DataFrame | None,
     strike_series: pd.Series | None,
     exposure: str,
+    *,
+    spot: float | None = None,
 ) -> pd.Series:
-    """Per-strike exposure — prefer UW spot-exposures/strike (Periscope source)."""
+    """Per-strike exposure — prefer UW spot-exposures when they bracket spot."""
     exposure = exposure.lower()
+    spot_val = safe_float(spot, 0.0)
     spot_series = spot_exposure_net_series(spot_df, exposure)
-    if not spot_series.empty:
-        return spot_series
+    greek_series = _greek_exposure_from_df(greek_df, exposure)
 
-    if greek_df is not None and not greek_df.empty:
-        df = greek_df.set_index("strike") if "strike" in greek_df.columns else greek_df
-        if exposure == "gamma":
-            if "net_gex" in df.columns:
-                return pd.to_numeric(df["net_gex"], errors="coerce").dropna()
-            if "call_gex" in df.columns and "put_gex" in df.columns:
-                return pd.to_numeric(df["call_gex"], errors="coerce").fillna(0.0) + pd.to_numeric(
-                    df["put_gex"], errors="coerce"
-                ).fillna(0.0)
-        elif exposure == "vanna" and "call_vanna" in df.columns:
-            return pd.to_numeric(df["call_vanna"], errors="coerce").fillna(0.0) + pd.to_numeric(
-                df["put_vanna"], errors="coerce"
-            ).fillna(0.0)
-        elif exposure == "charm" and "call_charm" in df.columns:
-            return pd.to_numeric(df["call_charm"], errors="coerce").fillna(0.0) + pd.to_numeric(
-                df["put_charm"], errors="coerce"
-            ).fillna(0.0)
+    if spot_val > 0 and not spot_covers_strike_grid(spot_series, spot_val) and not greek_series.empty:
+        return greek_series.sort_index()
+    if not spot_series.empty:
+        return spot_series.sort_index()
+    if not greek_series.empty:
+        return greek_series.sort_index()
     if exposure == "gamma" and strike_series is not None:
-        return pd.Series(strike_series, dtype=float)
+        return pd.Series(strike_series, dtype=float).sort_index()
     return pd.Series(dtype=float)
 
 
@@ -273,18 +294,23 @@ def build_periscope_context(
         if greek_df is None and uw_entry["agg"].surface_data is not None and not uw_entry["agg"].surface_data.empty:
             greek_df = uw_entry["agg"].surface_data
 
-    current_exposure = _exposure_series(spot_df, greek_df, gex_series, exposure)
+    current_exposure = _exposure_series(spot_df, greek_df, gex_series, exposure, spot=spot or None)
     previous_exposure = pd.Series(dtype=float)
     if previous_snapshot:
         prev_spot = previous_snapshot.get("spot_exposures_df")
         prev_strike = previous_snapshot.get("strike")
+        prev_spot_price = safe_float(previous_snapshot.get("spot"), spot)
         if isinstance(prev_spot, pd.DataFrame) and not prev_spot.empty:
-            previous_exposure = _exposure_series(prev_spot, None, None, exposure)
+            previous_exposure = _exposure_series(prev_spot, None, None, exposure, spot=prev_spot_price or None)
         elif isinstance(prev_strike, pd.Series):
-            previous_exposure = _exposure_series(None, None, prev_strike, exposure)
+            previous_exposure = _exposure_series(None, None, prev_strike, exposure, spot=prev_spot_price or None)
 
     gamma_flip = selected.get("gamma_flip")
-    if gamma_flip is None and not gex_series.empty:
+    if gamma_flip is None and not current_exposure.empty and spot > 0:
+        atm = select_atm_strike_series(current_exposure, spot, window_pct=0.06, min_strikes=5)
+        if not atm.empty:
+            gamma_flip = estimate_gamma_flip(atm.cumsum())
+    elif gamma_flip is None and not gex_series.empty:
         cumulative = selected.get("cumulative")
         if isinstance(cumulative, pd.Series) and not cumulative.empty:
             gamma_flip = estimate_gamma_flip(cumulative)
@@ -319,8 +345,8 @@ def build_periscope_context(
         "price_points": price_points or [],
         "exposure_series": current_exposure,
         "previous_exposure": previous_exposure,
-        "exposure_window": _strike_window(current_exposure, spot or 0.0, window_pct=0.035),
-        "exposure_extended": _strike_window(current_exposure, spot or 0.0, window_pct=0.08),
+        "exposure_window": _strike_window(current_exposure, spot or 0.0, window_pct=0.025, max_strikes=36),
+        "exposure_extended": _strike_window(current_exposure, spot or 0.0, window_pct=0.05, max_strikes=56),
         "mm_positions": _mm_positions(
             spot_df if isinstance(spot_df, pd.DataFrame) else None,
             greek_df if isinstance(greek_df, pd.DataFrame) else None,

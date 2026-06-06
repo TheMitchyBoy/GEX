@@ -9,6 +9,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 
+from gex_core.features import select_atm_strike_series
+
 _CHART_BG = "#07090f"
 _GREEN = "#00d97e"
 _RED = "#ff4757"
@@ -725,13 +727,19 @@ def _horizontal_exposure_bars(
     previous: pd.Series | None = None,
     height: int = 420,
     max_bars: int = 48,
+    window_pct: float = 0.03,
 ) -> str | None:
     if exposure is None or exposure.empty:
         return None
-    series = pd.Series(exposure, dtype=float).sort_index()
-    if len(series) > max_bars:
-        step = max(1, len(series) // max_bars)
-        series = series.iloc[::step]
+    series = select_atm_strike_series(
+        pd.Series(exposure, dtype=float),
+        spot,
+        window_pct=window_pct,
+        min_strikes=5,
+        max_strikes=max_bars,
+    )
+    if series.empty:
+        return None
     strikes = [float(s) for s in series.index]
     values = [float(v) for v in series.values]
     colors = [_GREEN if v >= 0 else _RED for v in values]
@@ -767,13 +775,19 @@ def _horizontal_exposure_bars(
     if spot and spot > 0:
         fig.add_hline(y=spot, line_color=_AMBER, line_width=2, annotation_text=f"Spot {spot:.0f}")
 
+    y_min, y_max = min(strikes), max(strikes)
+    if spot and spot > 0:
+        pad = max((y_max - y_min) * 0.08, spot * 0.01)
+        y_min = min(y_min, spot) - pad
+        y_max = max(y_max, spot) + pad
+
     _apply_base(
         fig,
         title=title,
         height=height,
         margin=dict(l=64, r=24, t=56, b=36),
         xaxis=dict(title="Exposure", zeroline=True, zerolinecolor="rgba(255,255,255,0.2)"),
-        yaxis=dict(title="Strike", autorange=True),
+        yaxis=dict(title="Strike", range=[y_min, y_max]),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
@@ -855,6 +869,7 @@ def make_periscope_exposure_chart(
         previous=previous,
         height=320 if compact else 460,
         max_bars=36 if compact else 56,
+        window_pct=0.025 if compact else 0.05,
     )
 
 

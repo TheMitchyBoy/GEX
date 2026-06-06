@@ -163,6 +163,69 @@ def cumulative_slope_at_spot(cumulative: pd.Series, spot: float) -> float:
     return float((y1 - y0) / max(x1 - x0, 1e-9))
 
 
+def select_atm_strike_series(
+    series: pd.Series,
+    spot: float | None,
+    *,
+    window_pct: float = 0.04,
+    min_strikes: int = 5,
+    max_strikes: int | None = None,
+) -> pd.Series:
+    """Keep strikes near ATM, expanding to nearest strikes when the window is sparse."""
+    if series is None or series.empty:
+        return pd.Series(dtype=float)
+    cleaned = pd.Series(pd.to_numeric(series, errors="coerce"), index=pd.to_numeric(series.index, errors="coerce"))
+    cleaned = cleaned.dropna()
+    cleaned = cleaned[~cleaned.index.isna()]
+    if cleaned.empty:
+        return pd.Series(dtype=float)
+    cleaned = cleaned.sort_index()
+    if cleaned.index.duplicated().any():
+        cleaned = cleaned.groupby(level=0).sum()
+
+    spot_val = safe_float(spot, 0.0)
+    target = max(min_strikes, max_strikes or len(cleaned))
+    if spot_val > 0:
+        lo, hi = spot_val * (1 - window_pct), spot_val * (1 + window_pct)
+        window = cleaned.loc[(cleaned.index >= lo) & (cleaned.index <= hi)]
+        if len(window) < min_strikes:
+            distances = pd.Series(
+                np.abs(cleaned.index.astype(float) - spot_val),
+                index=cleaned.index,
+            )
+            nearest = distances.nsmallest(min(len(cleaned), target)).index
+            window = cleaned.loc[nearest]
+        cleaned = window.sort_index()
+
+    if max_strikes and len(cleaned) > max_strikes and spot_val > 0:
+        distances = pd.Series(
+            np.abs(cleaned.index.astype(float) - spot_val),
+            index=cleaned.index,
+        )
+        near = cleaned.loc[distances.nsmallest(max(max_strikes // 2, min_strikes)).index]
+        peaks = cleaned.loc[cleaned.abs().nlargest(max(max_strikes // 2, min_strikes)).index]
+        cleaned = cleaned.loc[near.index.union(peaks.index)].sort_index()
+        if len(cleaned) > max_strikes:
+            distances = pd.Series(
+                np.abs(cleaned.index.astype(float) - spot_val),
+                index=cleaned.index,
+            )
+            cleaned = cleaned.loc[distances.nsmallest(max_strikes).index].sort_index()
+
+    return cleaned.sort_index()
+
+
+def spot_covers_strike_grid(series: pd.Series, spot: float, *, tolerance_pct: float = 0.015) -> bool:
+    """True when spot lies inside the strike index range (with a small margin)."""
+    if series is None or series.empty or spot <= 0:
+        return False
+    idx = pd.to_numeric(series.index, errors="coerce").dropna()
+    if idx.empty:
+        return False
+    margin = spot * tolerance_pct
+    return float(idx.min()) - margin <= spot <= float(idx.max()) + margin
+
+
 def extract_surface_vector(
     strike: pd.Series,
     spot: float | None = None,
@@ -173,11 +236,11 @@ def extract_surface_vector(
     if strike.empty:
         return np.zeros(n_bins, dtype=float)
     spot = safe_float(spot, float(np.median(strike.index.astype(float))) if len(strike) else 0.0)
-    lower = spot * (1 - window_pct)
-    upper = spot * (1 + window_pct)
-    near = strike.loc[(strike.index >= lower) & (strike.index <= upper)]
+    near = select_atm_strike_series(strike, spot, window_pct=window_pct, min_strikes=5)
     if near.empty:
         near = strike
+    lower = spot * (1 - window_pct)
+    upper = spot * (1 + window_pct)
     edges = np.linspace(lower, upper, n_bins + 1)
     bins = np.zeros(n_bins, dtype=float)
     strikes = near.index.astype(float).values
