@@ -345,8 +345,8 @@ def build_periscope_context(
         "price_points": price_points or [],
         "exposure_series": current_exposure,
         "previous_exposure": previous_exposure,
-        "exposure_window": _strike_window(current_exposure, spot or 0.0, window_pct=0.025, max_strikes=36),
-        "exposure_extended": _strike_window(current_exposure, spot or 0.0, window_pct=0.05, max_strikes=56),
+        "exposure_window": _strike_window(current_exposure, spot or 0.0, window_pct=0.022, max_strikes=28),
+        "exposure_extended": _strike_window(current_exposure, spot or 0.0, window_pct=0.04, max_strikes=44),
         "mm_positions": _mm_positions(
             spot_df if isinstance(spot_df, pd.DataFrame) else None,
             greek_df if isinstance(greek_df, pd.DataFrame) else None,

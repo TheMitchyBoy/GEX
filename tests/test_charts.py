@@ -3,8 +3,11 @@ import json
 import pandas as pd
 
 from gex_core.charts import (
+    _chart_strike_series,
+    _strike_axis_layout,
     make_0dte_movement_chart,
     make_gex_profile_chart,
+    make_periscope_exposure_chart,
     make_spx_price_chart,
     make_timeline_chart,
 )
@@ -21,7 +24,30 @@ def test_gex_profile_chart_uses_tight_spot_window_and_bar_width():
 
     bar = payload["data"][0]
     assert bar["width"] > 1
-    assert payload["layout"]["xaxis"]["range"][0] >= 4700
+    assert payload["layout"]["xaxis"]["range"][0] <= 4700
+    assert payload["layout"]["xaxis"]["range"][1] >= 5100
+    assert payload["layout"]["bargap"] == 0.0
+    assert "rangeslider" not in payload["layout"]["xaxis"]
+    assert payload["layout"]["xaxis"]["dtick"] >= 5
+
+
+def test_chart_strike_series_pins_spot_level():
+    series = pd.Series([1.0, -1.0, 2.0], index=[7200.0, 7350.0, 7500.0])
+    window = _chart_strike_series(series, 7383.0, window_pct=0.01, max_bars=2, pin_levels=(7383.0,))
+    assert 7350.0 in window.index
+
+
+def test_periscope_exposure_chart_uses_bar_width_and_strike_ticks():
+    exposure = pd.Series(
+        [0.5, -0.3, 0.8, -0.2, 0.4],
+        index=[7300.0, 7350.0, 7380.0, 7400.0, 7450.0],
+    )
+    payload = json.loads(
+        make_periscope_exposure_chart(exposure, ticker="SPX", spot=7380.0, compact=True)
+    )
+    bar = payload["data"][0]
+    assert bar["width"] > 1
+    assert payload["layout"]["yaxis"]["dtick"] >= 5
     assert payload["layout"]["bargap"] == 0.0
 
 

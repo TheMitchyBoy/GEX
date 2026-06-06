@@ -726,6 +726,7 @@ def legacy_ticker_page(ticker):
                 uw_agg.gex_by_strike,
                 ticker,
                 "Current Position Focus (Positive GEX)",
+                spot=uw_entry.get("spot") if uw_entry else None,
             )
 
         spx_price_points, spx_current_price, spx_price_source = _dashboard_spx_price_context(ticker)
@@ -894,6 +895,7 @@ def legacy_ticker_page(ticker):
         current_profile_series,
         ticker,
         "Current Position Focus (Positive GEX)",
+        spot=profile_spot,
     )
     predicted_strike_chart_json = _build_predicted_strike_chart(
         prediction,

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
@@ -42,6 +44,128 @@ def _bar_width(values: list[float], fill_ratio: float = 0.86) -> float | None:
     if not diffs:
         return None
     return max(1.0, pd.Series(diffs).median() * fill_ratio)
+
+
+def _median_strike_step(strikes: list[float]) -> float:
+    if len(strikes) < 2:
+        return 5.0
+    ordered = sorted(float(s) for s in strikes)
+    diffs = [b - a for a, b in zip(ordered, ordered[1:]) if b > a]
+    return max(1.0, float(pd.Series(diffs).median())) if diffs else 5.0
+
+
+def _strike_tick_step(step: float, span: float, *, max_ticks: int = 8) -> float:
+    """Readable strike-axis tick spacing."""
+    target = span / max(4, max_ticks)
+    for candidate in (5, 10, 25, 50, 100, 200, 250, 500):
+        if candidate >= target:
+            return float(candidate)
+    return max(step, target)
+
+
+def _strike_axis_range(
+    strikes: list[float],
+    spot: float | None,
+    *,
+    step: float,
+    pad_bars: float = 1.25,
+) -> list[float]:
+    y_min, y_max = min(strikes), max(strikes)
+    pad = step * pad_bars
+    if spot is not None and spot > 0:
+        y_min = min(y_min, float(spot)) - pad
+        y_max = max(y_max, float(spot)) + pad
+    else:
+        y_min -= pad
+        y_max += pad
+    return [y_min, y_max]
+
+
+def _pin_chart_strikes(
+    window: pd.Series,
+    full: pd.Series,
+    spot: float | None,
+    pin_levels: tuple[float | None, ...],
+    max_bars: int,
+) -> pd.Series:
+    """Keep key levels on the chart even when trimming the ATM window."""
+    if window.empty or not pin_levels:
+        return window.sort_index()
+    pinned_keys: list[Any] = []
+    for level in pin_levels:
+        if level is None:
+            continue
+        try:
+            target = float(level)
+        except (TypeError, ValueError):
+            continue
+        distances = pd.Series(
+            np.abs(full.index.astype(float) - target),
+            index=full.index,
+        )
+        idx = distances.idxmin()
+        if idx not in pinned_keys:
+            pinned_keys.append(idx)
+    missing = [key for key in pinned_keys if key not in window.index]
+    if missing:
+        window = pd.concat([window, full.loc[missing]]).groupby(level=0).sum().sort_index()
+    if len(window) <= max_bars:
+        return window
+    spot_val = safe_float(spot, 0.0)
+    droppable = [i for i in window.index if i not in pinned_keys]
+    if spot_val > 0 and droppable:
+        distances = pd.Series(
+            np.abs(window.index.astype(float) - spot_val),
+            index=window.index,
+        )
+        drop_count = len(window) - max_bars
+        to_drop = distances.loc[droppable].sort_values(ascending=False).index[:drop_count]
+        window = window.drop(to_drop, errors="ignore")
+    else:
+        window = window.iloc[:max_bars]
+    return window.sort_index()
+
+
+def _chart_strike_series(
+    series: pd.Series,
+    spot: float | None,
+    *,
+    window_pct: float = 0.03,
+    max_bars: int = 40,
+    pin_levels: tuple[float | None, ...] = (),
+) -> pd.Series:
+    """ATM-focused strike slice shared by dashboard charts."""
+    full = pd.Series(series, dtype=float).sort_index()
+    if full.empty:
+        return full
+    window = select_atm_strike_series(
+        full,
+        spot,
+        window_pct=window_pct,
+        min_strikes=5,
+        max_strikes=max_bars,
+    )
+    if window.empty:
+        return window
+    if pin_levels:
+        window = _pin_chart_strikes(window, full, spot, pin_levels, max_bars)
+    return window.sort_index()
+
+
+def _strike_axis_layout(
+    strikes: list[float],
+    spot: float | None,
+    *,
+    axis: str = "x",
+) -> dict:
+    step = _median_strike_step(strikes)
+    span = max(strikes) - min(strikes)
+    dtick = _strike_tick_step(step, span)
+    axis_range = _strike_axis_range(strikes, spot, step=step)
+    tickformat = ",.0f"
+    if axis == "y":
+        return dict(title="Strike", range=axis_range, dtick=dtick, tickformat=tickformat)
+    return dict(title="SPX strike", range=axis_range, dtick=dtick, tickformat=tickformat)
 
 
 def _apply_base(fig: go.Figure, **extra) -> go.Figure:
@@ -394,8 +518,8 @@ def make_gex_profile_chart(
     ticker: str,
     spot: float | None = None,
     title: str = "Gamma Exposure Map",
-    window_pct: float = 0.035,
-    max_bars: int = 90,
+    window_pct: float = 0.03,
+    max_bars: int = 48,
     cumulative_series: pd.Series | None = None,
     gamma_flip: float | None = None,
     call_wall: float | None = None,
@@ -403,33 +527,20 @@ def make_gex_profile_chart(
 ) -> str | None:
     if strike_series is None:
         return None
-    strike = pd.Series(strike_series, dtype=float)
+    strike = pd.Series(strike_series, dtype=float).sort_index()
     if strike.empty:
         return None
-    strike = strike.sort_index()
-    if spot is not None and spot > 0:
-        lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
-        window = strike.loc[(strike.index >= lo) & (strike.index <= hi)]
-        if len(window) < 5:
-            window = strike
-    else:
-        window = strike
-    window = window.sort_index(ascending=True)
-    if len(window) > max_bars:
-        step = max(1, len(window) // max_bars)
-        sampled = window.iloc[::step]
-        peaks = window.abs().sort_values(ascending=False).head(max(24, max_bars // 4))
-        keep = sampled.index.union(peaks.index)
-        for level in (spot, gamma_flip, call_wall, put_wall):
-            if level is None:
-                continue
-            try:
-                level_value = float(level)
-            except (TypeError, ValueError):
-                continue
-            nearest_idx = (window.index.to_series().astype(float) - level_value).abs().idxmin()
-            keep = keep.union(pd.Index([nearest_idx]))
-        window = window.loc[keep].sort_index(ascending=True)
+
+    pin = (spot, gamma_flip, call_wall, put_wall)
+    window = _chart_strike_series(
+        strike,
+        spot,
+        window_pct=window_pct,
+        max_bars=max_bars,
+        pin_levels=pin,
+    )
+    if window.empty:
+        return None
 
     strikes = [float(s) for s in window.index]
     gex_values = [float(v) for v in window.values]
@@ -479,29 +590,23 @@ def make_gex_profile_chart(
             return
         fig.add_vline(
             x=value,
-            line=dict(color=color, dash=dash, width=1.6),
+            line=dict(color=color, dash=dash, width=1.4),
             annotation_text=f"{label} {value:.0f}",
             annotation_position="top",
-            annotation_font_color=color,
+            annotation_font=dict(color=color, size=10),
         )
 
     _add_level(spot, "Spot", _AMBER)
     _add_level(gamma_flip, "Flip", "#e2e8f0", "dot")
-    _add_level(call_wall, "Call wall", _GREEN, "dashdot")
-    _add_level(put_wall, "Put wall", _RED, "dashdot")
+    _add_level(call_wall, "Call", _GREEN, "dashdot")
+    _add_level(put_wall, "Put", _RED, "dashdot")
 
     _apply_base(
         fig,
         title=f"{ticker} · {title}",
-        height=520,
-        margin=dict(l=48, r=58, t=72, b=52),
-        xaxis=dict(
-            title="SPX strike",
-            range=[x_min, x_max],
-            rangeslider=dict(visible=True, thickness=0.08),
-            showspikes=True,
-            spikecolor="rgba(255,255,255,0.25)",
-        ),
+        height=480,
+        margin=dict(l=48, r=58, t=68, b=48),
+        xaxis=_strike_axis_layout(strikes, spot),
         yaxis=dict(title="Net GEX (Bn$ / %)", zerolinecolor="rgba(255,255,255,0.20)"),
         yaxis2=dict(
             title="Cumulative GEX",
@@ -517,19 +622,46 @@ def make_gex_profile_chart(
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def make_positive_strike_chart(strike_series: pd.Series | None, ticker: str, title: str) -> str | None:
-    strike = _positive_gamma_view(strike_series)
-    if strike.empty:
+def make_positive_strike_chart(
+    strike_series: pd.Series | None,
+    ticker: str,
+    title: str,
+    spot: float | None = None,
+    window_pct: float = 0.035,
+    max_bars: int = 28,
+) -> str | None:
+    strike = pd.Series(strike_series, dtype=float).sort_index()
+    positive = strike[strike > 0]
+    if positive.empty:
         return None
-    strikes = [float(x) for x in strike.index]
+    if spot is not None and spot > 0:
+        positive = _chart_strike_series(positive, spot, window_pct=window_pct, max_bars=max_bars)
+    else:
+        positive = _positive_gamma_view(positive, top_n=max_bars)
+    if positive.empty:
+        return None
+    strikes = [float(x) for x in positive.index]
     fig = go.Figure(go.Bar(
-        x=strikes, y=strike.values.tolist(),
+        x=strikes, y=positive.values.tolist(),
         width=_bar_width(strikes),
         marker_color=_GREEN, marker_line_width=0,
+        hovertemplate="Strike %{x:.0f}<br>Positive GEX %{y:.3f} Bn$ / %<extra></extra>",
     ))
-    _apply_base(fig, title=f"{ticker} · {title}", height=300,
-                xaxis_title="Strike", yaxis_title="Positive GEX (Bn$ / %)",
-                yaxis=dict(rangemode="tozero"), bargap=0.0)
+    if spot is not None and spot > 0 and min(strikes) <= spot <= max(strikes):
+        fig.add_vline(
+            x=float(spot),
+            line=dict(color=_AMBER, dash="dot", width=1.4),
+            annotation_text=f"Spot {float(spot):.0f}",
+            annotation_font=dict(color=_AMBER, size=10),
+        )
+    _apply_base(
+        fig,
+        title=f"{ticker} · {title}",
+        height=300,
+        xaxis=_strike_axis_layout(strikes, spot),
+        yaxis=dict(title="Positive GEX (Bn$ / %)", rangemode="tozero"),
+        bargap=0.0,
+    )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
@@ -539,7 +671,7 @@ def make_0dte_movement_chart(
     ticker: str,
     spot: float | None = None,
     window_pct: float = 0.025,
-    max_bars: int = 80,
+    max_bars: int = 36,
 ) -> str | None:
     """Same-day strike-level GEX movement, prioritized for 0DTE/intraday monitoring."""
     if not current or not previous:
@@ -552,17 +684,8 @@ def make_0dte_movement_chart(
     delta = cur.subtract(prev, fill_value=0.0).sort_index()
     if spot is None or spot <= 0:
         spot = safe_float(current.get("spot"), 0.0)
-    if spot > 0:
-        lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
-        window = delta.loc[(delta.index >= lo) & (delta.index <= hi)]
-        if len(window) < 5:
-            window = delta
-    else:
-        window = delta
 
-    if len(window) > max_bars:
-        top = window.abs().sort_values(ascending=False).head(max_bars)
-        window = window.loc[top.index].sort_index()
+    window = _chart_strike_series(delta, spot, window_pct=window_pct, max_bars=max_bars, pin_levels=(spot,))
     if window.empty:
         return None
 
@@ -591,18 +714,18 @@ def make_0dte_movement_chart(
     if spot and spot > 0 and min(strikes) <= spot <= max(strikes):
         fig.add_vline(
             x=float(spot),
-            line=dict(color=_AMBER, dash="dash", width=1.7),
+            line=dict(color=_AMBER, dash="dash", width=1.4),
             annotation_text=f"Spot {float(spot):.0f}",
             annotation_position="top",
-            annotation_font_color=_AMBER,
+            annotation_font=dict(color=_AMBER, size=10),
         )
 
     _apply_base(
         fig,
         title=f"{ticker} · 0DTE Movement Priority",
-        height=360,
-        margin=dict(l=48, r=24, t=64, b=42),
-        xaxis=dict(title="SPX strike", range=[min(strikes), max(strikes)]),
+        height=340,
+        margin=dict(l=48, r=24, t=60, b=42),
+        xaxis=_strike_axis_layout(strikes, spot),
         yaxis=dict(title="ΔGEX vs prior same-day snapshot", zerolinecolor="rgba(255,255,255,0.20)"),
         bargap=0.0,
         showlegend=False,
@@ -610,7 +733,12 @@ def make_0dte_movement_chart(
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def _top_strikes_by_magnitude(*series: pd.Series | None, top_n: int = 36) -> list[float]:
+def _top_strikes_by_magnitude(
+    *series: pd.Series | None,
+    spot: float | None = None,
+    window_pct: float = 0.04,
+    top_n: int = 32,
+) -> list[float]:
     combined = pd.Series(dtype=float)
     for s in series:
         if s is None or (isinstance(s, pd.Series) and s.empty):
@@ -618,6 +746,10 @@ def _top_strikes_by_magnitude(*series: pd.Series | None, top_n: int = 36) -> lis
         combined = combined.add(pd.Series(s, dtype=float), fill_value=0.0)
     if combined.empty:
         return []
+    if spot is not None and spot > 0:
+        window = _chart_strike_series(combined, spot, window_pct=window_pct, max_bars=top_n)
+        if not window.empty:
+            return [float(x) for x in window.index]
     ranked = combined.reindex(combined.abs().sort_values(ascending=False).index).head(top_n)
     return [float(x) for x in sorted(ranked.index)]
 
@@ -636,7 +768,7 @@ def make_prediction_gamma_chart(
     if combined.empty and knn.empty and flow.empty:
         return None
 
-    strikes = _top_strikes_by_magnitude(knn, flow, combined)
+    strikes = _top_strikes_by_magnitude(knn, flow, combined, spot=spot, top_n=32)
     if not strikes:
         return None
 
@@ -644,12 +776,14 @@ def make_prediction_gamma_chart(
     flow_vals = [float(flow.get(s, 0.0)) for s in strikes]
     combined_vals = [float(combined.get(s, 0.0)) for s in strikes]
     has_flow = any(abs(v) > 1e-9 for v in flow_vals)
+    bar_width = _bar_width(strikes)
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
         name="KNN forecast",
         x=strikes,
         y=knn_vals,
+        width=bar_width,
         marker_color=[_GREEN if v >= 0 else _RED for v in knn_vals],
         marker_line_width=0,
     ))
@@ -658,6 +792,7 @@ def make_prediction_gamma_chart(
             name="Flow ΔGEX",
             x=strikes,
             y=flow_vals,
+            width=bar_width,
             marker_color=[_BLUE if v >= 0 else _AMBER for v in flow_vals],
             marker_line_width=0,
             opacity=0.85,
@@ -668,25 +803,26 @@ def make_prediction_gamma_chart(
         y=combined_vals,
         mode="lines+markers",
         line=dict(color="#e2e8f0", width=2),
-        marker=dict(size=6, color="#e2e8f0"),
+        marker=dict(size=5, color="#e2e8f0"),
     ))
-    if spot is not None and spot > 0:
+    if spot is not None and spot > 0 and min(strikes) <= spot <= max(strikes):
         fig.add_vline(
             x=float(spot),
-            line=dict(color=_AMBER, dash="dash", width=1.5),
+            line=dict(color=_AMBER, dash="dash", width=1.4),
             annotation_text=f"Spot {int(spot)}",
             annotation_position="top",
+            annotation_font=dict(color=_AMBER, size=10),
         )
 
-    fig.update_layout(barmode="group")
+    fig.update_layout(barmode="group", bargap=0.05)
     _apply_base(
         fig,
         title=f"{ticker} · Predicted Gamma Change (KNN + Option Flow)",
-        height=560,
-        xaxis_title="Strike",
+        height=500,
+        xaxis=_strike_axis_layout(strikes, spot),
         yaxis_title="GEX (Bn$ / %)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(l=48, r=24, t=72, b=48),
+        margin=dict(l=48, r=24, t=68, b=48),
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
@@ -726,23 +862,24 @@ def _horizontal_exposure_bars(
     title: str,
     previous: pd.Series | None = None,
     height: int = 420,
-    max_bars: int = 48,
+    max_bars: int = 40,
     window_pct: float = 0.03,
 ) -> str | None:
     if exposure is None or exposure.empty:
         return None
-    series = select_atm_strike_series(
+    series = _chart_strike_series(
         pd.Series(exposure, dtype=float),
         spot,
         window_pct=window_pct,
-        min_strikes=5,
-        max_strikes=max_bars,
+        max_bars=max_bars,
+        pin_levels=(spot,),
     )
     if series.empty:
         return None
     strikes = [float(s) for s in series.index]
     values = [float(v) for v in series.values]
     colors = [_GREEN if v >= 0 else _RED for v in values]
+    bar_width = _bar_width(strikes)
     prev_map = {}
     if previous is not None and not previous.empty:
         prev_map = {float(k): float(v) for k, v in pd.Series(previous, dtype=float).items()}
@@ -753,6 +890,7 @@ def _horizontal_exposure_bars(
             y=strikes,
             x=values,
             orientation="h",
+            width=bar_width,
             marker_color=colors,
             opacity=0.88,
             name="Exposure",
@@ -767,28 +905,30 @@ def _horizontal_exposure_bars(
                     y=strikes,
                     x=prev_x,
                     mode="markers",
-                    marker=dict(color="#ffffff", size=7, line=dict(color=_CHART_BG, width=1)),
+                    marker=dict(color="#ffffff", size=6, line=dict(color=_CHART_BG, width=1)),
                     name="Prior slice",
                     hovertemplate="Strike %{y:.0f}<br>Prior %{x:.3f}<extra></extra>",
                 )
             )
     if spot and spot > 0:
-        fig.add_hline(y=spot, line_color=_AMBER, line_width=2, annotation_text=f"Spot {spot:.0f}")
+        fig.add_hline(
+            y=float(spot),
+            line_color=_AMBER,
+            line_width=1.6,
+            annotation_text=f"Spot {spot:.0f}",
+            annotation_font=dict(color=_AMBER, size=10),
+        )
 
-    y_min, y_max = min(strikes), max(strikes)
-    if spot and spot > 0:
-        pad = max((y_max - y_min) * 0.08, spot * 0.01)
-        y_min = min(y_min, spot) - pad
-        y_max = max(y_max, spot) + pad
-
+    chart_height = max(height, min(520, 16 * len(strikes) + 96))
     _apply_base(
         fig,
         title=title,
-        height=height,
-        margin=dict(l=64, r=24, t=56, b=36),
+        height=chart_height,
+        margin=dict(l=64, r=24, t=52, b=36),
         xaxis=dict(title="Exposure", zeroline=True, zerolinecolor="rgba(255,255,255,0.2)"),
-        yaxis=dict(title="Strike", range=[y_min, y_max]),
+        yaxis=_strike_axis_layout(strikes, spot, axis="y"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        bargap=0.0,
     )
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
@@ -867,9 +1007,9 @@ def make_periscope_exposure_chart(
         spot,
         title=title,
         previous=previous,
-        height=320 if compact else 460,
-        max_bars=36 if compact else 56,
-        window_pct=0.025 if compact else 0.05,
+        height=300 if compact else 440,
+        max_bars=28 if compact else 44,
+        window_pct=0.022 if compact else 0.04,
     )
 
 
