@@ -3,105 +3,523 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SPX · Gamma Auto-Trader · Strategy</title>
+    <title>SPX · Gamma Auto-Trader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"
           integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     <style>
       :root {
-        --bg: #06080d; --panel: #0a0e14; --border: rgba(148, 163, 184, 0.12);
-        --txt: #e2e8f0; --muted: #64748b; --label: #94a3b8;
-        --accent: #3b82f6; --green: #10b981; --red: #ef4444; --amber: #f59e0b; --purple: #a78bfa;
+        --bg: #05070c;
+        --bg-elevated: #0a0f18;
+        --panel: rgba(12, 17, 28, 0.88);
+        --panel-hover: rgba(16, 22, 36, 0.95);
+        --border: rgba(148, 163, 184, 0.1);
+        --border-strong: rgba(148, 163, 184, 0.18);
+        --txt: #f1f5f9;
+        --muted: #64748b;
+        --label: #94a3b8;
+        --accent: #3b82f6;
+        --accent-soft: rgba(59, 130, 246, 0.12);
+        --green: #22c55e;
+        --green-soft: rgba(34, 197, 94, 0.12);
+        --red: #ef4444;
+        --red-soft: rgba(239, 68, 68, 0.12);
+        --amber: #f59e0b;
+        --amber-soft: rgba(245, 158, 11, 0.12);
+        --purple: #a78bfa;
+        --radius: 12px;
+        --radius-sm: 8px;
+        --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
       }
-      body { min-height: 100vh; color: var(--txt); background: var(--bg); font-family: Inter, system-ui, sans-serif; }
-      .uw-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-      .uw-panel-head { display: flex; justify-content: space-between; align-items: center; padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.8rem; font-weight: 600; color: var(--label); }
-      .uw-panel-body { padding: 0.25rem 0.35rem 0.35rem; }
-      #strategyChart { min-height: 720px; }
-      .chip { border-radius: 999px; border: 1px solid rgba(59,130,246,0.35); color: #93c5fd; font-size: 0.68rem; padding: 0.15rem 0.5rem; }
-      .chip.live-pulse { border-color: rgba(245, 158, 11, 0.5); color: var(--amber); animation: pulse 2s ease-in-out infinite; }
-      .chip.pass { border-color: rgba(16,185,129,0.4); color: var(--green); }
-      .chip.fail { border-color: rgba(239,68,68,0.4); color: var(--red); }
-      .chip.pending { border-color: var(--border); color: var(--muted); }
-      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
-      .regime-long { color: var(--green); } .regime-short { color: var(--red); }
-      .mono { font-family: ui-monospace, monospace; }
+      * { box-sizing: border-box; }
+      body {
+        min-height: 100vh;
+        color: var(--txt);
+        background: var(--bg);
+        background-image:
+          radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59, 130, 246, 0.08), transparent),
+          linear-gradient(rgba(148, 163, 184, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148, 163, 184, 0.03) 1px, transparent 1px);
+        background-size: 100% 100%, 48px 48px, 48px 48px;
+        font-family: Inter, system-ui, sans-serif;
+        font-size: 0.875rem;
+        -webkit-font-smoothing: antialiased;
+      }
+      .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
       .muted { color: var(--muted); }
-      .spot-live { color: var(--amber); }
-      .time-nav .form-control, .time-nav .form-select { background: #06080d; border-color: var(--border); color: var(--txt); font-size: 0.85rem; }
+      .page-wrap { max-width: 1440px; margin: 0 auto; }
+
+      .uw-panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        backdrop-filter: blur(12px);
+      }
+      .uw-panel-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.65rem 1rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--label);
+        letter-spacing: 0.02em;
+      }
+      .uw-panel-body { padding: 0.35rem 0.5rem 0.5rem; }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        border-radius: 999px;
+        border: 1px solid rgba(59, 130, 246, 0.35);
+        color: #93c5fd;
+        font-size: 0.65rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        padding: 0.2rem 0.55rem;
+        text-transform: uppercase;
+      }
+      .chip.live-pulse {
+        border-color: rgba(245, 158, 11, 0.5);
+        color: var(--amber);
+        animation: pulse 2s ease-in-out infinite;
+      }
+      .chip.pass { border-color: rgba(34, 197, 94, 0.45); color: var(--green); background: var(--green-soft); }
+      .chip.fail { border-color: rgba(239, 68, 68, 0.45); color: var(--red); background: var(--red-soft); }
+      .chip.pending { border-color: var(--border); color: var(--muted); background: transparent; }
+      .chip::before {
+        content: "";
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: currentColor;
+        opacity: 0.7;
+      }
+      .chip.pending::before { opacity: 0.35; }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+      .badge-armed { background: var(--green-soft); color: var(--green); border: 1px solid rgba(34, 197, 94, 0.35); }
+      .badge-disarmed { background: rgba(100, 116, 139, 0.12); color: var(--muted); border: 1px solid var(--border); }
+
+      /* KPI strip */
+      .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+        gap: 0.65rem;
+      }
+      .kpi-card {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 0.65rem 0.75rem;
+        transition: border-color 0.15s;
+      }
+      .kpi-card:hover { border-color: var(--border-strong); }
+      .kpi-label {
+        font-size: 0.62rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 0.25rem;
+      }
+      .kpi-value {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 1.05rem;
+        font-weight: 600;
+        line-height: 1.2;
+      }
+      .kpi-value.spot-live { color: var(--amber); font-size: 1.25rem; }
+      .kpi-value.positive { color: var(--green); }
+      .kpi-value.negative { color: var(--red); }
+      .regime-long { color: var(--green); }
+      .regime-short { color: var(--red); }
+      .spot-flash { animation: spotFlash 0.6s ease; }
+      @keyframes spotFlash {
+        0% { color: #fff; text-shadow: 0 0 12px rgba(245, 158, 11, 0.8); }
+        100% { color: var(--amber); text-shadow: none; }
+      }
+
+      /* Entry pipeline */
+      .pipeline {
+        display: flex;
+        align-items: stretch;
+        gap: 0;
+        margin-bottom: 0.85rem;
+      }
+      .pipeline-step {
+        flex: 1;
+        text-align: center;
+        padding: 0.5rem 0.35rem;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        position: relative;
+        font-size: 0.68rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        transition: all 0.2s;
+      }
+      .pipeline-step:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+      .pipeline-step:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+      .pipeline-step + .pipeline-step { border-left: none; }
+      .pipeline-step.active { color: var(--txt); background: var(--accent-soft); border-color: rgba(59, 130, 246, 0.3); }
+      .pipeline-step.done { color: var(--green); background: var(--green-soft); border-color: rgba(34, 197, 94, 0.25); }
+      .pipeline-step.blocked { color: var(--red); background: var(--red-soft); border-color: rgba(239, 68, 68, 0.25); }
+      .pipeline-step .step-icon { display: block; font-size: 1rem; margin-bottom: 0.15rem; }
+
+      /* Signal cards */
+      .signal-card {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 0.85rem 1rem;
+      }
+      .signal-card h3 {
+        font-size: 0.68rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 0 0 0.65rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+      }
+      .entry-hero {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        padding: 0.75rem;
+        background: rgba(0, 0, 0, 0.25);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        margin-bottom: 0.65rem;
+      }
+      .entry-hero.call { border-color: rgba(34, 197, 94, 0.25); }
+      .entry-hero.put { border-color: rgba(239, 68, 68, 0.25); }
+      .entry-type-badge {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 0.45rem 0.6rem;
+        border-radius: 6px;
+        letter-spacing: 0.06em;
+      }
+      .entry-type-badge.call { background: var(--green-soft); color: var(--green); }
+      .entry-type-badge.put { background: var(--red-soft); color: var(--red); }
+      .entry-strike { font-family: "JetBrains Mono", monospace; font-size: 1.5rem; font-weight: 700; line-height: 1; }
+      .entry-meta { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
+      .confidence-bar-wrap { margin-top: 0.5rem; }
+      .confidence-bar-wrap label { font-size: 0.68rem; color: var(--muted); display: flex; justify-content: space-between; margin-bottom: 0.25rem; }
+      .confidence-bar {
+        height: 4px;
+        background: rgba(148, 163, 184, 0.15);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .confidence-bar-fill {
+        height: 100%;
+        border-radius: 2px;
+        background: linear-gradient(90deg, var(--accent), var(--purple));
+        transition: width 0.4s ease;
+      }
+      .signal-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.8rem;
+        padding: 0.35rem 0;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+      }
+      .signal-row:last-child { border-bottom: none; }
+      .signal-val { font-family: "JetBrains Mono", monospace; color: var(--txt); font-weight: 500; }
+      .filter-item {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.45rem 0;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+      }
+      .filter-item:last-child { border-bottom: none; }
+      .filter-check {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.65rem;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+      .filter-check.ok { background: var(--green-soft); color: var(--green); border: 1px solid rgba(34, 197, 94, 0.35); }
+      .filter-check.no { background: var(--red-soft); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.35); }
+      .filter-check.wait { background: rgba(100, 116, 139, 0.12); color: var(--muted); border: 1px solid var(--border); }
+      .filter-label { flex: 1; font-size: 0.8rem; }
+      .rule-grid { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+      .rule-pill {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.65rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 6px;
+        background: var(--accent-soft);
+        color: #93c5fd;
+        border: 1px solid rgba(59, 130, 246, 0.2);
+      }
+      .rule-pill.danger { background: var(--red-soft); color: #fca5a5; border-color: rgba(239, 68, 68, 0.2); }
+      .rule-pill.success { background: var(--green-soft); color: #86efac; border-color: rgba(34, 197, 94, 0.2); }
+
+      /* Chart */
+      #strategyChart { min-height: 680px; width: 100%; }
+      .chart-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        padding: 0.35rem 1rem 0.65rem;
+        font-size: 0.68rem;
+        color: var(--muted);
+        border-top: 1px solid var(--border);
+      }
+      .legend-item { display: flex; align-items: center; gap: 0.35rem; }
+      .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+
+      /* Time nav */
+      .time-nav .form-control, .time-nav .form-select {
+        background: var(--bg);
+        border-color: var(--border);
+        color: var(--txt);
+        font-size: 0.82rem;
+        border-radius: var(--radius-sm);
+      }
+      .time-nav .form-control:focus, .time-nav .form-select:focus {
+        background: var(--bg);
+        border-color: var(--accent);
+        color: var(--txt);
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+      }
+      .btn-nav { border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 500; }
+
+      /* Trader controls */
+      .trader-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .btn-trader {
+        border-radius: var(--radius-sm);
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 0.4rem 0.85rem;
+        transition: transform 0.1s, box-shadow 0.15s;
+      }
+      .btn-trader:active { transform: scale(0.97); }
+      .btn-trader.btn-arm { background: var(--green); border-color: var(--green); color: #052e16; }
+      .btn-trader.btn-arm:hover { background: #16a34a; border-color: #16a34a; color: #052e16; }
+      .btn-trader.btn-run { background: var(--accent-soft); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd; }
+      .btn-trader.btn-run:hover { background: rgba(59, 130, 246, 0.22); color: #bfdbfe; }
+      .btn-trader.loading { opacity: 0.65; pointer-events: none; }
+
+      .positions-table { font-size: 0.78rem; }
+      .positions-table thead th {
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        font-weight: 600;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 0.5rem;
+      }
+      .positions-table tbody td {
+        padding: 0.55rem 0.35rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+        vertical-align: middle;
+      }
+      .positions-table tbody tr:last-child td { border-bottom: none; }
+      .positions-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+      .type-badge {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.65rem;
+        font-weight: 600;
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+      }
+      .type-badge.call { background: var(--green-soft); color: var(--green); }
+      .type-badge.put { background: var(--red-soft); color: var(--red); }
+      .empty-state {
+        text-align: center;
+        padding: 1.5rem 1rem;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      .empty-state-icon { font-size: 1.5rem; opacity: 0.4; margin-bottom: 0.35rem; }
+
+      /* Recent trades */
+      .trade-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.45rem 0;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+        font-size: 0.78rem;
+      }
+      .trade-row:last-child { border-bottom: none; }
+      .trade-pnl { font-family: "JetBrains Mono", monospace; font-weight: 600; font-size: 0.75rem; }
+      .trade-pnl.win { color: var(--green); }
+      .trade-pnl.loss { color: var(--red); }
+
+      /* Chat */
       .agent-card { border-left: 3px solid var(--accent); }
-      .chat-panel { display: flex; flex-direction: column; min-height: 280px; max-height: 380px; }
-      .chat-messages { flex: 1; overflow-y: auto; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
-      .chat-bubble { max-width: 88%; padding: 0.5rem 0.7rem; border-radius: 8px; font-size: 0.84rem; line-height: 1.45; white-space: pre-wrap; }
-      .chat-bubble.user { align-self: flex-end; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); }
-      .chat-bubble.assistant { align-self: flex-start; background: #0f1419; border: 1px solid var(--border); }
-      .chat-input-row { border-top: 1px solid var(--border); padding: 0.65rem; display: flex; gap: 0.5rem; }
-      .chat-input-row textarea { flex: 1; resize: none; background: #06080d; border: 1px solid var(--border); color: var(--txt); border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.84rem; }
-      .trader-stat { font-size: 0.78rem; color: var(--label); }
-      .trader-stat strong { color: var(--txt); }
-      .signal-card { background: #06080d; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; height: 100%; }
-      .signal-card h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.5rem; }
-      .signal-row { display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 0.35rem; }
-      .signal-val { font-family: ui-monospace, monospace; color: var(--txt); }
-      .rule-pill { display: inline-block; font-size: 0.68rem; padding: 0.12rem 0.45rem; border-radius: 4px; background: rgba(59,130,246,0.1); color: #93c5fd; margin: 0.1rem; }
-      .badge-armed { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.35); }
-      .badge-disarmed { background: rgba(100,116,139,0.15); color: var(--muted); border: 1px solid var(--border); }
-      .suggestion-list { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; color: var(--muted); }
+      .chat-panel { display: flex; flex-direction: column; min-height: 300px; max-height: 420px; }
+      .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0.85rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        scroll-behavior: smooth;
+      }
+      .chat-bubble {
+        max-width: 85%;
+        padding: 0.6rem 0.8rem;
+        border-radius: 10px;
+        font-size: 0.84rem;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+      .chat-bubble.user {
+        align-self: flex-end;
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.08));
+        border: 1px solid rgba(59, 130, 246, 0.25);
+      }
+      .chat-bubble.assistant {
+        align-self: flex-start;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+      }
+      .chat-input-row {
+        border-top: 1px solid var(--border);
+        padding: 0.75rem;
+        display: flex;
+        gap: 0.5rem;
+        background: rgba(0, 0, 0, 0.15);
+      }
+      .chat-input-row textarea {
+        flex: 1;
+        resize: none;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--txt);
+        border-radius: var(--radius-sm);
+        padding: 0.5rem 0.7rem;
+        font-size: 0.84rem;
+        line-height: 1.4;
+      }
+      .chat-input-row textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+      }
+      .last-updated { font-size: 0.65rem; color: var(--muted); }
+
+      @media (max-width: 991px) {
+        #strategyChart { min-height: 520px; }
+        .entry-strike { font-size: 1.25rem; }
+      }
     </style>
   </head>
   <body>
-    <main class="container-fluid px-3 px-lg-4 py-3">
+    <main class="container-fluid px-3 px-lg-4 py-3 page-wrap">
       {% if bootstrap_status == 'failed' %}
-      <div class="alert alert-danger py-2 small">Couldn't refresh live data. {{ refresh_message or 'Check UW_API_KEY.' }}</div>
+      <div class="alert alert-danger py-2 small mb-3">Couldn't refresh live data. {{ refresh_message or 'Check UW_API_KEY.' }}</div>
       {% elif bootstrap_status == 'stale' %}
-      <div class="alert alert-warning py-2 small">Showing last saved snapshot.</div>
+      <div class="alert alert-warning py-2 small mb-3">Showing last saved snapshot.</div>
       {% elif not uw_configured %}
-      <div class="alert alert-secondary py-2 small">Set UW_API_KEY for live 10-minute exposure updates.</div>
+      <div class="alert alert-secondary py-2 small mb-3">Set UW_API_KEY for live 10-minute exposure updates.</div>
       {% endif %}
 
       {% set sig = strategy_state.signals if strategy_state else {} %}
       {% set rec = sig.recommended if sig.get('available') else {} %}
       {% set advice = strategy_state.advice if strategy_state else {} %}
       {% set filters = strategy_state.filters if strategy_state else {} %}
+      {% set perf = strategy_state.performance if strategy_state else (auto_trader.performance or {}) %}
+      {% set recent = strategy_state.recent_trades if strategy_state else [] %}
+      {% set closed_recent = recent|selectattr('status', 'equalto', 'closed')|list if recent else [] %}
+      {% if not closed_recent and recent %}
+        {% set closed_recent = recent|selectattr('exit_reason')|list %}
+      {% endif %}
 
       <header class="uw-panel mb-3 p-3">
-        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
           <div>
             <div class="d-flex gap-2 mb-2 flex-wrap">
-              <span class="chip">AUTO-TRADER</span>
-              <span class="chip">SPX</span>
-              {% if timeline.is_latest %}<span class="chip live-pulse" id="liveChip">LIVE</span>{% else %}<span class="chip">REPLAY</span>{% endif %}
+              <span class="chip">Auto-Trader</span>
+              <span class="chip">{{ ticker }}</span>
+              {% if timeline.is_latest %}<span class="chip live-pulse" id="liveChip">Live</span>{% else %}<span class="chip">Replay</span>{% endif %}
               <span class="chip {% if advice.get('approve') %}pass{% elif sig.get('available') %}fail{% else %}pending{% endif %}" id="entryChip">
-                {% if advice.get('approve') %}ENTRY OK{% elif sig.get('available') %}NO ENTRY{% else %}NO SIGNAL{% endif %}
+                {% if advice.get('approve') %}Entry OK{% elif sig.get('available') %}No Entry{% else %}No Signal{% endif %}
               </span>
             </div>
-            <h1 class="h5 mb-1">Gamma Magnet Strategy</h1>
+            <h1 class="h5 mb-1 fw-semibold">Gamma Magnet Strategy</h1>
             <div class="small muted">{{ data_source }}</div>
           </div>
           <div class="d-flex gap-2 align-items-center flex-wrap">
-            <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">{% if auto_trader.armed %}ARMED{% else %}DISARMED{% endif %}</span>
-            {% if auto_trader.live_mode %}<span class="chip live-pulse" style="border-color:rgba(239,68,68,0.5);color:var(--red);">WEBULL LIVE</span>{% else %}<span class="chip">PAPER</span>{% endif %}
+            <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">{% if auto_trader.armed %}Armed{% else %}Disarmed{% endif %}</span>
+            {% if auto_trader.live_mode %}<span class="chip live-pulse" style="border-color:rgba(239,68,68,0.5);color:var(--red);">Webull Live</span>{% else %}<span class="chip">Paper</span>{% endif %}
+            <span class="last-updated" id="lastUpdated"></span>
           </div>
         </div>
-        <div class="d-flex flex-wrap gap-3 mt-2 small">
-          <span><strong>Spot</strong> <span class="mono spot-live" id="spotValue">{{ '%.2f'|format(spot) if spot else 'N/A' }}</span></span>
-          <span><strong>Regime</strong> <span class="{{ 'regime-long' if 'LONG' in regime else 'regime-short' }}">{{ regime }}</span></span>
-          <span><strong>Flip</strong> <span class="mono">{{ '%.0f'|format(gamma_flip) if gamma_flip else 'N/A' }}</span></span>
-          <span><strong>WR</strong> <span class="mono">{{ '%.0f'|format((auto_trader.performance.win_rate or 0) * 100) }}%</span></span>
-          <span><strong>PnL</strong> <span class="mono">${{ '%.0f'|format(auto_trader.performance.total_pnl_usd or 0) }}</span></span>
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Spot</div>
+            <div class="kpi-value spot-live mono" id="spotValue">{{ '%.2f'|format(spot) if spot else '—' }}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Regime</div>
+            <div class="kpi-value mono {{ 'regime-long' if 'LONG' in regime else 'regime-short' }}">{{ regime }}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">γ-Flip</div>
+            <div class="kpi-value mono">{{ '%.0f'|format(gamma_flip) if gamma_flip else '—' }}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Win Rate</div>
+            <div class="kpi-value mono" id="kpiWinRate">{{ '%.0f'|format((perf.win_rate or 0) * 100) }}%</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Total PnL</div>
+            <div class="kpi-value mono {{ 'positive' if (perf.total_pnl_usd or 0) >= 0 else 'negative' }}" id="kpiPnl">${{ '%.0f'|format(perf.total_pnl_usd or 0) }}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Trades</div>
+            <div class="kpi-value mono" id="kpiTrades">{{ perf.total_trades or 0 }}</div>
+          </div>
         </div>
       </header>
 
       {% if timeline.available_dates %}
       <section class="uw-panel p-3 mb-3 time-nav">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-          <div class="small fw-semibold">Session · 10-min slices (ET)</div>
-          <div class="small mono muted">{{ selected_label }} · {{ timeline.day_slice_index }}/{{ timeline.day_slice_count }}</div>
+          <div class="small fw-semibold">Session replay · 10-min slices (ET)</div>
+          <div class="small mono muted">{{ selected_label }} · slice {{ timeline.day_slice_index }}/{{ timeline.day_slice_count }}</div>
         </div>
         <div class="d-flex flex-wrap gap-2 mb-3">
-          {% if timeline.prev_ts %}<a class="btn btn-sm btn-primary" id="rewindBtn" href="?ts={{ timeline.prev_ts }}">← 10 min</a>{% else %}<button class="btn btn-sm btn-primary" disabled>← 10 min</button>{% endif %}
-          {% if timeline.next_ts %}<a class="btn btn-sm btn-outline-light" href="?ts={{ timeline.next_ts }}">10 min →</a>{% else %}<button class="btn btn-sm btn-outline-light" disabled>10 min →</button>{% endif %}
-          {% if not timeline.is_latest %}<a class="btn btn-sm btn-outline-info" href="?">Latest</a>{% endif %}
+          {% if timeline.prev_ts %}<a class="btn btn-sm btn-primary btn-nav" id="rewindBtn" href="?ts={{ timeline.prev_ts }}">← 10 min</a>{% else %}<button class="btn btn-sm btn-primary btn-nav" disabled>← 10 min</button>{% endif %}
+          {% if timeline.next_ts %}<a class="btn btn-sm btn-outline-light btn-nav" href="?ts={{ timeline.next_ts }}">10 min →</a>{% else %}<button class="btn btn-sm btn-outline-light btn-nav" disabled>10 min →</button>{% endif %}
+          {% if not timeline.is_latest %}<a class="btn btn-sm btn-outline-info btn-nav" href="?">Jump to latest</a>{% endif %}
         </div>
         <div class="row g-2">
           <div class="col-md-4"><input type="date" class="form-control form-control-sm" id="sessionDate" value="{{ selected_date or '' }}" min="{{ timeline.available_dates[0] }}" max="{{ timeline.available_dates[-1] }}"></div>
@@ -119,93 +537,182 @@
           <section class="uw-panel">
             <div class="uw-panel-head">
               <span>Strategy map</span>
-              <span class="small muted fw-normal">γ magnets · spot · open positions · equity curve</span>
+              <span class="small muted fw-normal">Magnets · spot · positions · equity</span>
             </div>
             <div class="uw-panel-body"><div id="strategyChart"></div></div>
+            <div class="chart-legend">
+              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> +γ</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> −γ</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--amber)"></span> Spot</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--blue,#38bdf8)"></span> γ-flip</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> Signals</span>
+            </div>
           </section>
         </div>
         <div class="col-lg-4 d-flex flex-column gap-3">
-          <div class="signal-card">
-            <h3>Entry signal</h3>
-            {% if sig.get('available') %}
-            <div class="signal-row"><span>Recommended</span><span class="signal-val">{{ rec.option_type|upper }} {{ '%.0f'|format(rec.strike) }}</span></div>
-            <div class="signal-row"><span>Type</span><span class="signal-val">{{ rec.signal_type }}</span></div>
-            <div class="signal-row"><span>γ at strike</span><span class="signal-val">{{ '%+.3f'|format(rec.gamma_bn) }} Bn</span></div>
-            <div class="signal-row"><span>Δγ (10m)</span><span class="signal-val">{{ '%+.3f'|format(rec.gamma_delta) }} Bn</span></div>
-            <div class="signal-row"><span>Confidence</span><span class="signal-val">{{ '%.0f'|format((advice.confidence or 0) * 100) }}%</span></div>
-            <div class="small muted mt-2">{{ advice.reason or rec.rationale }}</div>
+          <div class="signal-card" id="entryCard">
+            <h3>Entry decision</h3>
+            <div class="pipeline" id="entryPipeline">
+              <div class="pipeline-step {% if sig.get('available') %}done{% else %}blocked{% endif %}" data-step="signal">
+                <span class="step-icon">{% if sig.get('available') %}✓{% else %}✗{% endif %}</span>Signal
+              </div>
+              <div class="pipeline-step {% if filters.get('approve') %}done{% elif sig.get('available') %}blocked{% else %}active{% endif %}" data-step="filters">
+                <span class="step-icon">{% if filters.get('approve') %}✓{% elif sig.get('available') %}✗{% else %}…{% endif %}</span>Filters
+              </div>
+              <div class="pipeline-step {% if advice.get('approve') %}done{% elif filters.get('approve') %}active{% elif sig.get('available') %}blocked{% else %}active{% endif %}" data-step="advisor">
+                <span class="step-icon">{% if advice.get('approve') %}✓{% elif filters.get('approve') %}…{% else %}—{% endif %}</span>Advisor
+              </div>
+            </div>
+            <div id="entryContent">
+              {% if sig.get('available') %}
+              <div class="entry-hero {{ rec.option_type|lower }}">
+                <span class="entry-type-badge {{ rec.option_type|lower }}">{{ rec.option_type|upper }}</span>
+                <div>
+                  <div class="entry-strike">{{ '%.0f'|format(rec.strike) }}</div>
+                  <div class="entry-meta">{{ rec.signal_type }} · γ {{ '%+.3f'|format(rec.gamma_bn) }} Bn</div>
+                </div>
+              </div>
+              <div class="confidence-bar-wrap">
+                <label><span>Confidence</span><span class="mono" id="confPct">{{ '%.0f'|format((advice.confidence or 0) * 100) }}%</span></label>
+                <div class="confidence-bar"><div class="confidence-bar-fill" id="confBar" style="width:{{ '%.0f'|format((advice.confidence or 0) * 100) }}%"></div></div>
+              </div>
+              <div class="signal-row mt-2"><span>Δγ (10m)</span><span class="signal-val">{{ '%+.3f'|format(rec.gamma_delta) }} Bn</span></div>
+              <div class="small muted mt-2" id="entryReason">{{ advice.reason or rec.rationale }}</div>
+              {% else %}
+              <div class="empty-state">
+                <div class="empty-state-icon">◎</div>
+                <div id="entryReason">{{ sig.reason or 'Waiting for gamma exposure data…' }}</div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="signal-card" id="filterCard">
+            <h3>Filter checklist</h3>
+            <div id="filterList">
+              <div class="filter-item">
+                <span class="filter-check {% if sig.get('available') %}ok{% else %}no{% endif %}">{% if sig.get('available') %}✓{% else %}✗{% endif %}</span>
+                <span class="filter-label">Gamma signal detected</span>
+              </div>
+              <div class="filter-item">
+                <span class="filter-check {% if filters.get('approve') %}ok{% elif sig.get('available') %}no{% else %}wait{% endif %}" id="filterCheckIcon">{% if filters.get('approve') %}✓{% elif sig.get('available') %}✗{% else %}—{% endif %}</span>
+                <span class="filter-label">Entry filters <span class="chip {% if filters.get('approve') %}pass{% else %}fail{% endif %} ms-1" id="filterChip" style="font-size:0.58rem;padding:0.1rem 0.35rem">{% if filters.get('approve') %}Pass{% else %}Block{% endif %}</span></span>
+              </div>
+              <div class="filter-item">
+                <span class="filter-check {% if advice.get('approve') %}ok{% elif filters.get('approve') %}wait{% else %}wait{% endif %}">{% if advice.get('approve') %}✓{% elif filters.get('approve') %}…{% else %}—{% endif %}</span>
+                <span class="filter-label">AI advisor approval</span>
+              </div>
+            </div>
+            {% if not filters.get('approve') and filters.get('reason') %}
+            <div class="small muted mt-2 px-1" id="filterReason">{{ filters.reason }}</div>
             {% else %}
-            <div class="small muted">{{ sig.reason or 'Waiting for gamma data…' }}</div>
+            <div class="small muted mt-2 px-1 d-none" id="filterReason"></div>
             {% endif %}
           </div>
+
           <div class="signal-card">
-            <h3>Filter checklist</h3>
-            <div class="signal-row"><span>Gamma signal</span><span class="chip {% if sig.get('available') %}pass{% else %}fail{% endif %}">{% if sig.get('available') %}OK{% else %}SKIP{% endif %}</span></div>
-            <div class="signal-row"><span>Entry filters</span><span class="chip {% if filters.get('approve') %}pass{% else %}fail{% endif %}" id="filterChip">{% if filters.get('approve') %}PASS{% else %}BLOCK{% endif %}</span></div>
-            <div class="signal-row"><span>AI advisor</span><span class="chip {% if advice.get('approve') %}pass{% else %}fail{% endif %}">{% if advice.get('approve') %}APPROVE{% else %}WAIT{% endif %}</span></div>
-            {% if not filters.get('approve') and filters.get('reason') %}<div class="small muted mt-1">{{ filters.reason }}</div>{% endif %}
+            <h3>
+              Exit rules
+              {% if strategy_state.exit_profile and strategy_state.exit_profile.hold_for_target %}<span class="chip pass" style="font-size:0.58rem">Runner</span>{% endif %}
+            </h3>
+            <div class="rule-grid">
+              <span class="rule-pill danger">Stop −{{ '%.0f'|format((strategy_state.rules.stop_loss_pct or 0.05) * 100) }}%</span>
+              <span class="rule-pill success">Target +{{ '%.0f'|format((strategy_state.rules.take_profit_pct or 0.35) * 100) }}%</span>
+              <span class="rule-pill">Partial +{{ '%.0f'|format((strategy_state.rules.partial_take_profit_pct or 0.15) * 100) }}%</span>
+              <span class="rule-pill">Trail +{{ '%.0f'|format((strategy_state.rules.trail_trigger_pct or 0.10) * 100) }}/+{{ '%.0f'|format((strategy_state.rules.trail_floor_pct or 0.05) * 100) }}%</span>
+              <span class="rule-pill">Max dist {{ '%.1f'|format((strategy_state.rules.max_strike_distance_pct or 0.01) * 100) }}%</span>
+            </div>
           </div>
+
+          {% if closed_recent %}
           <div class="signal-card">
-            <h3>Exit rules {% if strategy_state.exit_profile and strategy_state.exit_profile.hold_for_target %}<span class="chip pass">RUNNER</span>{% endif %}</h3>
-            <span class="rule-pill">Stop −{{ '%.0f'|format((strategy_state.rules.stop_loss_pct or 0.05) * 100) }}%</span>
-            <span class="rule-pill">Target +{{ '%.0f'|format((strategy_state.rules.take_profit_pct or 0.35) * 100) }}%</span>
-            <span class="rule-pill">Partial +{{ '%.0f'|format((strategy_state.rules.partial_take_profit_pct or 0.15) * 100) }}%</span>
-            <span class="rule-pill">Trail +{{ '%.0f'|format((strategy_state.rules.trail_trigger_pct or 0.10) * 100) }}/+{{ '%.0f'|format((strategy_state.rules.trail_floor_pct or 0.05) * 100) }}%</span>
-            <span class="rule-pill">Max dist {{ '%.1f'|format((strategy_state.rules.max_strike_distance_pct or 0.01) * 100) }}%</span>
+            <h3>Recent trades</h3>
+            <div id="recentTradesList">
+              {% for t in closed_recent[:8] %}
+              <div class="trade-row">
+                <span>
+                  <span class="type-badge {{ t.option_type|lower }}">{{ t.option_type|upper }}</span>
+                  <span class="mono ms-1">{{ '%.0f'|format(t.strike) }}</span>
+                  {% if t.exit_reason %}<span class="muted ms-1" style="font-size:0.65rem">{{ t.exit_reason }}</span>{% endif %}
+                </span>
+                <span class="trade-pnl {% if (t.pnl_usd or 0) >= 0 %}win{% else %}loss{% endif %}">
+                  {% if t.pnl_usd is not none %}${{ '%+.0f'|format(t.pnl_usd) }}{% elif t.pnl_pct is not none %}{{ '%+.1f'|format(t.pnl_pct * 100) }}%{% else %}—{% endif %}
+                </span>
+              </div>
+              {% endfor %}
+            </div>
           </div>
+          {% endif %}
         </div>
       </div>
 
-      <section class="uw-panel mb-3 p-3">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-          <div><h2 class="h6 mb-0">Trader controls</h2><div class="small muted">Arm · run cycle · manage positions</div></div>
+      <div class="row g-3 mb-3">
+        <div class="col-lg-7">
+          <section class="uw-panel p-3">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+              <div>
+                <h2 class="h6 mb-0 fw-semibold">Trader controls</h2>
+                <div class="small muted">Arm, run cycle, manage open positions</div>
+              </div>
+              <div class="d-flex gap-3 small mono muted">
+                <span>Open <strong class="text-light" id="openCount">{{ (strategy_state.open_positions or auto_trader.open_positions or [])|length }}</strong></span>
+                <span>Broker <strong class="text-light">{{ auto_trader.broker_mode or 'paper' }}</strong></span>
+              </div>
+            </div>
+            <div class="trader-toolbar mb-3">
+              <button class="btn btn-sm btn-trader btn-arm" id="traderArmBtn" type="button">Arm trader</button>
+              <button class="btn btn-sm btn-trader btn-outline-secondary" id="traderDisarmBtn" type="button">Disarm</button>
+              <button class="btn btn-sm btn-trader btn-run" id="traderRunBtn" type="button">Run cycle</button>
+              <button class="btn btn-sm btn-trader btn-outline-secondary" id="strategyRefreshBtn" type="button">↻ Refresh</button>
+            </div>
+            <div id="positionsWrap">
+              {% if strategy_state.open_positions or auto_trader.open_positions %}
+              <div class="table-responsive">
+                <table class="table table-sm table-dark table-borderless positions-table mb-0">
+                  <thead><tr><th>Type</th><th>Strike</th><th>Entry spot</th><th>PnL</th><th>Stop</th><th>Target</th></tr></thead>
+                  <tbody id="openPositionsBody">
+                    {% for p in strategy_state.open_positions or auto_trader.open_positions %}
+                    <tr>
+                      <td><span class="type-badge {{ p.option_type|lower }}">{{ p.option_type|upper }}</span></td>
+                      <td class="mono">{{ '%.0f'|format(p.strike) }}</td>
+                      <td class="mono">{{ '%.2f'|format(p.entry_spot) }}</td>
+                      <td class="mono {% if (p.pnl_pct or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">{% if p.pnl_pct is not none %}{{ '%+.1f'|format(p.pnl_pct * 100) }}%{% else %}—{% endif %}</td>
+                      <td class="mono muted">{{ '%.0f'|format((p.stop_pct or -0.05) * 100) }}%</td>
+                      <td class="mono muted">+{{ '%.0f'|format((p.target_pct or 0.35) * 100) }}%</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% else %}
+              <div class="empty-state" id="noPositionsMsg">
+                <div class="empty-state-icon">—</div>
+                No open positions
+              </div>
+              {% endif %}
+            </div>
+            <div class="small muted mt-2" id="traderStatusMsg"></div>
+          </section>
         </div>
-        <div class="d-flex flex-wrap gap-3 mb-2 trader-stat">
-          <span><strong>Trades</strong> {{ auto_trader.performance.total_trades or 0 }}</span>
-          <span><strong>Open</strong> {{ (auto_trader.open_positions or [])|length }}</span>
-          <span><strong>Broker</strong> {{ auto_trader.broker_mode or 'paper' }}</span>
+        <div class="col-lg-5">
+          <section class="uw-panel p-3 agent-card h-100">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div>
+                <h2 class="h6 mb-0 fw-semibold">GEX Assistant</h2>
+                <div class="small muted">Ask about levels, regime, entries</div>
+              </div>
+              <button class="btn btn-sm btn-outline-secondary btn-nav" id="chatReset" type="button">New chat</button>
+            </div>
+            <div class="chat-panel">
+              <div class="chat-messages" id="chatMessages"></div>
+              <div class="chat-input-row">
+                <textarea id="chatInput" rows="2" placeholder="Ask about gamma magnets, entries, exits…"></textarea>
+                <button class="btn btn-sm btn-primary btn-nav align-self-end" id="chatSend" type="button">Send</button>
+              </div>
+            </div>
+          </section>
         </div>
-        <div class="d-flex flex-wrap gap-2 mb-3">
-          <button class="btn btn-sm btn-success" id="traderArmBtn" type="button">Arm trader</button>
-          <button class="btn btn-sm btn-outline-secondary" id="traderDisarmBtn" type="button">Disarm</button>
-          <button class="btn btn-sm btn-outline-info" id="traderRunBtn" type="button">Run cycle now</button>
-          <button class="btn btn-sm btn-outline-secondary" id="strategyRefreshBtn" type="button">Refresh strategy</button>
-        </div>
-        {% if strategy_state.open_positions or auto_trader.open_positions %}
-        <div class="table-responsive mb-2">
-          <table class="table table-sm table-dark table-borderless small mb-0">
-            <thead><tr><th>Type</th><th>Strike</th><th>Entry</th><th>PnL</th><th>Stop</th><th>Target</th></tr></thead>
-            <tbody id="openPositionsBody">
-              {% for p in strategy_state.open_positions or auto_trader.open_positions %}
-              <tr>
-                <td>{{ p.option_type|upper }}</td>
-                <td>{{ '%.0f'|format(p.strike) }}</td>
-                <td>{{ '%.2f'|format(p.entry_spot) }}</td>
-                <td class="{% if (p.pnl_pct or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">{% if p.pnl_pct is not none %}{{ '%+.1f'|format(p.pnl_pct * 100) }}%{% else %}—{% endif %}</td>
-                <td>{{ '%.0f'|format((p.stop_pct or -0.05) * 100) }}%</td>
-                <td>+{{ '%.0f'|format((p.target_pct or 0.35) * 100) }}%</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% endif %}
-        <div class="small muted" id="traderStatusMsg"></div>
-      </section>
-
-      <section class="uw-panel p-3 agent-card">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <div><h2 class="h6 mb-0">GEX Assistant</h2><div class="small muted">Ask about levels, regime, predictions</div></div>
-          <button class="btn btn-sm btn-outline-secondary" id="chatReset" type="button">New chat</button>
-        </div>
-        <div class="chat-panel">
-          <div class="chat-messages" id="chatMessages"></div>
-          <div class="chat-input-row">
-            <textarea id="chatInput" rows="1" placeholder="Ask about gamma magnets, entries, exits…"></textarea>
-            <button class="btn btn-sm btn-primary" id="chatSend" type="button">Send</button>
-          </div>
-        </div>
-      </section>
+      </div>
     </main>
 
     <script>
@@ -220,13 +727,136 @@
 
       function renderStrategyChart(spec) {
         if (!spec || !chartEl) return;
-        Plotly.newPlot(chartEl, spec.data, spec.layout || {}, plotConfig);
+        Plotly.react(chartEl, spec.data, spec.layout || {}, plotConfig);
+      }
+
+      function updateLastUpdated() {
+        const el = document.getElementById('lastUpdated');
+        if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString();
       }
 
       function updateSpotDisplay(price) {
         if (!price || price <= 0) return;
         const el = document.getElementById('spotValue');
-        if (el) el.textContent = Number(price).toFixed(2);
+        if (el) {
+          el.textContent = Number(price).toFixed(2);
+          el.classList.remove('spot-flash');
+          void el.offsetWidth;
+          el.classList.add('spot-flash');
+        }
+      }
+
+      function updateKpis(perf) {
+        if (!perf) return;
+        const wr = document.getElementById('kpiWinRate');
+        const pnl = document.getElementById('kpiPnl');
+        const trades = document.getElementById('kpiTrades');
+        if (wr) wr.textContent = Math.round((perf.win_rate || 0) * 100) + '%';
+        if (pnl) {
+          const v = perf.total_pnl_usd || 0;
+          pnl.textContent = '$' + Math.round(v).toLocaleString();
+          pnl.className = 'kpi-value mono ' + (v >= 0 ? 'positive' : 'negative');
+        }
+        if (trades) trades.textContent = perf.total_trades || 0;
+      }
+
+      function updateEntryChip(advice, sig) {
+        const chip = document.getElementById('entryChip');
+        if (!chip) return;
+        chip.className = 'chip ' + (advice?.approve ? 'pass' : sig?.available ? 'fail' : 'pending');
+        chip.textContent = advice?.approve ? 'Entry OK' : sig?.available ? 'No Entry' : 'No Signal';
+      }
+
+      function updatePipeline(sig, filters, advice) {
+        const steps = document.querySelectorAll('#entryPipeline .pipeline-step');
+        if (!steps.length) return;
+        const states = [
+          sig?.available ? 'done' : 'blocked',
+          filters?.approve ? 'done' : sig?.available ? 'blocked' : 'active',
+          advice?.approve ? 'done' : filters?.approve ? 'active' : sig?.available ? 'blocked' : 'active',
+        ];
+        const icons = [
+          sig?.available ? '✓' : '✗',
+          filters?.approve ? '✓' : sig?.available ? '✗' : '…',
+          advice?.approve ? '✓' : filters?.approve ? '…' : '—',
+        ];
+        steps.forEach((el, i) => {
+          el.className = 'pipeline-step ' + states[i];
+          const icon = el.querySelector('.step-icon');
+          if (icon) icon.textContent = icons[i];
+        });
+      }
+
+      function updateFilterPanel(filters, sig, advice) {
+        const chip = document.getElementById('filterChip');
+        const reason = document.getElementById('filterReason');
+        if (chip) {
+          chip.className = 'chip ' + (filters?.approve ? 'pass' : 'fail') + ' ms-1';
+          chip.style.cssText = 'font-size:0.58rem;padding:0.1rem 0.35rem';
+          chip.textContent = filters?.approve ? 'Pass' : 'Block';
+        }
+        if (reason) {
+          if (!filters?.approve && filters?.reason) {
+            reason.textContent = filters.reason;
+            reason.classList.remove('d-none');
+          } else {
+            reason.classList.add('d-none');
+          }
+        }
+        updatePipeline(sig, filters, advice);
+        updateEntryChip(advice, sig);
+      }
+
+      function renderOpenPositions(positions) {
+        const wrap = document.getElementById('positionsWrap');
+        const count = document.getElementById('openCount');
+        if (count) count.textContent = (positions || []).length;
+        if (!wrap) return;
+        if (!positions || !positions.length) {
+          wrap.innerHTML = '<div class="empty-state" id="noPositionsMsg"><div class="empty-state-icon">—</div>No open positions</div>';
+          return;
+        }
+        const rows = positions.map(p => {
+          const pnl = p.pnl_pct;
+          const pnlCls = (pnl || 0) >= 0 ? 'text-success' : 'text-danger';
+          const pnlTxt = pnl != null ? (pnl >= 0 ? '+' : '') + (pnl * 100).toFixed(1) + '%' : '—';
+          const opt = (p.option_type || '').toLowerCase();
+          return `<tr>
+            <td><span class="type-badge ${opt}">${(p.option_type || '').toUpperCase()}</span></td>
+            <td class="mono">${Math.round(p.strike)}</td>
+            <td class="mono">${Number(p.entry_spot).toFixed(2)}</td>
+            <td class="mono ${pnlCls}">${pnlTxt}</td>
+            <td class="mono muted">${Math.round((p.stop_pct || -0.05) * 100)}%</td>
+            <td class="mono muted">+${Math.round((p.target_pct || 0.35) * 100)}%</td>
+          </tr>`;
+        }).join('');
+        wrap.innerHTML = `<div class="table-responsive"><table class="table table-sm table-dark table-borderless positions-table mb-0">
+          <thead><tr><th>Type</th><th>Strike</th><th>Entry spot</th><th>PnL</th><th>Stop</th><th>Target</th></tr></thead>
+          <tbody id="openPositionsBody">${rows}</tbody></table></div>`;
+      }
+
+      function renderRecentTrades(trades) {
+        const closed = (trades || []).filter(t => t.status === 'closed' || t.exit_reason).slice(0, 8);
+        let container = document.getElementById('recentTradesList');
+        if (!closed.length) return;
+        if (!container) {
+          const card = document.createElement('div');
+          card.className = 'signal-card';
+          card.innerHTML = '<h3>Recent trades</h3><div id="recentTradesList"></div>';
+          document.getElementById('filterCard')?.after(card);
+          container = document.getElementById('recentTradesList');
+        }
+        container.innerHTML = closed.map(t => {
+          const win = (t.pnl_usd || 0) >= 0;
+          const pnl = t.pnl_usd != null ? '$' + (t.pnl_usd >= 0 ? '+' : '') + Math.round(t.pnl_usd) : (t.pnl_pct != null ? ((t.pnl_pct >= 0 ? '+' : '') + (t.pnl_pct * 100).toFixed(1) + '%') : '—');
+          const opt = (t.option_type || '').toLowerCase();
+          return `<div class="trade-row">
+            <span><span class="type-badge ${opt}">${(t.option_type || '').toUpperCase()}</span>
+            <span class="mono ms-1">${Math.round(t.strike)}</span>
+            ${t.exit_reason ? `<span class="muted ms-1" style="font-size:0.65rem">${t.exit_reason}</span>` : ''}</span>
+            <span class="trade-pnl ${win ? 'win' : 'loss'}">${pnl}</span>
+          </div>`;
+        }).join('');
       }
 
       function startSpotStream() {
@@ -242,17 +872,27 @@
       }
 
       async function refreshStrategy() {
+        const btn = document.getElementById('strategyRefreshBtn');
+        btn?.classList.add('loading');
         const params = new URLSearchParams(window.location.search);
         const qs = params.toString() ? '?' + params.toString() : '';
         try {
           const res = await fetch('/api/trader/strategy' + qs);
           const data = await res.json();
           if (data.chart_json) renderStrategyChart(JSON.parse(data.chart_json));
-          if (data.state?.spot) updateSpotDisplay(data.state.spot);
+          const st = data.state || {};
+          if (st.spot) updateSpotDisplay(st.spot);
+          if (st.performance) updateKpis(st.performance);
+          updateFilterPanel(st.filters, st.signals, st.advice);
+          renderOpenPositions(st.open_positions);
+          renderRecentTrades(st.recent_trades);
+          updateLastUpdated();
         } catch (_) {}
+        finally { btn?.classList.remove('loading'); }
       }
 
       renderStrategyChart(strategySpec);
+      updateLastUpdated();
       startSpotStream();
       if (isLiveSlice) window.setInterval(refreshStrategy, 60000);
 
@@ -321,12 +961,17 @@
         if (live && !window.confirm('Arm LIVE Webull trading?')) return;
         if (live) body.live_confirm = true;
         const data = await traderPost('/api/trader/arm', body);
-        document.getElementById('traderArmBadge').textContent = data.armed ? 'ARMED' : 'DISARMED';
+        const badge = document.getElementById('traderArmBadge');
+        if (badge) {
+          badge.textContent = data.armed ? 'Armed' : 'Disarmed';
+          badge.className = 'chip ' + (data.armed ? 'badge-armed' : 'badge-disarmed');
+        }
         document.getElementById('traderStatusMsg').textContent = data.armed ? 'Trader armed.' : '';
       });
       document.getElementById('traderDisarmBtn')?.addEventListener('click', async () => {
         await traderPost('/api/trader/arm', {armed: false});
-        document.getElementById('traderArmBadge').textContent = 'DISARMED';
+        const badge = document.getElementById('traderArmBadge');
+        if (badge) { badge.textContent = 'Disarmed'; badge.className = 'chip badge-disarmed'; }
         document.getElementById('traderStatusMsg').textContent = 'Trader disarmed.';
       });
       document.getElementById('traderRunBtn')?.addEventListener('click', async () => {

@@ -292,14 +292,14 @@ def build_strategy_chart(
         paper_bgcolor=_BG,
         plot_bgcolor=_PANEL,
         font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
-        margin=dict(l=60, r=24, t=48, b=36),
-        height=720,
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+        margin=dict(l=64, r=20, t=36, b=40),
+        height=680,
+        showlegend=False,
         title=dict(
-            text=f"Gamma Auto-Trader · WR {win_rate:.0%} · ${total_pnl:,.0f} total",
-            x=0.02,
-            font=dict(size=13, color=_MUTED),
+            text=f"WR {win_rate:.0%} · ${total_pnl:,.0f} cumulative",
+            x=0.01,
+            y=0.98,
+            font=dict(size=11, color=_MUTED),
         ),
     )
     fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.08)")
