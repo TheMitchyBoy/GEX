@@ -216,8 +216,8 @@
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <div>
             <h2 class="h6 mb-0">AI Market Exposure Agent</h2>
-            <div class="small muted">Powered by <a href="https://github.com/iAmGiG/gex-llm-patterns" class="link-light" target="_blank" rel="noopener">gex-llm-patterns</a>
-              {% if agent.llm_enhanced %} · LLM enhanced{% else %} · rule-based{% endif %}
+            <div class="small muted">Powered by <a href="https://github.com/NousResearch/hermes-agent" class="link-light" target="_blank" rel="noopener">Hermes Agent</a>
+              {% if agent.hermes_enhanced or agent.llm_enhanced %} · Hermes LLM{% else %} · rule-based{% endif %}
             </div>
           </div>
           <button class="btn btn-sm btn-primary" id="refreshAgent">Re-analyze</button>

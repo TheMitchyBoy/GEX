@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Install the gex-llm-patterns market exposure agent from GitHub.
+# Install Nous Research Hermes Agent for market exposure analysis.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VENDOR="$ROOT/vendor/gex-llm-patterns"
+VENDOR="$ROOT/vendor/hermes-agent"
 
 if [[ ! -d "$VENDOR/.git" ]]; then
-  git clone --depth 1 https://github.com/iAmGiG/gex-llm-patterns.git "$VENDOR"
+  git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$VENDOR"
 fi
 
-pip install -r "$ROOT/requirements-agent.txt"
-echo "Agent installed. Set OPENAI_API_KEY for LLM-enhanced analysis."
+pip install -e "$VENDOR"
+echo "Hermes Agent installed. Set OPENAI_API_KEY or OPENROUTER_API_KEY for LLM analysis."
+echo "Optional: GEX_HERMES_PROVIDER=openai|openrouter, GEX_AGENT_MODEL=<model>"

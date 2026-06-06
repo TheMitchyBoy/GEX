@@ -1,5 +1,3 @@
-# Optional AI agent dependencies (gex-llm-patterns integration)
-# Install: pip install -r requirements-agent.txt
+# Optional Hermes Agent dependencies
+# Install: bash scripts/install_agent.sh
 -r requirements.txt
-openai>=1.40.0
-pyyaml>=6.0
