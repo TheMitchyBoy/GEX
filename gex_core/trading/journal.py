@@ -121,6 +121,20 @@ def record_decision(
         conn.commit()
 
 
+def patch_trade_meta(trade_id: int, meta: dict[str, Any]) -> None:
+    with _connect() as conn:
+        row = conn.execute("SELECT meta_json FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        current: dict[str, Any] = {}
+        if row and row["meta_json"]:
+            try:
+                current = json.loads(row["meta_json"])
+            except json.JSONDecodeError:
+                current = {}
+        current.update(meta)
+        conn.execute("UPDATE trades SET meta_json = ? WHERE id = ?", (json.dumps(current), trade_id))
+        conn.commit()
+
+
 def open_trade(
     *,
     ticker: str,

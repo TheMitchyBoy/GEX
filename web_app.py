@@ -1120,10 +1120,18 @@ def api_trader_status():
 
 @APP.post("/api/trader/arm")
 def api_trader_arm():
+    from gex_core.trading.config import live_trading_allowed, require_live_confirm
     from gex_core.trading.engine import arm_trader, trader_status
 
     payload = request.get_json(silent=True) or {}
     armed = bool(payload.get("armed", True))
+    if armed and live_trading_allowed() and require_live_confirm() and not payload.get("live_confirm"):
+        return jsonify(
+            {
+                "error": "Live Webull trading requires live_confirm: true in the request body.",
+                "live_mode": True,
+            }
+        ), 400
     arm_trader(armed)
     ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
     return jsonify({"armed": armed, "status": trader_status(ticker)})

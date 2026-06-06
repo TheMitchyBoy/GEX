@@ -186,13 +186,17 @@
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <div>
             <h2 class="h6 mb-0">Gamma Auto-Trader</h2>
-            <div class="small muted">Paper options · max +γ strike or fastest γ increase · AI-gated entries</div>
+            <div class="small muted">{% if auto_trader.live_mode %}Live Webull · {{ auto_trader.webull_underlying }} options{% else %}Paper options{% endif %} · max +γ strike or fastest γ increase · AI-gated entries</div>
           </div>
           <div class="d-flex gap-2 align-items-center">
             <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">
               {% if auto_trader.armed %}ARMED{% else %}DISARMED{% endif %}
             </span>
+            {% if auto_trader.live_mode %}
+            <span class="chip live-pulse" style="border-color:rgba(239,68,68,0.5);color:var(--red);">WEBULL LIVE</span>
+            {% else %}
             <span class="chip">PAPER</span>
+            {% endif %}
           </div>
         </div>
         <div class="d-flex flex-wrap gap-3 mb-2 trader-stat">
@@ -365,9 +369,19 @@
         return res.json();
       }
       document.getElementById('traderArmBtn')?.addEventListener('click', async () => {
-        const data = await traderPost('/api/trader/arm', {armed: true});
+        const live = {{ auto_trader.live_mode|tojson }};
+        const body = {armed: true};
+        if (live && !window.confirm('Arm LIVE Webull trading? Real orders will be placed.')) return;
+        if (live) body.live_confirm = true;
+        const data = await traderPost('/api/trader/arm', body);
+        if (data.error) {
+          document.getElementById('traderStatusMsg').textContent = data.error;
+          return;
+        }
         document.getElementById('traderArmBadge').textContent = data.armed ? 'ARMED' : 'DISARMED';
-        document.getElementById('traderStatusMsg').textContent = data.armed ? 'Trader armed — cycles run on each refresh.' : '';
+        document.getElementById('traderStatusMsg').textContent = data.armed
+          ? (live ? 'Live Webull trader armed.' : 'Paper trader armed — cycles run on each refresh.')
+          : '';
       });
       document.getElementById('traderDisarmBtn')?.addEventListener('click', async () => {
         const data = await traderPost('/api/trader/arm', {armed: false});

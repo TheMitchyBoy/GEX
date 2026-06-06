@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from gex_core.trading.config import option_leverage
 
 
@@ -42,3 +44,48 @@ def mark_to_market_premium(entry_premium: float, pnl_pct: float) -> float:
 
 def pnl_usd(entry_premium: float, exit_premium: float, qty: float = 1.0) -> float:
     return (exit_premium - entry_premium) * 100.0 * qty
+
+
+class PaperBroker:
+    name = "paper"
+
+    def buy_option(
+        self,
+        *,
+        underlying: str,
+        option_type: str,
+        strike: float,
+        expire_date: str,
+        quantity: int,
+        limit_price: float,
+        spot: float,
+    ) -> dict[str, Any]:
+        premium = estimate_entry_premium(spot, strike)
+        return {
+            "ok": True,
+            "broker": self.name,
+            "limit_price": premium,
+            "filled_premium": premium,
+            "client_order_id": None,
+        }
+
+    def sell_option(
+        self,
+        *,
+        underlying: str,
+        option_type: str,
+        strike: float,
+        expire_date: str,
+        quantity: int,
+        limit_price: float,
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        return {"ok": True, "broker": self.name, "limit_price": limit_price, "client_order_id": client_order_id}
+
+    def position_pnl_pct(self, trade: dict[str, Any], *, spot: float) -> float | None:
+        return estimate_option_pnl_pct(
+            trade["option_type"],
+            entry_spot=float(trade["entry_spot"]),
+            current_spot=spot,
+            strike=float(trade["strike"]),
+        )
