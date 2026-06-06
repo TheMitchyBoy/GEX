@@ -28,15 +28,13 @@ from gex_core.charts import (
     make_0dte_movement_chart,
     make_cumulative_gex_chart,
     make_gex_profile_chart,
-    make_mm_positions_chart,
-    make_periscope_exposure_chart,
-    make_periscope_price_chart,
     make_positive_strike_chart,
     make_prediction_gamma_chart,
     make_spx_price_chart,
     make_timeline_chart,
     safe_float,
 )
+from gex_core.periscope_charts import build_periscope_charts
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
@@ -481,31 +479,21 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     prev_series = ctx.get("previous_exposure")
     spot = ctx.get("spot")
 
-    price_chart_json = make_periscope_price_chart(
-        price_points,
-        None,
-        ticker=ticker,
-        spot=spot,
-        highlight_ts=selected.get("ts_label"),
-        price_source=price_source or ctx.get("data_path"),
-    )
-    exposure_chart_json = make_periscope_exposure_chart(
-        ctx.get("exposure_profile"),
+    charts = build_periscope_charts(
         ticker=ticker,
         exposure_type=exposure,
         spot=spot,
-        previous=prev_series,
-        compact=True,
+        exposure_profile=ctx.get("exposure_profile"),
+        exposure_extended=ctx.get("exposure_extended"),
+        previous_exposure=prev_series,
+        price_points=price_points,
+        highlight_label=selected.get("ts_label"),
+        mm_positions=ctx.get("mm_positions"),
     )
-    extended_chart_json = make_periscope_exposure_chart(
-        ctx.get("exposure_extended"),
-        ticker=ticker,
-        exposure_type=exposure,
-        spot=spot,
-        previous=prev_series,
-        compact=False,
-    )
-    positions_chart_json = make_mm_positions_chart(ctx.get("mm_positions"), ticker=ticker)
+    price_chart_json = charts.price
+    exposure_chart_json = charts.exposures
+    extended_chart_json = charts.exposures_extended
+    positions_chart_json = charts.positions
 
     cumulative = selected.get("cumulative")
     uw_agg = uw_entry.get("agg") if uw_entry else None

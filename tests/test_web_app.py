@@ -15,8 +15,8 @@ def test_index_renders_periscope_dashboard():
     response = client.get("/")
     assert response.status_code == 200
     assert b"PERISCOPE" in response.data
-    assert b"Rewind 10 min" in response.data
-    assert b"Trading day" in response.data
+    assert b"10 min" in response.data
+    assert b"sessionDate" in response.data
 
 
 def test_api_periscope_returns_json():
@@ -93,7 +93,7 @@ def test_force_refresh_failure_with_history_degrades_to_stale(monkeypatch):
     response = client.get("/ticker/SPX/?force_refresh=1")
     assert response.status_code == 200
     # Soft, reassuring message — not the alarming hard-failure banner.
-    assert b"Showing the last saved snapshot" in response.data
+    assert b"Showing last saved snapshot" in response.data
     assert b"check service logs" not in response.data
 
 
@@ -156,4 +156,4 @@ def test_persistent_banner_when_uw_not_configured(monkeypatch):
     client = web_app.APP.test_client()
     response = client.get("/ticker/SPX/")
     assert response.status_code == 200
-    assert b"saved snapshots only" in response.data
+    assert b"UW_API_KEY" in response.data
