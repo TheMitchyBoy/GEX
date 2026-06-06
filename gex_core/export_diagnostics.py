@@ -49,6 +49,7 @@ def summarize_export_state(
     lookback_days: int | None = None,
     max_snapshots: int | None = None,
     dedupe_identical_strikes: bool = False,
+    forecast_history: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Compare SQLite index rows, strike CSVs on disk, and loadable snapshot depth."""
     ticker = ticker.upper()
@@ -66,12 +67,15 @@ def summarize_export_state(
         lookback_days=lookback_days,
         max_snapshots=max_snapshots,
     )
-    history = build_history(
-        ticker,
-        lookback_days=lookback_days,
-        max_snapshots=max_snapshots,
-        dedupe_identical_strikes=dedupe_identical_strikes,
-    )
+    if forecast_history is not None:
+        history = forecast_history
+    else:
+        history = build_history(
+            ticker,
+            lookback_days=lookback_days,
+            max_snapshots=max_snapshots,
+            dedupe_identical_strikes=dedupe_identical_strikes,
+        )
     load_errors: list[str] = []
     if collected and not history:
         for ts, files in list(collected.items())[:3]:

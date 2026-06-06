@@ -8,7 +8,7 @@ from pathlib import Path
 
 from gex_core.env_bootstrap import uw_api_key_diagnostics
 from gex_core.exports import EXPORT_DIR, list_export_timestamps
-from gex_core.history import build_history, get_latest_ts
+from gex_core.history import collect_snapshot_files, get_latest_ts
 from gex_core.models_manifest import load_manifest
 from gex_core.predict import MIN_OVERLAY_TRAIN_ROWS
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES
@@ -20,7 +20,8 @@ def build_system_status(ticker: str | None = None) -> dict:
     ticker = (ticker or PRIMARY_TICKER).upper()
     latest_ts = get_latest_ts(ticker, EXPORT_DIR)
     age_min = export_age_minutes(ticker, EXPORT_DIR)
-    history = build_history(ticker, EXPORT_DIR)
+    collected = collect_snapshot_files(ticker, EXPORT_DIR, lookback_days=90, max_snapshots=240)
+    history_loaded = len(collected)
     manifest = load_manifest(ticker)
     n_train = None
     if manifest:
@@ -41,18 +42,20 @@ def build_system_status(ticker: str | None = None) -> dict:
     except Exception:
         pass
 
+    ready = history_loaded > 0
     return {
         "ticker": ticker,
-        "healthy": bool(history) and not stale,
+        "ready": ready,
+        "healthy": ready and not stale,
         **uw_api_key_diagnostics(),
         "scheduler_enabled": not scheduler_disabled,
         "latest_export_ts": latest_ts,
         "export_age_minutes": age_min,
         "export_stale": stale,
         "history_depth": catalog_timestamps,
-        "history_loaded": len(history),
+        "history_loaded": history_loaded,
         "strike_csv_on_disk": strike_csv_on_disk,
-        "forecast_loadable": len(history),
+        "forecast_loadable": history_loaded,
         "export_index_stale": (
             strike_csv_on_disk is not None and catalog_timestamps > strike_csv_on_disk
         ),

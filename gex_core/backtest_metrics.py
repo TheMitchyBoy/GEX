@@ -34,7 +34,12 @@ def _export_signature(ticker: str) -> tuple[str, int]:
     return (timestamps[-1], len(timestamps))
 
 
-def backtest_delta_sign_accuracy(ticker: str, min_history: int = 6) -> dict[str, Any]:
+def backtest_delta_sign_accuracy(
+    ticker: str,
+    min_history: int = 6,
+    *,
+    history: list[dict] | None = None,
+) -> dict[str, Any]:
     """Walk-forward: predict next ΔGEX sign vs actual from export history.
 
     Cached per export signature for dashboard display. Also reports ΔGEX MAE and
@@ -47,11 +52,22 @@ def backtest_delta_sign_accuracy(ticker: str, min_history: int = 6) -> dict[str,
         return _CACHE[cache_key]
 
     max_folds, lookback_days, max_snapshots = _backtest_limits()
-    history = build_history(
-        ticker,
-        lookback_days=lookback_days,
-        max_snapshots=max_snapshots,
-    )
+    if history is None:
+        history = build_history(
+            ticker,
+            lookback_days=lookback_days,
+            max_snapshots=max_snapshots,
+        )
+    elif lookback_days and lookback_days > 0 and history:
+        from datetime import timedelta
+
+        from gex_core.exports import parse_timestamp
+
+        latest = parse_timestamp(history[-1]["ts"])
+        since = latest - timedelta(days=lookback_days)
+        history = [row for row in history if parse_timestamp(row["ts"]) >= since]
+        if max_snapshots and len(history) > max_snapshots:
+            history = history[-max_snapshots:]
     empty = {
         "n": 0,
         "accuracy": None,
