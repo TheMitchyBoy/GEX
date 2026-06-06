@@ -66,22 +66,19 @@ def summarize_export_state(
         lookback_days=lookback_days,
         max_snapshots=max_snapshots,
     )
-    load_ok = 0
-    load_errors: list[str] = []
-    for ts, files in collected.items():
-        try:
-            load_snapshot_metrics(ts, files)
-            load_ok += 1
-        except Exception as exc:
-            if len(load_errors) < 3:
-                load_errors.append(f"{ts}: {exc}")
-
     history = build_history(
         ticker,
         lookback_days=lookback_days,
         max_snapshots=max_snapshots,
         dedupe_identical_strikes=dedupe_identical_strikes,
     )
+    load_errors: list[str] = []
+    if collected and not history:
+        for ts, files in list(collected.items())[:3]:
+            try:
+                load_snapshot_metrics(ts, files)
+            except Exception as exc:
+                load_errors.append(f"{ts}: {exc}")
 
     return {
         "indexed_before_sync": indexed_before,
@@ -89,7 +86,7 @@ def summarize_export_state(
         "strike_csv_on_disk": strike_csv_on_disk,
         "catalog_timestamps": len(catalog_timestamps),
         "collected_in_window": len(collected),
-        "metrics_load_ok": load_ok,
+        "metrics_load_ok": len(history),
         "forecast_loadable": len(history),
         "lookback_days": lookback_days,
         "max_snapshots": max_snapshots,

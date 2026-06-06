@@ -207,6 +207,9 @@ def _wall_signal(spot: float, wall: float | None, gex: float | None, kind: str) 
 
 def _concentration_signal(gex_by_strike: pd.Series) -> GammaSignal:
     """Score how concentrated the gamma is around a few strikes."""
+    if isinstance(gex_by_strike, pd.DataFrame):
+        gex_by_strike = gex_by_strike.squeeze()
+    gex_by_strike = pd.Series(gex_by_strike, dtype=float)
     if gex_by_strike.empty:
         return GammaSignal("Concentration", "N/A", "Insufficient data.", "neutral")
     abs_vals = gex_by_strike.abs()

@@ -7,6 +7,7 @@ server's lifetime -- the previous ``lru_cache(ticker)`` went stale.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
@@ -17,6 +18,13 @@ from gex_core.history import build_history
 from gex_core.predict import predict_next_snapshot
 
 _CACHE: dict[tuple[str, str, int], dict[str, Any]] = {}
+
+
+def _backtest_limits() -> tuple[int, int, int]:
+    max_folds = int(os.environ.get("GEX_BACKTEST_MAX_FOLDS", "24"))
+    lookback_days = int(os.environ.get("GEX_BACKTEST_LOOKBACK_DAYS", "30"))
+    max_snapshots = int(os.environ.get("GEX_BACKTEST_MAX_SNAPSHOTS", "80"))
+    return max_folds, lookback_days, max_snapshots
 
 
 def _export_signature(ticker: str) -> tuple[str, int]:
@@ -38,7 +46,12 @@ def backtest_delta_sign_accuracy(ticker: str, min_history: int = 6) -> dict[str,
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    history = build_history(ticker)
+    max_folds, lookback_days, max_snapshots = _backtest_limits()
+    history = build_history(
+        ticker,
+        lookback_days=lookback_days,
+        max_snapshots=max_snapshots,
+    )
     empty = {
         "n": 0,
         "accuracy": None,
@@ -66,7 +79,12 @@ def backtest_delta_sign_accuracy(ticker: str, min_history: int = 6) -> dict[str,
     flip_alerts = 0
     actual_flips = 0
 
-    for i in range(4, len(history) - 1):
+    fold_indices = list(range(4, len(history) - 1))
+    if len(fold_indices) > max_folds:
+        step = max(1, len(fold_indices) // max_folds)
+        fold_indices = fold_indices[::step][:max_folds]
+
+    for i in fold_indices:
         window = history[: i + 1]
         pred = predict_next_snapshot(window)
         if not pred:
