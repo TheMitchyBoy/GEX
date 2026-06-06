@@ -131,10 +131,25 @@ def _build_system_message(
     return "\n\n".join(parts)
 
 
-def _openai_chat(system: str, history: list[dict[str, str]], user_message: str) -> str | None:
+def _classify_llm_error(exc: Exception) -> str:
+    """Map an LLM exception to a short user-facing reason."""
+    text = str(exc).lower()
+    if "insufficient_quota" in text or ("429" in text and "quota" in text):
+        return "OpenAI quota exceeded — add billing credits at platform.openai.com"
+    if "invalid_api_key" in text or "incorrect api key" in text or "401" in text:
+        return "OpenAI API key is invalid — check OPENAI_API_KEY"
+    if "rate_limit" in text or ("429" in text and "quota" not in text):
+        return "OpenAI rate limit hit — try again shortly"
+    if "model" in text and ("not found" in text or "does not exist" in text):
+        return "OpenAI model unavailable — check GEX_AGENT_MODEL"
+    return "LLM request failed — see server logs for details"
+
+
+def _openai_chat(system: str, history: list[dict[str, str]], user_message: str) -> tuple[str | None, str | None]:
+    """Return (reply, user_error). user_error is set when the call fails."""
     cfg = _resolve_openai_config()
     if not cfg:
-        return None
+        return None, None
     api_key, model = cfg
     try:
         import openai
@@ -150,24 +165,37 @@ def _openai_chat(system: str, history: list[dict[str, str]], user_message: str) 
             temperature=float(os.environ.get("GEX_AI_TEMPERATURE", "0.4")),
         )
         content = resp.choices[0].message.content
-        return content.strip() if content else None
+        return (content.strip() if content else None), None
     except Exception as exc:
         logger.warning("OpenAI chat failed: %s", exc)
-        return None
+        return None, _classify_llm_error(exc)
 
 
-def _hermes_chat(system: str, history: list[dict[str, str]], user_message: str) -> str | None:
+def _hermes_chat(system: str, history: list[dict[str, str]], user_message: str) -> tuple[str | None, str | None]:
     if not _resolve_hermes_llm_config():
-        return None
+        return None, None
     transcript = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in history[-12:])
     prompt = (
         f"{transcript}\nUSER: {user_message}\n\n"
         "Reply as the GEX assistant. Be concise and cite specific data."
     )
-    return _hermes_analyze(prompt, system_prompt=system)
+    reply = _hermes_analyze(prompt, system_prompt=system)
+    if reply:
+        return reply, None
+    if _resolve_openai_config():
+        return None, None
+    return None, "Hermes/OpenRouter LLM unavailable — install hermes-agent or set OPENAI_API_KEY"
 
 
-def _rule_based_reply(user_message: str, base_analysis) -> str:
+def _fallback_notice(llm_errors: list[str]) -> str:
+    if llm_errors:
+        return f"\n*(Rule-based reply — {llm_errors[0]})*"
+    if not _resolve_openai_config() and not _resolve_hermes_llm_config():
+        return "\n*(Rule-based reply — set OPENAI_API_KEY for full conversational AI with all UW data.)*"
+    return "\n*(Rule-based reply — LLM backends unavailable.)*"
+
+
+def _rule_based_reply(user_message: str, base_analysis, *, llm_errors: list[str] | None = None) -> str:
     msg = user_message.lower()
     parts: list[str] = []
 
@@ -190,9 +218,7 @@ def _rule_based_reply(user_message: str, base_analysis) -> str:
     if not parts:
         parts.append(base_analysis.narrative)
 
-    parts.append(
-        "\n*(Rule-based reply — set OPENAI_API_KEY for full conversational AI with all UW data.)*"
-    )
+    parts.append(_fallback_notice(llm_errors or []))
     return " ".join(parts)
 
 
@@ -260,13 +286,18 @@ def chat_reply(
     )
 
     prior = session.messages[-_MAX_MESSAGES:]
-    reply = _openai_chat(system, prior, user_message)
+    llm_errors: list[str] = []
+    reply, openai_err = _openai_chat(system, prior, user_message)
     llm_source = "openai"
+    if openai_err:
+        llm_errors.append(openai_err)
     if reply is None:
-        reply = _hermes_chat(system, prior, user_message)
+        reply, hermes_err = _hermes_chat(system, prior, user_message)
         llm_source = "hermes"
+        if hermes_err:
+            llm_errors.append(hermes_err)
     if reply is None:
-        reply = _rule_based_reply(user_message, base)
+        reply = _rule_based_reply(user_message, base, llm_errors=llm_errors)
         llm_source = "rule_based"
 
     with _lock:
@@ -280,6 +311,8 @@ def chat_reply(
         "session_id": session.session_id,
         "reply": reply,
         "llm_source": llm_source,
+        "llm_error": llm_errors[0] if llm_errors and llm_source == "rule_based" else None,
+        "openai_configured": _resolve_openai_config() is not None,
         "uw_data_fed": uw_bundle is not None,
         "messages": list(session.messages),
     }

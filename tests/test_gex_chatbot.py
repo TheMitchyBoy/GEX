@@ -28,8 +28,8 @@ def test_build_welcome_message():
 
 def test_chat_reply_rule_based_without_llm():
     strikes = pd.Series({5000: 2.0, 5050: -1.0, 5100: 3.0})
-    with patch("gex_core.gex_chatbot._openai_chat", return_value=None), patch(
-        "gex_core.gex_chatbot._hermes_chat", return_value=None
+    with patch("gex_core.gex_chatbot._openai_chat", return_value=(None, None)), patch(
+        "gex_core.gex_chatbot._hermes_chat", return_value=(None, None)
     ):
         result = chat_reply(
             session_id=None,
@@ -49,7 +49,7 @@ def test_chat_reply_rule_based_without_llm():
 
 def test_chat_reply_openai_when_available():
     strikes = pd.Series({5000: 2.0, 5050: -1.0})
-    with patch("gex_core.gex_chatbot._openai_chat", return_value="Dealers are long gamma near 5050."):
+    with patch("gex_core.gex_chatbot._openai_chat", return_value=("Dealers are long gamma near 5050.", None)):
         result = chat_reply(
             session_id=None,
             user_message="Where is the pin?",

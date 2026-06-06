@@ -360,7 +360,8 @@
             appendChatBubble('assistant', data.reply);
             const src = data.llm_source || 'unknown';
             const uw = data.uw_data_fed ? ' · full UW data' : '';
-            setChatStatus(`via ${src}${uw}`);
+            const err = data.llm_error ? ` · ${data.llm_error}` : '';
+            setChatStatus(`via ${src}${uw}${err}`);
           }
         } catch (err) {
           appendChatBubble('assistant', 'Network error — please try again.');
