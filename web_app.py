@@ -1171,6 +1171,8 @@ def api_trader_run():
         exposure=ctx.get("exposure_series"),
         previous_exposure=ctx.get("previous_exposure"),
         uw_bundle=uw_bundle,
+        snapshot=ctx.get("selected"),
+        previous_spot=_previous_spot_from_context(ctx),
         force=True,
     )
     return jsonify(result)
@@ -1448,6 +1450,24 @@ def _manual_dispatch_authorized(req) -> bool:
     return bool(provided) and secrets.compare_digest(provided, token)
 
 
+def _previous_spot_from_context(ctx: dict) -> float | None:
+    from gex_core.features import safe_float
+
+    history = ctx.get("history") or []
+    if len(history) >= 2:
+        prev = safe_float(history[-2].get("spot"), 0.0)
+        return prev if prev > 0 else None
+    selected = ctx.get("selected") or {}
+    timeline = ctx.get("timeline") or {}
+    prev_ts = timeline.get("prev_ts")
+    if prev_ts and history:
+        for row in history:
+            if row.get("ts") == prev_ts:
+                prev = safe_float(row.get("spot"), 0.0)
+                return prev if prev > 0 else None
+    return safe_float(selected.get("spot"), 0.0) or None
+
+
 def _run_auto_trader(ticker: str) -> None:
     """Evaluate gamma signals and manage paper option trades."""
     from gex_core.trading.config import auto_trader_enabled
@@ -1483,6 +1503,8 @@ def _run_auto_trader(ticker: str) -> None:
         exposure=ctx.get("exposure_series"),
         previous_exposure=ctx.get("previous_exposure"),
         uw_bundle=uw_bundle,
+        snapshot=ctx.get("selected"),
+        previous_spot=_previous_spot_from_context(ctx),
     )
 
 

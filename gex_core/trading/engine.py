@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from gex_core.features import safe_float
 from gex_core.market_time import market_today
 from gex_core.trading.advisor import advise_entry, build_suggestions
 from gex_core.trading.broker import broker_mode_label, get_broker
@@ -20,6 +21,8 @@ from gex_core.trading.config import (
     webull_contracts,
     webull_underlying,
 )
+from gex_core.trading.exits import ExitState, evaluate_exit
+from gex_core.trading.filters import MarketContext, market_context_from_snapshot
 from gex_core.trading.journal import (
     close_trade,
     get_performance_summary,
@@ -64,29 +67,48 @@ def _option_expire_date() -> str:
     return market_today()
 
 
-def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
+def _exit_state_from_meta(meta: dict[str, Any]) -> ExitState:
+    return ExitState(
+        peak_pnl_pct=float(meta.get("peak_pnl_pct") or 0.0),
+        partial_taken=bool(meta.get("partial_taken")),
+    )
+
+
+def _check_exits(ticker: str, spot: float, *, bar_count: int = 0) -> list[dict[str, Any]]:
     broker = get_broker()
     exits: list[dict[str, Any]] = []
     for pos in list_open_trades(ticker):
         pnl_pct = broker.position_pnl_pct(pos, spot=spot)
         if pnl_pct is None:
             continue
-        exit_reason = None
-        if pnl_pct <= -stop_loss_pct():
-            exit_reason = "stop_loss"
-        elif pnl_pct >= take_profit_pct():
-            exit_reason = "take_profit"
+
+        meta = pos.get("meta") or {}
+        exit_state = _exit_state_from_meta(meta)
+        bars_held = int(meta.get("bars_held") or bar_count or 0)
+        exit_reason, exit_pnl = evaluate_exit(
+            pnl_pct,
+            state=exit_state,
+            bars_held=bars_held,
+            entry_spot=float(pos["entry_spot"]),
+            strike=float(pos["strike"]),
+        )
+
+        meta_update = {
+            "peak_pnl_pct": exit_state.peak_pnl_pct,
+            "partial_taken": exit_state.partial_taken,
+            "bars_held": bars_held + 1,
+        }
+        patch_trade_meta(int(pos["id"]), meta_update)
 
         if not exit_reason:
             continue
 
-        meta = pos.get("meta") or {}
         entry_premium = float(pos["entry_premium"])
-        exit_premium = mark_to_market_premium(entry_premium, pnl_pct)
+        exit_premium = mark_to_market_premium(entry_premium, exit_pnl)
         qty = int(pos.get("qty") or 1)
 
         if live_trading_allowed():
-            sell_limit = max(0.01, entry_premium * (1.0 + pnl_pct) * 0.98)
+            sell_limit = max(0.01, entry_premium * (1.0 + exit_pnl) * 0.98)
             sell_result = broker.sell_option(
                 underlying=meta.get("underlying") or webull_underlying(),
                 option_type=pos["option_type"],
@@ -112,18 +134,18 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
             int(pos["id"]),
             exit_spot=spot,
             exit_premium=exit_premium,
-            pnl_pct=pnl_pct,
+            pnl_pct=exit_pnl,
             pnl_usd=usd,
             exit_reason=exit_reason,
         )
         record_decision(
             ticker=ticker,
             action="exit",
-            payload={"trade_id": pos["id"], "pnl_pct": pnl_pct, "reason": exit_reason, "broker": broker.name},
+            payload={"trade_id": pos["id"], "pnl_pct": exit_pnl, "reason": exit_reason, "broker": broker.name},
             ai_verdict="closed",
-            ai_notes=f"Exit {exit_reason} at {pnl_pct:+.1%}",
+            ai_notes=f"Exit {exit_reason} at {exit_pnl:+.1%}",
         )
-        exits.append({"trade_id": pos["id"], "exit_reason": exit_reason, "pnl_pct": pnl_pct})
+        exits.append({"trade_id": pos["id"], "exit_reason": exit_reason, "pnl_pct": exit_pnl})
     return exits
 
 
@@ -134,6 +156,7 @@ def _maybe_enter(
     exposure: pd.Series | None,
     previous: pd.Series | None,
     uw_bundle: dict[str, Any] | None,
+    market: MarketContext | None = None,
 ) -> dict[str, Any] | None:
     if len(list_open_trades(ticker)) >= max_open_positions():
         return None
@@ -142,7 +165,7 @@ def _maybe_enter(
     if not signals.get("available"):
         return None
 
-    advice = advise_entry(ticker=ticker, signals=signals, uw_bundle=uw_bundle)
+    advice = advise_entry(ticker=ticker, signals=signals, uw_bundle=uw_bundle, market=market)
     record_decision(
         ticker=ticker,
         action="entry_review",
@@ -184,10 +207,22 @@ def _maybe_enter(
             "webull_client_order_id": order.get("client_order_id"),
             "signals": signals,
             "order": {"preview": order.get("preview"), "response": order.get("response")},
+            "peak_pnl_pct": 0.0,
+            "partial_taken": False,
+            "bars_held": 0,
         }
     else:
         premium = estimate_entry_premium(spot, strike)
-        meta = {"paper": True, "broker": "paper", "underlying": underlying, "expire_date": expire_date, "signals": signals}
+        meta = {
+            "paper": True,
+            "broker": "paper",
+            "underlying": underlying,
+            "expire_date": expire_date,
+            "signals": signals,
+            "peak_pnl_pct": 0.0,
+            "partial_taken": False,
+            "bars_held": 0,
+        }
 
     trade_id = open_trade(
         ticker=ticker,
@@ -225,6 +260,8 @@ def run_trading_cycle(
     exposure: pd.Series | None = None,
     previous_exposure: pd.Series | None = None,
     uw_bundle: dict[str, Any] | None = None,
+    snapshot: dict[str, Any] | None = None,
+    previous_spot: float | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     """Run one evaluate cycle: manage exits, maybe open new trade."""
@@ -238,6 +275,10 @@ def run_trading_cycle(
 
     if spot is None or spot <= 0:
         return {"ran": False, "reason": "No spot price"}
+
+    snap = dict(snapshot or {})
+    snap.setdefault("spot", spot)
+    market = market_context_from_snapshot(snap, prev_spot=previous_spot)
 
     result: dict[str, Any] = {
         "ran": True,
@@ -254,6 +295,7 @@ def run_trading_cycle(
         exposure=exposure,
         previous=previous_exposure,
         uw_bundle=uw_bundle,
+        market=market,
     )
     result["status"] = trader_status(ticker)
     return result

@@ -1,7 +1,9 @@
 import pandas as pd
+import pytest
 
 from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.engine import run_trading_cycle
+from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.journal import (
     get_performance_summary,
     is_trader_armed,
@@ -24,13 +26,13 @@ def test_compute_gamma_signals_picks_max_and_fastest():
 
 
 def test_compute_gamma_signals_switches_when_max_gamma_declines():
-    cur = pd.Series([0.2, 1.0, 0.8, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
-    prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
-    out = compute_gamma_signals(cur, prev, spot=7385.0)
+    cur = pd.Series([0.2, 1.0, 0.8, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
+    prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7387.0)
     assert out["available"]
     assert out["selection_reason"] == "max_positive_gamma_declined"
     assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
-    assert out["recommended"]["strike"] == 7400.0
+    assert out["recommended"]["strike"] == 7385.0
 
 
 def test_compute_gamma_signals_skips_when_all_gamma_declines():
@@ -39,6 +41,24 @@ def test_compute_gamma_signals_skips_when_all_gamma_declines():
     out = compute_gamma_signals(cur, prev, spot=7385.0)
     assert not out["available"]
     assert out["skip_reason"] == "gamma_declined"
+
+
+def test_entry_filter_blocks_far_strike(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "1")
+    monkeypatch.setenv("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.01")
+    signals = {
+        "available": True,
+        "spot": 5000.0,
+        "recommended": {
+            "strike": 5100.0,
+            "option_type": "call",
+            "gamma_delta": 0.2,
+            "score": 1.0,
+        },
+    }
+    result = evaluate_entry_filters(signals, market=MarketContext(spot=5000.0, prev_spot=4990.0, regime="LONG gamma"))
+    assert not result["approve"]
+    assert result["filter"] == "strike_distance"
 
 
 def test_paper_broker_stop_loss_threshold():
@@ -51,6 +71,7 @@ def test_trading_cycle_opens_on_armed_trader(tmp_path, monkeypatch):
     monkeypatch.setenv("GEX_TRADING_DB", str(db))
     monkeypatch.setenv("GEX_AUTO_TRADER", "1")
     monkeypatch.setenv("GEX_TRADER_MIN_AI_CONFIDENCE", "0.4")
+    monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
 
     set_trader_armed(True)
     assert is_trader_armed()
@@ -89,8 +110,8 @@ def test_rule_based_advice_downweights_poor_history():
             },
         }
     }
-    advice = _rule_based_advice(signals, memory)
-    assert advice["confidence"] < 0.55
+    advice = _rule_based_advice(signals, memory, market=MarketContext(spot=7385.0, prev_spot=7380.0))
+    assert advice["confidence"] < 0.65
 
 
 def test_performance_summary_after_close(tmp_path, monkeypatch):

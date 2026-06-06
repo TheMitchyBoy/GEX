@@ -18,6 +18,8 @@ from gex_core.trading.config import (
     stop_loss_pct,
     take_profit_pct,
 )
+from gex_core.trading.exits import ExitState, evaluate_exit
+from gex_core.trading.filters import MarketContext, market_context_from_snapshot
 from gex_core.trading.paper_broker import (
     estimate_entry_premium,
     estimate_option_pnl_pct,
@@ -39,6 +41,7 @@ class _OpenPosition:
     signal_gamma: float
     gamma_delta: float
     ai_confidence: float
+    exit_state: ExitState = field(default_factory=ExitState)
 
 
 @dataclass
@@ -65,21 +68,8 @@ class BacktestState:
     skipped_entries: int = 0
     blocked_duplicate: int = 0
     skipped_gamma_decline: int = 0
-
-
-def _apply_exit_pnl_cap(
-    pnl_pct: float,
-    exit_reason: str,
-    *,
-    stop_loss: float,
-    take_profit: float,
-) -> float:
-    """Model stop/limit fills at configured thresholds (handles sparse snapshot gaps)."""
-    if exit_reason == "stop_loss":
-        return max(pnl_pct, -stop_loss)
-    if exit_reason == "take_profit":
-        return min(pnl_pct, take_profit)
-    return pnl_pct
+    skipped_strike_distance: int = 0
+    skipped_filters: int = 0
 
 
 def _has_open_duplicate(positions: list[_OpenPosition], *, strike: float, option_type: str) -> bool:
@@ -167,30 +157,25 @@ def _check_exits(
     idx: int,
     ts: str,
     spot: float,
-    stop_loss: float,
-    take_profit: float,
 ) -> None:
     remaining: list[_OpenPosition] = []
     for pos in state.open_positions:
         pnl_pct = _position_pnl(pos, spot)
-        exit_reason = None
-        if pnl_pct <= -stop_loss:
-            exit_reason = "stop_loss"
-        elif pnl_pct >= take_profit:
-            exit_reason = "take_profit"
+        bars_held = idx - pos.entry_idx
+        exit_reason, exit_pnl = evaluate_exit(
+            pnl_pct,
+            state=pos.exit_state,
+            bars_held=bars_held,
+            entry_spot=pos.entry_spot,
+            strike=pos.strike,
+        )
         if exit_reason:
-            capped = _apply_exit_pnl_cap(
-                pnl_pct,
-                exit_reason,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-            )
             _close_position(
                 pos,
                 exit_idx=idx,
                 exit_ts=ts,
                 exit_spot=spot,
-                pnl_pct=capped,
+                pnl_pct=exit_pnl,
                 exit_reason=exit_reason,
                 closed=state.closed_trades,
             )
@@ -204,25 +189,35 @@ def _maybe_enter(
     *,
     idx: int,
     ts: str,
-    spot: float,
-    exposure,
-    previous,
+    row: dict,
+    prev_row: dict,
     max_open: int,
     min_confidence: float,
 ) -> None:
     if len(state.open_positions) >= max_open:
         return
 
+    spot = safe_float(row.get("spot"), 0.0)
+    prev_spot = safe_float(prev_row.get("spot"), 0.0) or None
+    exposure = row.get("strike")
+    previous = prev_row.get("strike")
+
     signals = compute_gamma_signals(exposure, previous, spot=spot)
     if not signals.get("available"):
-        if signals.get("skip_reason") == "gamma_declined":
+        skip = signals.get("skip_reason")
+        if skip == "gamma_declined":
             state.skipped_gamma_decline += 1
+        elif skip == "strike_too_far":
+            state.skipped_strike_distance += 1
         return
 
+    market = market_context_from_snapshot(row, prev_spot=prev_spot)
     memory = _memory_from_closed(state.closed_trades)
-    advice = _rule_based_advice(signals, memory)
+    advice = _rule_based_advice(signals, memory, market=market)
     if not advice.get("approve") or float(advice.get("confidence", 0)) < min_confidence:
         state.skipped_entries += 1
+        if advice.get("filter"):
+            state.skipped_filters += 1
         return
 
     rec = signals["recommended"]
@@ -267,6 +262,8 @@ def _summarize(
             "skipped_entries": state.skipped_entries,
             "blocked_duplicate": state.blocked_duplicate,
             "skipped_gamma_decline": state.skipped_gamma_decline,
+            "skipped_strike_distance": state.skipped_strike_distance,
+            "skipped_filters": state.skipped_filters,
             "message": "No trades triggered in walk-forward window",
             "stop_loss_pct": stop_loss,
             "take_profit_pct": take_profit,
@@ -311,6 +308,8 @@ def _summarize(
         "skipped_entries": state.skipped_entries,
         "blocked_duplicate": state.blocked_duplicate,
         "skipped_gamma_decline": state.skipped_gamma_decline,
+        "skipped_strike_distance": state.skipped_strike_distance,
+        "skipped_filters": state.skipped_filters,
         "stop_loss_pct": stop_loss,
         "take_profit_pct": take_profit,
         "trades": [
@@ -375,21 +374,13 @@ def backtest_auto_trader(
         if spot <= 0:
             continue
 
-        _check_exits(
-            state,
-            idx=idx,
-            ts=str(row["ts"]),
-            spot=spot,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-        )
+        _check_exits(state, idx=idx, ts=str(row["ts"]), spot=spot)
         _maybe_enter(
             state,
             idx=idx,
             ts=str(row["ts"]),
-            spot=spot,
-            exposure=row.get("strike"),
-            previous=prev.get("strike"),
+            row=row,
+            prev_row=prev,
             max_open=max_open,
             min_confidence=min_confidence,
         )
@@ -470,12 +461,17 @@ def build_bootstrap_history(
 
             spot *= 1.0 + rng.uniform(-0.004, 0.004)
             ts = f"bootstrap_{block_idx:05d}_{step:04d}"
+            orig_spot = safe_float(row.get("spot"), spot)
             snap = _clone_snapshot(row, ts=ts, spot=spot)
 
             strike = snap.get("strike")
             if isinstance(strike, pd.Series) and not strike.empty:
                 jitter = 1.0 + rng.uniform(-0.02, 0.02)
-                snap["strike"] = strike * jitter
+                scaled_index = pd.to_numeric(strike.index, errors="coerce")
+                if orig_spot > 0:
+                    scale = (spot / orig_spot) * jitter
+                    scaled_index = scaled_index * scale
+                snap["strike"] = pd.Series(strike.values * jitter, index=scaled_index)
 
             extended.append(snap)
             if len(extended) >= target_snapshots:
@@ -499,130 +495,7 @@ def backtest_auto_trader_bootstrap(
     take_profit: float | None = None,
     max_open: int | None = None,
     min_confidence: float | None = None,
-    max_synthetic_snapshots: int = 120_000,
-) -> dict[str, Any]:
-    """Bootstrap export history until at least ``target_trades`` close."""
-    base = _build_history_impl(
-        ticker.upper(),
-        export_dir,
-        lookback_days=lookback_days,
-        max_snapshots=max_snapshots,
-        dedupe_identical_strikes=dedupe_identical_strikes,
-    )
-    if len(base) < 2:
-        return {
-            "ticker": ticker.upper(),
-            "snapshots": len(base),
-            "total_trades": 0,
-            "message": "Not enough history for bootstrap backtest",
-        }
-
-    steps = max(len(base) * 40, 8_000)
-    result: dict[str, Any] = {}
-    while steps <= max_synthetic_snapshots:
-        history = build_bootstrap_history(base, target_snapshots=steps, seed=seed)
-        result = backtest_auto_trader(
-            ticker,
-            history=history,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            max_open=max_open,
-            min_confidence=min_confidence,
-        )
-        result["bootstrap"] = True
-        result["base_snapshots"] = len(base)
-        result["target_trades"] = target_trades
-        if int(result.get("total_trades", 0)) >= target_trades:
-            return result
-        steps = int(steps * 1.6)
-
-    result["message"] = (
-        f"Reached snapshot cap ({max_synthetic_snapshots:,}) with "
-        f"{result.get('total_trades', 0)} trades (target {target_trades})"
-    )
-    return result
-
-
-def _clone_snapshot(row: dict, *, ts: str, spot: float) -> dict:
-    strike = row.get("strike")
-    cloned = {k: v for k, v in row.items() if k not in {"strike", "ts", "spot", "ts_label"}}
-    cloned["ts"] = ts
-    cloned["ts_label"] = ts
-    cloned["spot"] = spot
-    if isinstance(strike, pd.Series):
-        cloned["strike"] = strike.copy()
-    else:
-        cloned["strike"] = strike
-    return cloned
-
-
-def _sample_history_block(base: list[dict], rng: random.Random, block_size: int) -> list[dict]:
-    if len(base) < 2:
-        return list(base)
-    max_start = max(1, len(base) - 1)
-    start = rng.randint(1, max_start)
-    end = min(len(base), start + block_size)
-    return [_clone_snapshot(row, ts=str(row["ts"]), spot=float(row.get("spot") or 0.0)) for row in base[start - 1 : end]]
-
-
-def build_bootstrap_history(
-    base: list[dict],
-    *,
-    target_snapshots: int,
-    block_size: int = 24,
-    seed: int = 42,
-) -> list[dict]:
-    """Extend real export snapshots via block resampling with spot/gamma perturbation."""
-    if len(base) < 2:
-        return list(base)
-
-    rng = random.Random(seed)
-    extended: list[dict] = []
-    block_idx = 0
-    spot = float(base[0].get("spot") or 5000.0)
-
-    while len(extended) < target_snapshots:
-        block = _sample_history_block(base, rng, block_size=block_size)
-        if not block:
-            break
-
-        for step, row in enumerate(block):
-            if extended and step == 0:
-                # Overlap prior bar so gamma deltas remain defined at block joins.
-                continue
-
-            spot *= 1.0 + rng.uniform(-0.004, 0.004)
-            ts = f"bootstrap_{block_idx:05d}_{step:04d}"
-            snap = _clone_snapshot(row, ts=ts, spot=spot)
-
-            strike = snap.get("strike")
-            if isinstance(strike, pd.Series) and not strike.empty:
-                jitter = 1.0 + rng.uniform(-0.02, 0.02)
-                snap["strike"] = strike * jitter
-
-            extended.append(snap)
-            if len(extended) >= target_snapshots:
-                break
-
-        block_idx += 1
-
-    return extended
-
-
-def backtest_auto_trader_bootstrap(
-    ticker: str,
-    *,
-    target_trades: int = 1000,
-    seed: int = 42,
-    export_dir=EXPORT_DIR,
-    lookback_days: int | None = 7,
-    max_snapshots: int | None = 500,
-    dedupe_identical_strikes: bool = False,
-    stop_loss: float | None = None,
-    take_profit: float | None = None,
-    max_open: int | None = None,
-    min_confidence: float | None = None,
-    max_synthetic_snapshots: int = 120_000,
+    max_synthetic_snapshots: int = 400_000,
 ) -> dict[str, Any]:
     """Bootstrap export history until at least ``target_trades`` close."""
     base = _build_history_impl(

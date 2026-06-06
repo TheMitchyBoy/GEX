@@ -24,6 +24,20 @@ def stop_loss_pct() -> float:
         return 0.05
 
 
+def far_otm_stop_loss_pct() -> float:
+    try:
+        return max(0.01, float(os.environ.get("GEX_TRADER_FAR_OTM_STOP_PCT", "0.03")))
+    except (TypeError, ValueError):
+        return 0.03
+
+
+def far_otm_distance_pct() -> float:
+    try:
+        return max(0.001, float(os.environ.get("GEX_TRADER_FAR_OTM_DISTANCE_PCT", "0.01")))
+    except (TypeError, ValueError):
+        return 0.01
+
+
 def take_profit_pct() -> float:
     try:
         return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.35")))
@@ -31,18 +45,97 @@ def take_profit_pct() -> float:
         return 0.35
 
 
+def partial_take_profit_pct() -> float:
+    try:
+        return max(0.05, float(os.environ.get("GEX_TRADER_PARTIAL_TP_PCT", "0.15")))
+    except (TypeError, ValueError):
+        return 0.15
+
+
+def trailing_stop_trigger_pct() -> float:
+    try:
+        return max(0.05, float(os.environ.get("GEX_TRADER_TRAIL_TRIGGER_PCT", "0.10")))
+    except (TypeError, ValueError):
+        return 0.10
+
+
+def trailing_stop_floor_pct() -> float:
+    try:
+        return max(0.01, float(os.environ.get("GEX_TRADER_TRAIL_FLOOR_PCT", "0.05")))
+    except (TypeError, ValueError):
+        return 0.05
+
+
+def time_stop_bars() -> int:
+    try:
+        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "6")))
+    except (TypeError, ValueError):
+        return 6
+
+
+def time_stop_min_pnl_pct() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PNL_PCT", "0.02"))
+    except (TypeError, ValueError):
+        return 0.02
+
+
 def max_open_positions() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_MAX_OPEN", "3")))
+        return max(1, int(os.environ.get("GEX_TRADER_MAX_OPEN", "1")))
     except (TypeError, ValueError):
-        return 3
+        return 1
 
 
 def min_ai_confidence() -> float:
     try:
-        return float(os.environ.get("GEX_TRADER_MIN_AI_CONFIDENCE", "0.55"))
+        return float(os.environ.get("GEX_TRADER_MIN_AI_CONFIDENCE", "0.65"))
     except (TypeError, ValueError):
-        return 0.55
+        return 0.65
+
+
+def min_gamma_delta() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0.05"))
+    except (TypeError, ValueError):
+        return 0.05
+
+
+def min_fastest_gamma_delta() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_MIN_FASTEST_GAMMA_DELTA", "0.10"))
+    except (TypeError, ValueError):
+        return 0.10
+
+
+def max_strike_distance_pct() -> float:
+    try:
+        return max(0.001, float(os.environ.get("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.01")))
+    except (TypeError, ValueError):
+        return 0.01
+
+
+def min_confluence_score() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_MIN_CONFLUENCE", "50"))
+    except (TypeError, ValueError):
+        return 50.0
+
+
+def require_spot_momentum() -> bool:
+    return _flag("GEX_TRADER_REQUIRE_MOMENTUM", "1")
+
+
+def block_event_days() -> bool:
+    return _flag("GEX_TRADER_BLOCK_EVENTS", "1")
+
+
+def require_flow_alignment() -> bool:
+    return _flag("GEX_TRADER_REQUIRE_FLOW_ALIGN", "1")
+
+
+def strict_entry_filters() -> bool:
+    return _flag("GEX_TRADER_STRICT_FILTERS", "1")
 
 
 def option_leverage() -> float:
@@ -102,4 +195,3 @@ def live_trading_allowed() -> bool:
 
 def require_live_confirm() -> bool:
     return _flag("GEX_TRADER_LIVE_CONFIRM", "1")
-

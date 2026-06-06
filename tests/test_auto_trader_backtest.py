@@ -1,20 +1,32 @@
 import pandas as pd
+import pytest
 
 from gex_core.trading.backtest import backtest_auto_trader
 
 
-def _snapshot(ts: str, spot: float, strikes: dict[float, float]) -> dict:
+@pytest.fixture(autouse=True)
+def relaxed_filters(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
+
+
+def _snapshot(ts: str, spot: float, strikes: dict[float, float], *, prev_spot: float | None = None) -> dict:
     return {
         "ts": ts,
         "spot": spot,
         "strike": pd.Series(strikes),
+        "regime": "LONG gamma",
+        "gamma_flip": spot * 0.995,
+        "flow_net_delta_gex_bn": 0.5,
+        "is_cpi_day": False,
+        "is_nfp_day": False,
+        "is_fomc_week": False,
     }
 
 
 def test_backtest_opens_and_closes_on_take_profit():
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
-        _snapshot("2026-06-01_101000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
         _snapshot("2026-06-01_102000", 5050.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
     ]
     result = backtest_auto_trader(
@@ -55,7 +67,7 @@ def test_backtest_insufficient_history():
 def test_backtest_caps_stop_and_take_profit():
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
-        _snapshot("2026-06-01_101000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
         _snapshot("2026-06-01_102000", 4800.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
     ]
     result = backtest_auto_trader(
@@ -74,9 +86,9 @@ def test_backtest_caps_stop_and_take_profit():
 def test_backtest_blocks_duplicate_strike_entries():
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
-        _snapshot("2026-06-01_101000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
-        _snapshot("2026-06-01_102000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.3}),
-        _snapshot("2026-06-01_103000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.4}),
+        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_102000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.3}),
+        _snapshot("2026-06-01_103000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.4}),
     ]
     result = backtest_auto_trader(
         "SPX",
