@@ -4,7 +4,41 @@ def test_ticker_page_returns_200_with_history():
     client = APP.test_client()
     response = client.get("/ticker/SPX")
     assert response.status_code == 200
-    assert b"0DTE Movement Priority" in response.data
+    assert b"Market Maker Exposure" in response.data
+    assert b"AI Market Exposure Agent" in response.data
+
+
+def test_index_renders_periscope_dashboard():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"PERISCOPE" in response.data
+    assert b"Session rewind" in response.data
+
+
+def test_api_periscope_returns_json():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/api/periscope?exposure=gamma")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ticker"] == "SPX"
+    assert payload["exposure"] == "gamma"
+
+
+def test_api_agent_analyze_returns_json():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/api/agent/analyze?exposure=gamma")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ticker"] == "SPX"
+    assert "who" in payload
+    assert "narrative" in payload
 
 
 def test_force_refresh_failure_with_history_degrades_to_stale(monkeypatch):
@@ -51,6 +85,7 @@ def test_force_refresh_without_uw_key_skips_fetch(monkeypatch):
     import web_app
 
     monkeypatch.setenv("UW_API_KEY", "")
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: False)
     calls = {"csv": 0, "uw": 0}
 
     def _csv_refresh(*_a, **_k):
@@ -69,14 +104,15 @@ def test_force_refresh_without_uw_key_skips_fetch(monkeypatch):
 
     assert response.status_code == 200
     assert calls == {"csv": 0, "uw": 0}
-    assert b"UW_API_KEY is missing" in response.data
+    assert b"last saved snapshot" in response.data or b"Live data isn't configured" in response.data
 
 
 def test_persistent_banner_when_uw_not_configured(monkeypatch):
     import web_app
 
     monkeypatch.setenv("UW_API_KEY", "")
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: False)
     client = web_app.APP.test_client()
     response = client.get("/ticker/SPX/")
     assert response.status_code == 200
-    assert b"Showing saved snapshots only" in response.data
+    assert b"saved snapshots only" in response.data

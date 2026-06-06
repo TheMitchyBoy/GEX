@@ -713,6 +713,179 @@ def make_heatmap(surface_path: Path | None = None, ticker: str = "", surface_df:
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
+_EXPOSURE_LABELS = {"gamma": "Net Gamma", "vanna": "Net Vanna", "charm": "Net Charm"}
+_EXPOSURE_UNITS = {"gamma": "Bn$ / %", "vanna": "Bn$ / vol pt", "charm": "Bn$ / day"}
+
+
+def _horizontal_exposure_bars(
+    exposure: pd.Series,
+    spot: float | None,
+    *,
+    title: str,
+    previous: pd.Series | None = None,
+    height: int = 420,
+    max_bars: int = 48,
+) -> str | None:
+    if exposure is None or exposure.empty:
+        return None
+    series = pd.Series(exposure, dtype=float).sort_index()
+    if len(series) > max_bars:
+        step = max(1, len(series) // max_bars)
+        series = series.iloc[::step]
+    strikes = [float(s) for s in series.index]
+    values = [float(v) for v in series.values]
+    colors = [_GREEN if v >= 0 else _RED for v in values]
+    prev_map = {}
+    if previous is not None and not previous.empty:
+        prev_map = {float(k): float(v) for k, v in pd.Series(previous, dtype=float).items()}
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            y=strikes,
+            x=values,
+            orientation="h",
+            marker_color=colors,
+            opacity=0.88,
+            name="Exposure",
+            hovertemplate="Strike %{y:.0f}<br>Exposure %{x:.3f}<extra></extra>",
+        )
+    )
+    if prev_map:
+        prev_x = [prev_map.get(s) for s in strikes]
+        if any(v is not None for v in prev_x):
+            fig.add_trace(
+                go.Scatter(
+                    y=strikes,
+                    x=prev_x,
+                    mode="markers",
+                    marker=dict(color="#ffffff", size=7, line=dict(color=_CHART_BG, width=1)),
+                    name="Prior slice",
+                    hovertemplate="Strike %{y:.0f}<br>Prior %{x:.3f}<extra></extra>",
+                )
+            )
+    if spot and spot > 0:
+        fig.add_hline(y=spot, line_color=_AMBER, line_width=2, annotation_text=f"Spot {spot:.0f}")
+
+    _apply_base(
+        fig,
+        title=title,
+        height=height,
+        margin=dict(l=64, r=24, t=56, b=36),
+        xaxis=dict(title="Exposure", zeroline=True, zerolinecolor="rgba(255,255,255,0.2)"),
+        yaxis=dict(title="Strike", autorange=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_periscope_price_chart(
+    price_points: list[dict] | None,
+    history: list | None,
+    *,
+    ticker: str = "SPX",
+    spot: float | None = None,
+    highlight_ts: str | None = None,
+    price_source: str | None = None,
+) -> str | None:
+    """Intraday SPX line chart for the Periscope top panel."""
+    x: list = []
+    y: list[float] = []
+    if price_points:
+        x = [p.get("ts") or p.get("time") for p in price_points]
+        y = [safe_float(p.get("close") or p.get("price"), 0.0) for p in price_points]
+    elif history:
+        for row in history:
+            s = safe_float(row.get("spot"), 0.0)
+            if s > 0:
+                x.append(row.get("ts_label"))
+                y.append(s)
+    pairs = [(xi, yi) for xi, yi in zip(x, y) if yi > 0]
+    if not pairs:
+        return None
+    x, y = zip(*pairs)
+    fig = go.Figure(
+        go.Scatter(
+            x=list(x),
+            y=list(y),
+            mode="lines",
+            line=dict(color=_AMBER, width=2.4),
+            name="SPX",
+            hovertemplate="%{x}<br>SPX %{y:.2f}<extra></extra>",
+        )
+    )
+    if highlight_ts and highlight_ts in x:
+        idx = list(x).index(highlight_ts)
+        fig.add_vrect(
+            x0=max(0, idx - 0.5),
+            x1=min(len(x) - 0.5, idx + 0.5),
+            fillcolor="rgba(96,165,250,0.18)",
+            line_width=0,
+        )
+    if spot and spot > 0:
+        fig.add_hline(y=spot, line_dash="dot", line_color="#94a3b8", annotation_text=f"{spot:.0f}")
+
+    source_note = f" · {price_source}" if price_source else ""
+    _apply_base(
+        fig,
+        title=f"{ticker} Price{source_note}",
+        height=380,
+        margin=dict(l=48, r=16, t=52, b=40),
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="Price", zeroline=False),
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
+def make_periscope_exposure_chart(
+    exposure: pd.Series | None,
+    *,
+    ticker: str = "SPX",
+    exposure_type: str = "gamma",
+    spot: float | None = None,
+    previous: pd.Series | None = None,
+    compact: bool = False,
+) -> str | None:
+    label = _EXPOSURE_LABELS.get(exposure_type, "Exposure")
+    title = f"{ticker} · {label}"
+    return _horizontal_exposure_bars(
+        exposure if exposure is not None else pd.Series(dtype=float),
+        spot,
+        title=title,
+        previous=previous,
+        height=320 if compact else 460,
+        max_bars=36 if compact else 56,
+    )
+
+
+def make_mm_positions_chart(positions: dict | None, ticker: str = "SPX") -> str | None:
+    if not positions:
+        return None
+    labels = ["Call Δ", "Put Δ", "Call GEX", "Put GEX"]
+    keys = ["net_call_delta_bn", "net_put_delta_bn", "net_call_gex_bn", "net_put_gex_bn"]
+    values = [safe_float(positions.get(k), 0.0) for k in keys]
+    if not any(abs(v) > 1e-9 for v in values):
+        return None
+    colors = [_GREEN if v >= 0 else _RED for v in values]
+    fig = go.Figure(
+        go.Bar(
+            x=labels,
+            y=values,
+            marker_color=colors,
+            hovertemplate="%{x}<br>%{y:.3f} Bn<extra></extra>",
+        )
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)")
+    _apply_base(
+        fig,
+        title=f"{ticker} · Market Maker Positions",
+        height=300,
+        margin=dict(l=48, r=16, t=52, b=48),
+        yaxis_title="Net position (Bn)",
+    )
+    return json.dumps(fig, cls=PlotlyJSONEncoder)
+
+
 def make_ai_insights_chart(analysis) -> str | None:
     if analysis is None:
         return None
