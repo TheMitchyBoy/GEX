@@ -117,7 +117,7 @@
       {% if timeline.available_dates %}
       <section class="panel p-3 mb-3 time-nav">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-          <div class="small fw-semibold">Session time · 10-min slices</div>
+          <div class="small fw-semibold">Session time · 10-min slices <span class="muted">(US/Eastern)</span></div>
           <div class="slice-status small mono" id="sliceStatus">
             {{ selected_label }}
             · slice {{ timeline.day_slice_index }}/{{ timeline.day_slice_count }} today

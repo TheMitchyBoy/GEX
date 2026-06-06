@@ -1069,7 +1069,7 @@ def api_periscope_timeline():
     active_date = timeline.get("selected_date")
     slices_by_date = {}
     if active_date:
-        slices_by_date[active_date] = build_slice_options(timestamps, active_date)
+        slices_by_date[active_date] = build_slice_options(timestamps, active_date, ticker=ticker)
     return jsonify(
         {
             "ticker": ticker,

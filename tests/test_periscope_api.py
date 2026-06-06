@@ -7,7 +7,6 @@ from gex_core.periscope_api import (
     list_periscope_timestamps,
     load_periscope_snapshot,
     snapshot_from_uw_entry,
-    utc_today,
 )
 
 
@@ -18,7 +17,7 @@ def test_list_periscope_timestamps_merges_history_and_api_today():
         patch("gex_core.periscope_api.list_indexed_timestamps_before_date", return_value=historical),
         patch("gex_core.periscope_api.uw_api_configured", return_value=True),
         patch("gex_core.periscope_api.list_api_intraday_timestamps", return_value=api_today),
-        patch("gex_core.periscope_api.utc_today", return_value="2026-06-06"),
+        patch("gex_core.periscope_api.market_today", return_value="2026-06-06"),
     ):
         timestamps = list_periscope_timestamps("SPX", api_key="test-key")
     assert timestamps == historical + api_today
@@ -41,7 +40,7 @@ def test_load_periscope_snapshot_uses_api_cache_for_today():
         fetched_at=1.0,
     )
     with (
-        patch("gex_core.periscope_api.utc_today", return_value="2026-06-06"),
+        patch("gex_core.periscope_api.market_today", return_value="2026-06-06"),
         patch("gex_core.periscope_api.should_use_api_for_date", return_value=True),
         patch("gex_core.periscope_api.fetch_intraday_day_cache", return_value=cache),
     ):

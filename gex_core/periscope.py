@@ -8,37 +8,30 @@ import pandas as pd
 
 from gex_core.charts import safe_float
 from gex_core.env_bootstrap import uw_api_key
-from gex_core.exports import parse_timestamp
 from gex_core.features import estimate_gamma_flip
-from gex_core.history import ts_label
+from gex_core.market_time import (
+    market_today,
+    ts_display_label,
+    ts_market_date,
+    ts_market_time_label,
+)
 from gex_core.periscope_api import (
     list_periscope_dates,
     list_periscope_timestamps,
     load_periscope_snapshot,
     periscope_price_points,
     should_use_api_for_date,
-    timestamp_date as api_timestamp_date,
-    utc_today,
 )
+from gex_core.storage import list_indexed_timestamps_for_date
 from gex_core.tickers import PRIMARY_TICKER
 
 EXPOSURE_TYPES = ("gamma", "vanna", "charm")
 
 
-def timestamp_date(ts: str) -> str:
-    """Return YYYY-MM-DD from an export timestamp key."""
-    return ts[:10]
-
-
-def timestamp_time_label(ts: str) -> str:
-    """Human-readable clock time for a slice (HH:MM)."""
-    return parse_timestamp(ts).strftime("%H:%M")
-
-
 def group_timestamps_by_date(timestamps: list[str]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {}
     for ts in sorted(timestamps):
-        grouped.setdefault(timestamp_date(ts), []).append(ts)
+        grouped.setdefault(ts_market_date(ts), []).append(ts)
     return grouped
 
 
@@ -49,8 +42,18 @@ def available_dates(timestamps: list[str], *, ticker: str = PRIMARY_TICKER) -> l
     return sorted(group_timestamps_by_date(timestamps).keys())
 
 
-def slices_for_date(timestamps: list[str], date: str) -> list[str]:
-    return group_timestamps_by_date(timestamps).get(date, [])
+def slices_for_date(
+    timestamps: list[str],
+    date: str,
+    *,
+    ticker: str = PRIMARY_TICKER,
+) -> list[str]:
+    """Slices for a trading session date (market timezone, not UTC key prefix)."""
+    market_date = date[:10]
+    from_index = list_indexed_timestamps_for_date(ticker, market_date)
+    if from_index:
+        return from_index
+    return group_timestamps_by_date(timestamps).get(market_date, [])
 
 
 def resolve_selected_timestamp(
@@ -65,17 +68,26 @@ def resolve_selected_timestamp(
     if not timestamps:
         return None
     if date:
-        day_slices = slices_for_date(timestamps, date)
+        day_slices = slices_for_date(timestamps, date, ticker=PRIMARY_TICKER)
         if day_slices:
             return day_slices[-1]
     return timestamps[-1]
 
 
-def build_slice_options(timestamps: list[str], date: str) -> list[dict[str, str]]:
+def build_slice_options(
+    timestamps: list[str],
+    date: str,
+    *,
+    ticker: str = PRIMARY_TICKER,
+) -> list[dict[str, str]]:
     """Slice dropdown rows for one trading day."""
     return [
-        {"ts": ts, "time": timestamp_time_label(ts), "label": ts_label(ts)}
-        for ts in slices_for_date(timestamps, date)
+        {
+            "ts": ts,
+            "time": ts_market_time_label(ts),
+            "label": ts_display_label(ts),
+        }
+        for ts in slices_for_date(timestamps, date, ticker=ticker)
     ]
 
 
@@ -99,24 +111,27 @@ def build_timeline_navigation(
             "slice_count": 0,
         }
 
-    active_ts = selected_ts if selected_ts in timestamps else timestamps[-1]
-    replay_index = timestamps.index(active_ts)
-    selected_date = timestamp_date(active_ts)
+    if selected_ts:
+        active_ts = selected_ts
+    else:
+        active_ts = timestamps[-1]
+    replay_index = timestamps.index(active_ts) if active_ts in timestamps else max(0, len(timestamps) - 1)
+    selected_date = ts_market_date(active_ts)
 
     return {
         "available_dates": available_dates(timestamps, ticker=ticker),
-        "day_slices": build_slice_options(timestamps, selected_date),
+        "day_slices": build_slice_options(timestamps, selected_date, ticker=ticker),
         "selected_date": selected_date,
         "selected_ts": active_ts,
-        "prev_ts": timestamps[replay_index - 1] if replay_index > 0 else None,
-        "next_ts": timestamps[replay_index + 1] if replay_index + 1 < len(timestamps) else None,
-        "is_latest": active_ts == timestamps[-1],
+        "prev_ts": timestamps[replay_index - 1] if active_ts in timestamps and replay_index > 0 else None,
+        "next_ts": timestamps[replay_index + 1] if active_ts in timestamps and replay_index + 1 < len(timestamps) else None,
+        "is_latest": active_ts == timestamps[-1] if timestamps else True,
         "slice_position": replay_index + 1,
         "slice_count": len(timestamps),
-        "day_slice_index": slices_for_date(timestamps, selected_date).index(active_ts) + 1
-        if active_ts in slices_for_date(timestamps, selected_date)
+        "day_slice_index": slices_for_date(timestamps, selected_date, ticker=ticker).index(active_ts) + 1
+        if active_ts in slices_for_date(timestamps, selected_date, ticker=ticker)
         else 1,
-        "day_slice_count": len(slices_for_date(timestamps, selected_date)),
+        "day_slice_count": len(slices_for_date(timestamps, selected_date, ticker=ticker)),
     }
 
 
@@ -196,7 +211,7 @@ def build_periscope_context(
     timestamps = list_periscope_timestamps(ticker, api_key=api_key)
     resolved_ts = resolve_selected_timestamp(timestamps, ts=selected_ts, date=selected_date)
     timeline = build_timeline_navigation(timestamps, resolved_ts, ticker=ticker)
-    active_date = selected_date or (api_timestamp_date(resolved_ts) if resolved_ts else utc_today())
+    active_date = selected_date or (ts_market_date(resolved_ts) if resolved_ts else market_today())
 
     selected = load_periscope_snapshot(
         ticker,
@@ -222,7 +237,7 @@ def build_periscope_context(
                 ticker,
                 prev_ts,
                 api_key=api_key,
-                market_date=api_timestamp_date(prev_ts),
+                market_date=ts_market_date(prev_ts),
             )
 
     spot = safe_float(selected.get("spot"), 0.0)

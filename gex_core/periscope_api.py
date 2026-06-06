@@ -7,16 +7,20 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
 from gex_core.charts import safe_float
 from gex_core.env_bootstrap import uw_api_configured, uw_api_key
-from gex_core.exports import parse_timestamp
 from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip
-from gex_core.history import load_snapshot_at_ts, ts_label
+from gex_core.history import load_snapshot_at_ts
+from gex_core.market_time import (
+    market_now_export_ts,
+    market_today,
+    ts_display_label,
+    ts_market_date,
+)
 from gex_core.intraday_backfill import (
     minute_row_total_gex_bn,
     sample_intraday_rows,
@@ -56,10 +60,6 @@ class IntradayDayCache:
     source: str = "uw_api"
 
 
-def utc_today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
 def _cache_fresh(entry: IntradayDayCache | None) -> bool:
     return entry is not None and (time.monotonic() - entry.fetched_at) < _CACHE_TTL
 
@@ -78,7 +78,8 @@ def _snapshot_from_strike(
     put_wall = float(strike.idxmin()) if len(strike) else None
     metrics: dict[str, Any] = {
         "ts": ts,
-        "ts_label": ts_label(ts),
+        "ts_label": ts_display_label(ts),
+        "market_date": ts_market_date(ts),
         "ticker": ticker.upper(),
         "strike": strike,
         "cumulative": cumulative,
@@ -102,7 +103,7 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
     strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
     spot = safe_float(uw_entry.get("spot"), 0.0)
     total_gex = safe_float(agg.total_gex_bn, float(strike.sum()))
-    active_ts = ts or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+    active_ts = ts or market_now_export_ts()
     return _snapshot_from_strike(
         ticker,
         active_ts,
@@ -162,6 +163,8 @@ def fetch_intraday_day_cache(
         if pd.isna(row.get("time")):
             continue
         ts = uw_time_to_export_ts(row["time"])
+        if ts_market_date(ts) != market_date:
+            continue
         spot = safe_float(row.get("price"), 0.0)
         total_gex_bn = minute_row_total_gex_bn(row)
         scaled_strike = scale_strike_profile(base_strike, total_gex_bn)
@@ -176,7 +179,7 @@ def fetch_intraday_day_cache(
         if spot > 0:
             price_points.append(
                 {
-                    "ts": ts_label(ts),
+                    "ts": ts_display_label(ts),
                     "close": spot,
                     "time": pd.Timestamp(row["time"]).isoformat(),
                 }
@@ -219,7 +222,7 @@ def list_periscope_timestamps(
     Historical days come from the SQLite index; today uses UW intraday API.
     """
     ticker = ticker.upper()
-    today = today or utc_today()
+    today = today or market_today()
     historical = list_indexed_timestamps_before_date(ticker, today)
 
     if uw_api_configured() or api_key:
@@ -240,7 +243,7 @@ def list_periscope_dates(
     today: str | None = None,
 ) -> list[str]:
     """Available trading days for the calendar picker."""
-    today = today or utc_today()
+    today = today or market_today()
     dates = list_indexed_dates(ticker)
     if today not in dates and (uw_api_configured() or api_key):
         api_ts = list_api_intraday_timestamps(ticker, today, api_key=api_key)
@@ -252,7 +255,7 @@ def list_periscope_dates(
 def should_use_api_for_date(market_date: str | None, *, api_key: str | None = None) -> bool:
     if not market_date or not (uw_api_configured() or api_key):
         return False
-    return market_date[:10] >= utc_today()
+    return market_date[:10] >= market_today()
 
 
 def load_periscope_snapshot(
@@ -270,7 +273,7 @@ def load_periscope_snapshot(
             return snapshot_from_uw_entry(ticker, uw_entry)
         return None
 
-    day = (market_date or timestamp_date(ts))[:10]
+    day = (market_date or ts_market_date(ts))[:10]
     if should_use_api_for_date(day, api_key=api_key):
         cache = fetch_intraday_day_cache(ticker, day, api_key=api_key)
         if cache and ts in cache.snapshots:
@@ -289,7 +292,7 @@ def periscope_price_points(
     fallback_history: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
     """Intraday price series for the price chart — API first for same-day."""
-    day = (market_date or utc_today())[:10]
+    day = (market_date or market_today())[:10]
     if should_use_api_for_date(day, api_key=api_key):
         cache = fetch_intraday_day_cache(ticker, day, api_key=api_key)
         if cache and cache.price_points:
@@ -303,10 +306,6 @@ def periscope_price_points(
         if spot > 0:
             points.append({"ts": row.get("ts_label"), "close": spot})
     return points
-
-
-def timestamp_date(ts: str) -> str:
-    return ts[:10]
 
 
 def clear_periscope_api_cache() -> None:

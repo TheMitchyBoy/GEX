@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pandas as pd
 
 from gex_core.periscope import (
@@ -62,25 +64,35 @@ def test_market_exposure_agent_returns_who_what():
 
 def test_resolve_selected_timestamp_by_date():
     timestamps = [
-        "2026-06-04_032228",
-        "2026-06-05_021908",
-        "2026-06-05_031908",
+        "2026-06-05_183000",
+        "2026-06-05_193000",
     ]
-    assert resolve_selected_timestamp(timestamps, date="2026-06-05") == "2026-06-05_031908"
-    assert resolve_selected_timestamp(timestamps, ts="2026-06-04_032228") == "2026-06-04_032228"
+    with patch("gex_core.periscope.list_indexed_timestamps_for_date", return_value=timestamps):
+        assert resolve_selected_timestamp(timestamps, date="2026-06-05") == "2026-06-05_193000"
+    assert resolve_selected_timestamp(timestamps, ts="2026-06-05_183000") == "2026-06-05_183000"
+
+
+def test_slices_for_date_uses_market_session_not_utc_prefix():
+    from gex_core.periscope import slices_for_date
+
+    timestamps = ["2026-06-06_012248", "2026-06-06_031908"]
+    with patch("gex_core.periscope.list_indexed_timestamps_for_date", return_value=[]):
+        day_slices = slices_for_date(timestamps, "2026-06-05")
+    assert day_slices == timestamps
 
 
 def test_build_timeline_navigation_rewind_target():
     timestamps = [
-        "2026-06-05_021908",
-        "2026-06-05_031908",
-        "2026-06-05_041908",
+        "2026-06-05_183000",
+        "2026-06-05_193000",
+        "2026-06-05_203000",
     ]
-    nav = build_timeline_navigation(timestamps, "2026-06-05_031908")
-    assert nav["prev_ts"] == "2026-06-05_021908"
-    assert nav["next_ts"] == "2026-06-05_041908"
-    assert nav["selected_date"] == "2026-06-05"
-    assert len(slices_for_date(timestamps, "2026-06-05")) == 3
+    with patch("gex_core.periscope.list_indexed_timestamps_for_date", return_value=timestamps):
+        nav = build_timeline_navigation(timestamps, "2026-06-05_193000")
+        assert nav["prev_ts"] == "2026-06-05_183000"
+        assert nav["next_ts"] == "2026-06-05_203000"
+        assert nav["selected_date"] == "2026-06-05"
+        assert len(slices_for_date(timestamps, "2026-06-05")) == 3
 
 
 def test_periscope_charts_render_json():
