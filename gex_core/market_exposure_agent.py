@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 
 from gex_core.ai_analyst import analyze_dealer_gamma
+from gex_core.env_bootstrap import llm_api_key_diagnostics
 from gex_core.features import estimate_gamma_flip
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,13 @@ def analyze_market_exposure(
     narrative = hermes_narrative or base.narrative
 
     hermes_active = hermes_narrative is not None
+    llm_diag = llm_api_key_diagnostics()
+    try:
+        from run_agent import AIAgent  # noqa: F401
+
+        hermes_installed = True
+    except ImportError:
+        hermes_installed = False
     return {
         "ticker": ticker,
         "exposure_type": exposure_type,
@@ -175,4 +183,7 @@ def analyze_market_exposure(
         "hermes_enhanced": hermes_active,
         "llm_enhanced": hermes_active,
         "agent_source": "hermes-agent + gex_core" if hermes_active else "gex_core",
+        "hermes_installed": hermes_installed,
+        "llm_configured": llm_diag["llm_configured"],
+        "llm_provider": llm_diag["llm_provider"],
     }

@@ -48,30 +48,70 @@ def _env_value_missing(key: str) -> bool:
     return value is None or not str(value).strip()
 
 
-def _file_has_uw_key(path: Path) -> bool:
+def _file_has_key(path: Path, env_key: str) -> bool:
     if not path.is_file():
         return False
     for line in path.read_text(encoding="utf-8").splitlines():
         parsed = _parse_env_line(line)
-        if parsed and parsed[0] == "UW_API_KEY" and parsed[1].strip():
+        if parsed and parsed[0] == env_key and parsed[1].strip():
             return True
     return False
 
 
+def _upsert_env_file(path: Path, updates: dict[str, str]) -> bool:
+    """Merge key=value pairs into an env file without clobbering unrelated lines."""
+    if not updates:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing_lines: list[str] = []
+    if path.is_file():
+        existing_lines = path.read_text(encoding="utf-8").splitlines()
+    present = set()
+    merged: list[str] = []
+    for line in existing_lines:
+        parsed = _parse_env_line(line)
+        if parsed and parsed[0] in updates:
+            key = parsed[0]
+            if key not in present:
+                merged.append(f"{key}={updates[key]}")
+                present.add(key)
+            continue
+        merged.append(line)
+    for key, value in updates.items():
+        if key not in present:
+            merged.append(f"{key}={value}")
+            present.add(key)
+    path.write_text("\n".join(merged).rstrip() + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return True
+
+
+_SYNC_ENV_KEYS = (
+    "UW_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GEX_HERMES_PROVIDER",
+    "GEX_AGENT_MODEL",
+)
+
+
 def sync_env_files_from_process(target: Path | None = None) -> list[str]:
-    """Persist ``UW_API_KEY`` from the process env into local env files when missing."""
-    key = uw_api_key()
-    if not key:
+    """Persist injected secrets from the process env into local env files when missing."""
+    updates = {
+        key: os.environ.get(key, "").strip()
+        for key in _SYNC_ENV_KEYS
+        if not _env_value_missing(key)
+    }
+    if not updates:
         return []
     targets = (target,) if target is not None else _DEFAULT_ENV_FILES
     written: list[str] = []
     for path in targets:
-        if _file_has_uw_key(path):
+        missing = {k: v for k, v in updates.items() if not _file_has_key(path, k)}
+        if not missing:
             continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"UW_API_KEY={key}\n", encoding="utf-8")
-        path.chmod(0o600)
-        written.append(str(path))
+        if _upsert_env_file(path, missing):
+            written.append(str(path))
     return written
 
 
@@ -104,6 +144,30 @@ def uw_api_key() -> str | None:
 
 def uw_api_configured() -> bool:
     return uw_api_key() is not None
+
+
+def llm_api_key_diagnostics() -> dict:
+    """Non-secret diagnostics for Hermes / OpenAI provider configuration."""
+    openai_present = not _env_value_missing("OPENAI_API_KEY")
+    openrouter_present = not _env_value_missing("OPENROUTER_API_KEY")
+    provider = os.environ.get("GEX_HERMES_PROVIDER", "").strip().lower() or None
+    configured = openai_present or openrouter_present
+    if openai_present and (not provider or provider == "openai"):
+        active = "openai"
+    elif openrouter_present and (not provider or provider == "openrouter"):
+        active = "openrouter"
+    elif provider:
+        active = provider
+    else:
+        active = None
+    return {
+        "llm_configured": configured,
+        "llm_provider": active,
+        "openai_api_key_present": openai_present,
+        "openrouter_api_key_present": openrouter_present,
+        "gex_hermes_provider": provider,
+        "gex_agent_model": os.environ.get("GEX_AGENT_MODEL", "").strip() or None,
+    }
 
 
 def uw_api_key_diagnostics() -> dict:
