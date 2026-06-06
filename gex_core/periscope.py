@@ -7,11 +7,99 @@ from typing import Any
 import pandas as pd
 
 from gex_core.charts import safe_float
+from gex_core.exports import parse_timestamp
 from gex_core.features import estimate_gamma_flip
-from gex_core.history import build_history, list_timestamps, load_snapshot_at_ts
+from gex_core.history import build_history, list_timestamps, load_snapshot_at_ts, ts_label
 from gex_core.tickers import PRIMARY_TICKER
 
 EXPOSURE_TYPES = ("gamma", "vanna", "charm")
+
+
+def timestamp_date(ts: str) -> str:
+    """Return YYYY-MM-DD from an export timestamp key."""
+    return ts[:10]
+
+
+def timestamp_time_label(ts: str) -> str:
+    """Human-readable clock time for a slice (HH:MM)."""
+    return parse_timestamp(ts).strftime("%H:%M")
+
+
+def group_timestamps_by_date(timestamps: list[str]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for ts in sorted(timestamps):
+        grouped.setdefault(timestamp_date(ts), []).append(ts)
+    return grouped
+
+
+def available_dates(timestamps: list[str]) -> list[str]:
+    return sorted(group_timestamps_by_date(timestamps).keys())
+
+
+def slices_for_date(timestamps: list[str], date: str) -> list[str]:
+    return group_timestamps_by_date(timestamps).get(date, [])
+
+
+def resolve_selected_timestamp(
+    timestamps: list[str],
+    *,
+    ts: str | None = None,
+    date: str | None = None,
+) -> str | None:
+    """Pick the active slice from explicit ts, a calendar day, or latest."""
+    if not timestamps:
+        return None
+    if ts and ts in timestamps:
+        return ts
+    if date:
+        day_slices = slices_for_date(timestamps, date)
+        if day_slices:
+            return day_slices[-1]
+    return timestamps[-1]
+
+
+def build_slice_options(timestamps: list[str], date: str) -> list[dict[str, str]]:
+    """Slice dropdown rows for one trading day."""
+    return [
+        {"ts": ts, "time": timestamp_time_label(ts), "label": ts_label(ts)}
+        for ts in slices_for_date(timestamps, date)
+    ]
+
+
+def build_timeline_navigation(timestamps: list[str], selected_ts: str | None) -> dict[str, Any]:
+    """Navigation metadata for rewind, calendar, and per-day slice pickers."""
+    if not timestamps:
+        return {
+            "available_dates": [],
+            "day_slices": [],
+            "selected_date": None,
+            "selected_ts": None,
+            "prev_ts": None,
+            "next_ts": None,
+            "is_latest": True,
+            "slice_position": 0,
+            "slice_count": 0,
+        }
+
+    active_ts = selected_ts if selected_ts in timestamps else timestamps[-1]
+    replay_index = timestamps.index(active_ts)
+    selected_date = timestamp_date(active_ts)
+
+    return {
+        "available_dates": available_dates(timestamps),
+        "day_slices": build_slice_options(timestamps, selected_date),
+        "selected_date": selected_date,
+        "selected_ts": active_ts,
+        "prev_ts": timestamps[replay_index - 1] if replay_index > 0 else None,
+        "next_ts": timestamps[replay_index + 1] if replay_index + 1 < len(timestamps) else None,
+        "is_latest": active_ts == timestamps[-1],
+        "slice_position": replay_index + 1,
+        "slice_count": len(timestamps),
+        "day_slice_index": slices_for_date(timestamps, selected_date).index(active_ts) + 1
+        if active_ts in slices_for_date(timestamps, selected_date)
+        else 1,
+        "day_slice_count": len(slices_for_date(timestamps, selected_date)),
+    }
 
 
 def _strike_window(series: pd.Series, spot: float, window_pct: float = 0.04) -> pd.Series:
@@ -89,6 +177,7 @@ def build_periscope_context(
     *,
     ticker: str = PRIMARY_TICKER,
     selected_ts: str | None = None,
+    selected_date: str | None = None,
     exposure: str = "gamma",
     uw_entry: dict | None = None,
     history: list[dict] | None = None,
@@ -99,7 +188,9 @@ def build_periscope_context(
     exposure = exposure.lower() if exposure.lower() in EXPOSURE_TYPES else "gamma"
     history = history or build_history(ticker)
     timestamps = list_timestamps(ticker)
-    selected = _snapshot_row(ticker, selected_ts, history)
+    resolved_ts = resolve_selected_timestamp(timestamps, ts=selected_ts, date=selected_date)
+    timeline = build_timeline_navigation(timestamps, resolved_ts)
+    selected = _snapshot_row(ticker, resolved_ts, history)
 
     spot = safe_float(selected.get("spot"), 0.0)
     if uw_entry and uw_entry.get("spot"):
@@ -150,11 +241,13 @@ def build_periscope_context(
         "call_wall": selected.get("call_wall"),
         "put_wall": selected.get("put_wall"),
         "selected_ts": selected.get("ts"),
+        "selected_date": timeline.get("selected_date"),
         "selected_label": selected.get("ts_label", "Latest"),
         "timestamps": timestamps,
         "replay_index": replay_index,
-        "prev_ts": timestamps[replay_index - 1] if replay_index > 0 else None,
-        "next_ts": timestamps[replay_index + 1] if replay_index + 1 < len(timestamps) else None,
+        "prev_ts": timeline.get("prev_ts"),
+        "next_ts": timeline.get("next_ts"),
+        "timeline": timeline,
         "has_history": bool(history),
         "exposure_series": current_exposure,
         "previous_exposure": previous_exposure,

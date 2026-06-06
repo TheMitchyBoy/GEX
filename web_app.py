@@ -38,7 +38,13 @@ from gex_core.charts import (
     safe_float,
 )
 from gex_core.market_exposure_agent import analyze_market_exposure
-from gex_core.periscope import build_periscope_context
+from gex_core.periscope import (
+    build_periscope_context,
+    build_slice_options,
+    build_timeline_navigation,
+    group_timestamps_by_date,
+    resolve_selected_timestamp,
+)
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import (
     build_gamma_levels_timeline,
@@ -417,6 +423,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     ticker = ticker.upper()
     exposure = request.args.get("exposure", "gamma").lower()
     requested_ts = request.args.get("ts")
+    requested_date = request.args.get("date")
     force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
     bootstrap_status = request.args.get("bootstrap")
     refresh_message = None
@@ -445,25 +452,30 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         bootstrap_status = "stale"
 
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    resolved_ts = resolve_selected_timestamp(
+        list_timestamps(ticker),
+        ts=requested_ts,
+        date=requested_date,
+    )
     previous_snapshot = None
-    if history and requested_ts:
+    if history and resolved_ts:
         for i, row in enumerate(history):
-            if row.get("ts") == requested_ts and i > 0:
+            if row.get("ts") == resolved_ts and i > 0:
                 previous_snapshot = history[i - 1]
                 break
-    elif history and len(history) > 1:
-        previous_snapshot = history[-2]
 
     price_points, _, price_source = _dashboard_spx_price_context(ticker)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
+        selected_date=requested_date,
         exposure=exposure,
         uw_entry=uw_entry,
         history=history,
         price_points=price_points,
         previous_snapshot=previous_snapshot,
     )
+    timeline = ctx.get("timeline") or {}
 
     selected = ctx.get("selected") or {}
     gex_series = ctx.get("exposure_series")
@@ -522,8 +534,10 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         total_gex=ctx.get("total_gex", 0.0),
         gamma_flip=ctx.get("gamma_flip"),
         selected_ts=ctx.get("selected_ts"),
+        selected_date=ctx.get("selected_date"),
         selected_label=ctx.get("selected_label"),
         timestamps=ctx.get("timestamps", []),
+        timeline=timeline,
         replay_index=ctx.get("replay_index", 0),
         data_source=data_source,
         price_chart_json=price_chart_json,
@@ -1019,17 +1033,20 @@ def api_periscope():
     ticker = PRIMARY_TICKER
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
+    requested_date = request.args.get("date")
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
     history = _dashboard_history(ticker)
     price_points, _, _ = _dashboard_spx_price_context(ticker)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
+        selected_date=requested_date,
         exposure=exposure,
         uw_entry=uw_entry,
         history=history,
         price_points=price_points,
     )
+    timeline = ctx.get("timeline") or {}
     return jsonify(
         {
             "ticker": ticker,
@@ -1039,10 +1056,36 @@ def api_periscope():
             "total_gex": ctx.get("total_gex"),
             "gamma_flip": ctx.get("gamma_flip"),
             "selected_ts": ctx.get("selected_ts"),
+            "selected_date": ctx.get("selected_date"),
             "selected_label": ctx.get("selected_label"),
             "mm_positions": ctx.get("mm_positions"),
             "vanna_charm_available": ctx.get("vanna_charm_available"),
+            "timeline": timeline,
             "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+
+@APP.get("/api/periscope/timeline")
+def api_periscope_timeline():
+    """Available dates and intraday slices for the session picker."""
+    ticker = PRIMARY_TICKER
+    timestamps = list_timestamps(ticker)
+    requested_ts = request.args.get("ts")
+    requested_date = request.args.get("date")
+    resolved = resolve_selected_timestamp(timestamps, ts=requested_ts, date=requested_date)
+    timeline = build_timeline_navigation(timestamps, resolved)
+    grouped = group_timestamps_by_date(timestamps)
+    slices_by_date = {
+        day: build_slice_options(timestamps, day)
+        for day in grouped
+    }
+    return jsonify(
+        {
+            "ticker": ticker,
+            "dates": timeline.get("available_dates", []),
+            "slices_by_date": slices_by_date,
+            "timeline": timeline,
         }
     )
 

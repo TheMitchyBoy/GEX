@@ -50,8 +50,27 @@
       .regime-long { color: var(--green); }
       .regime-short { color: var(--red); }
       .agent-card { border-left: 3px solid var(--accent); }
-      .replay-slider { accent-color: var(--accent); }
       #priceChart, #exposureChart, #positionsChart, #extendedChart { min-height: 280px; }
+      .time-nav .btn { min-width: 7.5rem; }
+      .time-nav .form-control,
+      .time-nav .form-select {
+        background: #0b1220;
+        border-color: var(--line);
+        color: var(--txt);
+      }
+      .time-nav .form-control:focus,
+      .time-nav .form-select:focus {
+        background: #0b1220;
+        border-color: var(--accent);
+        color: var(--txt);
+        box-shadow: 0 0 0 0.15rem rgba(96,165,250,0.2);
+      }
+      .slice-status {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.45rem 0.75rem;
+        background: rgba(15, 23, 42, 0.55);
+      }
     </style>
   </head>
   <body>
@@ -70,6 +89,7 @@
             <div class="d-flex align-items-center gap-2 mb-2">
               <span class="chip">PERISCOPE</span>
               <span class="chip">SPX</span>
+              {% if timeline.is_latest %}<span class="chip">LIVE</span>{% else %}<span class="chip">REPLAY</span>{% endif %}
             </div>
             <h1 class="h4 mb-1">Market Maker Exposure</h1>
             <div class="small muted">{{ data_source }}</div>
@@ -91,22 +111,74 @@
           </div>
           <div class="col-auto"><strong>Net GEX:</strong> <span class="mono">{{ '%+.3f'|format(total_gex) }} Bn$</span></div>
           <div class="col-auto"><strong>Flip:</strong> <span class="mono">{{ '%.0f'|format(gamma_flip) if gamma_flip else 'N/A' }}</span></div>
-          <div class="col-auto muted">Slice: {{ selected_label }}</div>
         </div>
       </header>
 
-      {% if timestamps %}
-      <section class="panel p-3 mb-3">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-          <div class="small fw-semibold">Session rewind · 10-min slices</div>
-          <div class="small muted">{{ replay_index + 1 }} / {{ timestamps|length }}</div>
+      {% if timeline.available_dates %}
+      <section class="panel p-3 mb-3 time-nav">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+          <div class="small fw-semibold">Session time · 10-min slices</div>
+          <div class="slice-status small mono" id="sliceStatus">
+            {{ selected_label }}
+            · slice {{ timeline.day_slice_index }}/{{ timeline.day_slice_count }} today
+            · {{ timeline.slice_position }}/{{ timeline.slice_count }} total
+          </div>
         </div>
-        <input type="range" class="form-range replay-slider" id="replaySlider"
-               min="0" max="{{ timestamps|length - 1 }}" value="{{ replay_index }}"
-               data-timestamps='{{ timestamps|tojson }}'>
-        <div class="d-flex justify-content-between small muted">
-          <span>{{ timestamps[0][:16]|replace('_', ' ') if timestamps else '' }}</span>
-          <span>{{ timestamps[-1][:16]|replace('_', ' ') if timestamps else '' }}</span>
+
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+          {% if timeline.prev_ts %}
+          <a class="btn btn-sm btn-primary" id="rewindBtn"
+             href="?ts={{ timeline.prev_ts }}&exposure={{ exposure }}"
+             title="Go back one 10-minute slice">
+            ← Rewind 10 min
+          </a>
+          {% else %}
+          <button class="btn btn-sm btn-primary" disabled>← Rewind 10 min</button>
+          {% endif %}
+
+          {% if timeline.next_ts %}
+          <a class="btn btn-sm btn-outline-light" id="forwardBtn"
+             href="?ts={{ timeline.next_ts }}&exposure={{ exposure }}"
+             title="Advance one 10-minute slice">
+            Forward 10 min →
+          </a>
+          {% else %}
+          <button class="btn btn-sm btn-outline-light" disabled>Forward 10 min →</button>
+          {% endif %}
+
+          {% if timeline.is_latest %}
+          <span class="btn btn-sm btn-outline-info disabled" aria-disabled="true">Jump to latest</span>
+          {% else %}
+          <a class="btn btn-sm btn-outline-info" id="latestBtn" href="?exposure={{ exposure }}">Jump to latest</a>
+          {% endif %}
+        </div>
+
+        <div class="row g-2 align-items-end">
+          <div class="col-sm-4 col-lg-3">
+            <label class="form-label small muted mb-1" for="sessionDate">Trading day</label>
+            <input type="date" class="form-control form-control-sm" id="sessionDate"
+                   value="{{ selected_date or '' }}"
+                   min="{{ timeline.available_dates[0] }}"
+                   max="{{ timeline.available_dates[-1] }}">
+          </div>
+          <div class="col-sm-4 col-lg-3">
+            <label class="form-label small muted mb-1" for="sessionTime">Slice time</label>
+            <select class="form-select form-select-sm" id="sessionTime">
+              {% for slice in timeline.day_slices %}
+              <option value="{{ slice.ts }}" {% if slice.ts == selected_ts %}selected{% endif %}>
+                {{ slice.time }} · {{ slice.label }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-4 col-lg-3">
+            <label class="form-label small muted mb-1" for="quickDate">Quick jump</label>
+            <select class="form-select form-select-sm" id="quickDate">
+              {% for day in timeline.available_dates|reverse %}
+              <option value="{{ day }}" {% if day == selected_date %}selected{% endif %}>{{ day }}</option>
+              {% endfor %}
+            </select>
+          </div>
         </div>
       </section>
       {% endif %}
@@ -194,6 +266,8 @@
       };
       const plotConfig = {responsive: true, displayModeBar: false};
       const plotLayout = {paper_bgcolor: '#121826', plot_bgcolor: '#121826', font: {color: '#e2e8f0'}};
+      const exposure = '{{ exposure }}';
+      const timelineData = {{ timeline|tojson }};
 
       function renderChart(el, spec) {
         if (!spec || !el) return;
@@ -204,15 +278,36 @@
       renderChart(document.getElementById('positionsChart'), charts.positions);
       renderChart(document.getElementById('extendedChart'), charts.extended);
 
-      const slider = document.getElementById('replaySlider');
-      if (slider) {
-        const timestamps = JSON.parse(slider.dataset.timestamps || '[]');
-        const exposure = '{{ exposure }}';
-        slider.addEventListener('change', () => {
-          const ts = timestamps[parseInt(slider.value, 10)];
-          if (ts) window.location.href = `?ts=${ts}&exposure=${exposure}`;
-        });
+      function navigateTime({ ts = null, date = null } = {}) {
+        const params = new URLSearchParams();
+        params.set('exposure', exposure);
+        if (ts) params.set('ts', ts);
+        else if (date) params.set('date', date);
+        window.location.href = `?${params.toString()}`;
       }
+
+      const sessionDate = document.getElementById('sessionDate');
+      const sessionTime = document.getElementById('sessionTime');
+      const quickDate = document.getElementById('quickDate');
+
+      sessionDate?.addEventListener('change', () => {
+        if (sessionDate.value) navigateTime({ date: sessionDate.value });
+      });
+
+      quickDate?.addEventListener('change', () => {
+        if (quickDate.value) navigateTime({ date: quickDate.value });
+      });
+
+      sessionTime?.addEventListener('change', () => {
+        if (sessionTime.value) navigateTime({ ts: sessionTime.value });
+      });
+
+      document.getElementById('rewindBtn')?.addEventListener('click', (event) => {
+        if (timelineData?.prev_ts) {
+          event.preventDefault();
+          navigateTime({ ts: timelineData.prev_ts });
+        }
+      });
 
       document.getElementById('refreshAgent')?.addEventListener('click', async () => {
         const params = new URLSearchParams(window.location.search);
@@ -223,7 +318,8 @@
       });
 
       setInterval(() => {
-        fetch('/api/periscope?exposure={{ exposure }}{% if selected_ts %}&ts={{ selected_ts }}{% endif %}')
+        const params = new URLSearchParams(window.location.search);
+        fetch(`/api/periscope?${params.toString()}`)
           .then(r => r.json())
           .then(data => {
             if (data.spot) document.title = `SPX ${data.spot.toFixed(0)} · Market Exposure`;

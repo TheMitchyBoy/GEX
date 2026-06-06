@@ -1,6 +1,11 @@
 import pandas as pd
 
-from gex_core.periscope import build_periscope_context
+from gex_core.periscope import (
+    build_periscope_context,
+    build_timeline_navigation,
+    resolve_selected_timestamp,
+    slices_for_date,
+)
 from gex_core.market_exposure_agent import analyze_market_exposure
 from gex_core.charts import make_periscope_exposure_chart, make_mm_positions_chart
 
@@ -20,7 +25,11 @@ def test_build_periscope_context_from_history():
             "strike": strikes,
         }
     ]
-    ctx = build_periscope_context(ticker="SPX", history=history)
+    ctx = build_periscope_context(
+        ticker="SPX",
+        history=history,
+        selected_ts="2026-06-05_021908",
+    )
     assert ctx["spot"] == 5025.0
     assert ctx["regime"] == "LONG gamma"
     assert not ctx["exposure_series"].empty
@@ -39,6 +48,29 @@ def test_market_exposure_agent_returns_who_what():
     assert result["whom"]
     assert result["what"]
     assert result["narrative"]
+
+
+def test_resolve_selected_timestamp_by_date():
+    timestamps = [
+        "2026-06-04_032228",
+        "2026-06-05_021908",
+        "2026-06-05_031908",
+    ]
+    assert resolve_selected_timestamp(timestamps, date="2026-06-05") == "2026-06-05_031908"
+    assert resolve_selected_timestamp(timestamps, ts="2026-06-04_032228") == "2026-06-04_032228"
+
+
+def test_build_timeline_navigation_rewind_target():
+    timestamps = [
+        "2026-06-05_021908",
+        "2026-06-05_031908",
+        "2026-06-05_041908",
+    ]
+    nav = build_timeline_navigation(timestamps, "2026-06-05_031908")
+    assert nav["prev_ts"] == "2026-06-05_021908"
+    assert nav["next_ts"] == "2026-06-05_041908"
+    assert nav["selected_date"] == "2026-06-05"
+    assert len(slices_for_date(timestamps, "2026-06-05")) == 3
 
 
 def test_periscope_charts_render_json():
