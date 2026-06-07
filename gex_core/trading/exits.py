@@ -6,8 +6,11 @@ from dataclasses import dataclass
 
 from gex_core.trading.config import (
     dynamic_take_profit_enabled,
+    dynamic_time_stop,
     far_otm_distance_pct,
     far_otm_stop_loss_pct,
+    magnet_partial_exit_enabled,
+    magnet_partial_progress_pct,
     magnet_proximity_pct,
     magnet_touch_exit_enabled,
     max_gamma_only,
@@ -51,6 +54,14 @@ def resolve_full_take_profit(profile: ExitProfile, *, expected_move_pct: float |
     return max(0.08, min(profile.full_take_profit, dynamic))
 
 
+def _dynamic_time_stop_bars(entry_spot: float, magnet_strike: float | None, base_bars: int) -> int:
+    if not dynamic_time_stop() or entry_spot <= 0 or not magnet_strike:
+        return base_bars
+    dist = abs(magnet_strike - entry_spot) / entry_spot
+    scaled = int(base_bars + dist / 0.003)
+    return max(base_bars, min(24, scaled))
+
+
 def build_exit_profile(
     *,
     ai_confidence: float,
@@ -59,6 +70,7 @@ def build_exit_profile(
     entry_spot: float,
     strike: float,
     expected_move_pct: float | None = None,
+    magnet_strike: float | None = None,
 ) -> ExitProfile:
     """Strong gamma + confidence setups skip early partials and use wider trails."""
     near_magnet = False
@@ -94,6 +106,17 @@ def build_exit_profile(
             trail_floor=trailing_stop_floor_pct(),
             time_stop_bars=time_stop_bars(),
             full_take_profit=take_profit_pct(),
+        )
+
+    bars = _dynamic_time_stop_bars(entry_spot, magnet_strike, profile.time_stop_bars)
+    if bars != profile.time_stop_bars:
+        profile = ExitProfile(
+            hold_for_target=profile.hold_for_target,
+            partial_take_profit=profile.partial_take_profit,
+            trail_trigger=profile.trail_trigger,
+            trail_floor=profile.trail_floor,
+            time_stop_bars=bars,
+            full_take_profit=profile.full_take_profit,
         )
 
     tp = resolve_full_take_profit(profile, expected_move_pct=expected_move_pct)
@@ -192,6 +215,17 @@ def evaluate_exit(
 
     if pnl_pct >= full_tp:
         return "take_profit", min(pnl_pct, full_tp)
+
+    if magnet_partial_exit_enabled() and not state.partial_taken and pnl_pct > 0:
+        progress = spot_progress_toward_strike(
+            entry_spot=entry_spot,
+            current_spot=current_spot,
+            strike=target_strike,
+            option_type=option_type,
+        )
+        if progress >= magnet_partial_progress_pct():
+            state.partial_taken = True
+            return "magnet_partial", pnl_pct
 
     if (
         not profile.hold_for_target

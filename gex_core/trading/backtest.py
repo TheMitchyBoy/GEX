@@ -20,6 +20,8 @@ from gex_core.market_time import (
 )
 from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.config import (
+    equity_from_mark,
+    fix_magnet_exit_scale,
     max_entries_per_cycle,
     max_open_positions,
     min_entry_confidence,
@@ -282,7 +284,7 @@ def _apply_backtest_exit(
         return
     exit_premium = mark_to_market_premium(pos.entry_premium, pnl_pct)
 
-    if exit_reason == "take_profit_partial" and trade_qty < pos.qty:
+    if exit_reason in {"take_profit_partial", "magnet_partial"} and trade_qty < pos.qty:
         equity_after = None
         if state.account:
             state.account.credit_exit(exit_premium, trade_qty)
@@ -457,7 +459,7 @@ def _check_exits(
         if exit_reason:
             sell_qty = pos.qty
             reason = exit_reason
-            if exit_reason == "take_profit_partial" and pos.qty > 1:
+            if exit_reason in {"take_profit_partial", "magnet_partial"} and pos.qty > 1:
                 sell_qty = max(1, pos.qty // 2)
             elif exit_reason == "take_profit_partial":
                 reason = "take_profit"
@@ -541,13 +543,21 @@ def _maybe_enter(
 
         option_type = str(advice.get("option_type") or rec["option_type"])
         signal_strike = float(rec["strike"])
-        magnet_strike = float(rec.get("magnet_strike") or signal_strike)
+        magnet_strike_raw = float(rec.get("magnet_strike") or signal_strike)
         trade_ctx = _resolve_trade_context(signal_strike=signal_strike, signal_spot=spot)
         if trade_ctx is None:
             state.skipped_no_execution_spot += 1
             continue
         exec_strike, exec_spot, _ = trade_ctx
-        cooldown_key = (signal_strike, option_type.lower())
+        if fix_magnet_exit_scale() and uses_execution_mapping():
+            magnet_strike = map_execution_strike(
+                magnet_strike_raw,
+                signal_spot=spot,
+                execution_spot=exec_spot,
+            )
+        else:
+            magnet_strike = magnet_strike_raw
+        cooldown_key = (magnet_strike_raw, option_type.lower())
         cooldown_until = state.strike_cooldown.get(cooldown_key)
         if cooldown_until and ts < cooldown_until:
             state.blocked_cooldown += 1
@@ -592,6 +602,7 @@ def _maybe_enter(
             entry_spot=exec_spot,
             strike=exec_strike,
             expected_move_pct=expected_move,
+            magnet_strike=magnet_strike,
         )
         state.open_positions.append(
             _OpenPosition(
@@ -614,6 +625,19 @@ def _maybe_enter(
         if state.account:
             state.account.record_equity(ts, state.open_positions, exec_spot)
         opened_this_cycle += 1
+
+
+def _account_return_pct(state: BacktestState) -> float:
+    if not state.account:
+        return 0.0
+    starting = state.account.starting_capital
+    if starting <= 0:
+        return 0.0
+    if equity_from_mark() and state.account.equity_curve:
+        ending = float(state.account.equity_curve[-1]["equity"])
+    else:
+        ending = state.account.cash
+    return (ending - starting) / starting
 
 
 def _summarize(
@@ -733,11 +757,13 @@ def _summarize(
             {
                 "account": {
                     "starting_capital": state.account.starting_capital,
-                    "ending_capital": round(state.account.cash, 2),
-                    "return_pct": round(
-                        (state.account.cash - state.account.starting_capital) / state.account.starting_capital,
-                        4,
+                    "ending_capital": round(
+                        float(state.account.equity_curve[-1]["equity"])
+                        if state.account.equity_curve
+                        else state.account.cash,
+                        2,
                     ),
+                    "return_pct": round(_account_return_pct(state), 4),
                     "max_drawdown_pct": round(state.account.max_drawdown_pct(), 4),
                     "skipped_insufficient_capital": state.account.skipped_insufficient_capital,
                     "equity_curve": state.account.equity_curve,
