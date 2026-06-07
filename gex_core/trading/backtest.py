@@ -627,6 +627,10 @@ def _maybe_enter(
         opened_this_cycle += 1
 
 
+def _realized_pnl_usd(state: BacktestState) -> float:
+    return float(sum(t.pnl_usd for t in state.closed_trades))
+
+
 def _account_return_pct(state: BacktestState) -> float:
     if not state.account:
         return 0.0
@@ -635,9 +639,16 @@ def _account_return_pct(state: BacktestState) -> float:
         return 0.0
     if equity_from_mark() and state.account.equity_curve:
         ending = float(state.account.equity_curve[-1]["equity"])
-    else:
-        ending = state.account.cash
-    return (ending - starting) / starting
+        return (ending - starting) / starting
+    return _realized_pnl_usd(state) / starting
+
+
+def _account_ending_capital(state: BacktestState) -> float:
+    if not state.account:
+        return 0.0
+    if equity_from_mark() and state.account.equity_curve:
+        return float(state.account.equity_curve[-1]["equity"])
+    return state.account.starting_capital + _realized_pnl_usd(state)
 
 
 def _summarize(
@@ -757,13 +768,9 @@ def _summarize(
             {
                 "account": {
                     "starting_capital": state.account.starting_capital,
-                    "ending_capital": round(
-                        float(state.account.equity_curve[-1]["equity"])
-                        if state.account.equity_curve
-                        else state.account.cash,
-                        2,
-                    ),
+                    "ending_capital": round(_account_ending_capital(state), 2),
                     "return_pct": round(_account_return_pct(state), 4),
+                    "realized_pnl_usd": round(_realized_pnl_usd(state), 2),
                     "max_drawdown_pct": round(state.account.max_drawdown_pct(), 4),
                     "skipped_insufficient_capital": state.account.skipped_insufficient_capital,
                     "equity_curve": state.account.equity_curve,

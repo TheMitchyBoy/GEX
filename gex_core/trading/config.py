@@ -446,7 +446,7 @@ def magnet_anchored_strikes() -> bool:
 
 def fix_magnet_exit_scale() -> bool:
     """Map SPX magnet strikes to execution spot scale for exit progress checks."""
-    return _flag("GEX_TRADER_FIX_MAGNET_EXIT_SCALE", "0")
+    return _flag("GEX_TRADER_FIX_MAGNET_EXIT_SCALE", "1")
 
 
 def min_magnet_distance_pct() -> float:
@@ -457,11 +457,11 @@ def min_magnet_distance_pct() -> float:
 
 
 def dynamic_time_stop() -> bool:
-    return _flag("GEX_TRADER_DYNAMIC_TIME_STOP", "0")
+    return _flag("GEX_TRADER_DYNAMIC_TIME_STOP", "1")
 
 
 def equity_from_mark() -> bool:
-    """Compute account return from marked equity curve instead of cash only."""
+    """When off, account return_pct uses realized closed-trade PnL (recommended)."""
     return _flag("GEX_TRADER_EQUITY_FROM_MARK", "0")
 
 
