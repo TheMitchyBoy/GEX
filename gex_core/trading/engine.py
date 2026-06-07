@@ -232,6 +232,7 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
         exit_state = _exit_state_from_meta(meta)
         bars_held = bars_held_since_entry(str(pos.get("entry_ts") or ""), bar_minutes=bar_minutes)
         profile = _exit_profile_from_meta(meta, pos)
+        magnet_strike = safe_float(pos.get("signal_strike"), 0.0) or None
         exit_reason, exit_pnl = evaluate_exit(
             pnl_pct,
             state=exit_state,
@@ -241,6 +242,7 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
             current_spot=float(mark_spot),
             option_type=str(pos["option_type"]),
             profile=profile,
+            magnet_strike=magnet_strike,
         )
 
         meta_update = {
@@ -355,19 +357,20 @@ def _maybe_enter(
             continue
 
         option_type = advice.get("option_type") or rec["option_type"]
-        signal_strike = float(rec["strike"])
-        if strike_stop_cooldown_active(ticker, signal_strike, str(option_type)):
+        trade_strike = float(rec["strike"])
+        magnet_strike = float(rec.get("magnet_strike") or trade_strike)
+        if strike_stop_cooldown_active(ticker, magnet_strike, str(option_type)):
             last_skip = {
                 "action": "skipped",
-                "reason": f"Cooldown active after stop at {signal_strike:.0f}",
+                "reason": f"Cooldown active after stop at {magnet_strike:.0f}",
                 "advice": advice,
             }
             continue
 
         exec_strike = (
-            map_execution_strike(signal_strike, signal_spot=spot, execution_spot=exec_spot)
+            map_execution_strike(trade_strike, signal_spot=spot, execution_spot=exec_spot)
             if _uses_execution_mapping()
-            else signal_strike
+            else trade_strike
         )
         if _has_open_duplicate(ticker, strike=exec_strike, option_type=str(option_type)):
             last_skip = {"action": "skipped", "reason": f"Already open at {exec_strike:.2f} {option_type}", "advice": advice}
@@ -383,7 +386,7 @@ def _maybe_enter(
             }
             continue
         size_mult = float(advice.get("size_multiplier") or 1.0)
-        exec_map = execution_summary(signal_strike=signal_strike, signal_spot=spot, execution_spot=exec_spot)
+        exec_map = execution_summary(signal_strike=trade_strike, signal_spot=spot, execution_spot=exec_spot)
         mark_entry_spot = float(exec_spot if _uses_execution_mapping() else spot)
         expected_move = float(market.expected_move_pct) if market and market.expected_move_pct else None
         exit_profile = build_exit_profile(
@@ -484,7 +487,7 @@ def _maybe_enter(
             entry_spot=exec_spot if _uses_execution_mapping() else spot,
             entry_premium=premium,
             signal_type=rec["signal_type"],
-            signal_strike=signal_strike,
+            signal_strike=magnet_strike,
             signal_gamma=float(rec["gamma_bn"]),
             gamma_delta=float(rec["gamma_delta"]),
             ai_confidence=float(advice.get("confidence", 0.5)),
@@ -501,7 +504,8 @@ def _maybe_enter(
             "trade_id": trade_id,
             "option_type": option_type,
             "strike": exec_strike,
-            "signal_strike": signal_strike,
+            "signal_strike": magnet_strike,
+            "trade_strike": trade_strike,
             "execution_map": exec_map,
             "premium": premium,
             "broker": broker.name,

@@ -10,6 +10,7 @@ from gex_core.trading.config import (
     far_otm_stop_loss_pct,
     magnet_proximity_pct,
     magnet_touch_exit_enabled,
+    max_gamma_only,
     partial_take_profit_pct,
     stop_loss_pct,
     strong_entry_confidence,
@@ -67,7 +68,7 @@ def build_exit_profile(
     strong = ai_confidence >= strong_entry_confidence() and gamma_delta >= strong_gamma_delta()
     short_gamma = "SHORT" in (regime or "").upper()
 
-    if strong or near_magnet:
+    if max_gamma_only() or strong or near_magnet:
         profile = ExitProfile(
             hold_for_target=True,
             partial_take_profit=None,
@@ -162,24 +163,31 @@ def evaluate_exit(
     current_spot: float,
     option_type: str,
     profile: ExitProfile | None = None,
+    magnet_strike: float | None = None,
+    magnet_primary: bool | None = None,
 ) -> tuple[str | None, float]:
     """Return (exit_reason, exit_pnl_pct)."""
     profile = profile or ExitProfile()
     state.peak_pnl_pct = max(state.peak_pnl_pct, pnl_pct)
     stop = effective_stop_loss(entry_spot=entry_spot, strike=strike)
     full_tp = profile.full_take_profit
+    primary_magnet = magnet_primary if magnet_primary is not None else max_gamma_only()
+    target_strike = magnet_strike if magnet_strike is not None else strike
 
     if pnl_pct <= -stop:
         return "stop_loss", max(pnl_pct, -stop)
 
-    if magnet_touch_exit_enabled() and not profile.hold_for_target:
+    if magnet_touch_exit_enabled():
         progress = spot_progress_toward_strike(
             entry_spot=entry_spot,
             current_spot=current_spot,
-            strike=strike,
+            strike=target_strike,
             option_type=option_type,
         )
-        if progress >= 1.0 - magnet_proximity_pct() and pnl_pct > 0:
+        at_magnet = progress >= 1.0 - magnet_proximity_pct()
+        if primary_magnet and at_magnet and pnl_pct >= 0:
+            return "magnet_touch", pnl_pct
+        if not primary_magnet and not profile.hold_for_target and at_magnet and pnl_pct > 0:
             return "magnet_touch", pnl_pct
 
     if pnl_pct >= full_tp:
@@ -201,7 +209,7 @@ def evaluate_exit(
         progress = spot_progress_toward_strike(
             entry_spot=entry_spot,
             current_spot=current_spot,
-            strike=strike,
+            strike=target_strike,
             option_type=option_type,
         )
         if progress < time_stop_min_magnet_progress():

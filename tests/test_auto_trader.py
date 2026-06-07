@@ -15,7 +15,8 @@ from gex_core.trading.paper_broker import estimate_option_pnl_pct
 from gex_core.trading.signals import compute_gamma_signals
 
 
-def test_compute_gamma_signals_picks_max_and_fastest():
+def test_compute_gamma_signals_picks_max_and_fastest(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "0")
     cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
     prev = pd.Series([0.1, 0.5, 0.35, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7385.0)
@@ -26,17 +27,20 @@ def test_compute_gamma_signals_picks_max_and_fastest():
     assert out["recommended"]["strike"] in {7380.0, 7390.0}
 
 
-def test_compute_gamma_signals_switches_when_max_gamma_declines():
+def test_compute_gamma_signals_switches_when_max_gamma_declines(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "0")
     cur = pd.Series([0.2, 1.0, 0.8, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
     assert out["available"]
-    assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
-    assert out["recommended"]["strike"] == 7385.0
-    assert len(out.get("candidates") or []) >= 1
+    # Direction locked to max-gamma magnet (7390 → call); fastest put at 7385 is excluded.
+    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["recommended"]["option_type"] == "call"
+    assert out["master_direction"] == "call"
 
 
 def test_compute_gamma_signals_allows_flat_max_gamma(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "0")
     monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
     cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.25, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
@@ -78,11 +82,45 @@ def test_paper_broker_stop_loss_threshold():
     assert pnl < -0.05
 
 
+def test_max_gamma_only_single_direction_candidate(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
+    cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    prev = pd.Series([0.1, 0.5, 0.35, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7385.0)
+    assert out["available"]
+    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["recommended"]["option_type"] == "call"
+    assert len(out["candidates"]) == 1
+    assert out["recommended"]["magnet_strike"] == 7390.0
+
+
+def test_max_gamma_only_blocks_declining_magnet(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
+    cur = pd.Series([0.2, 1.0, 0.8, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
+    prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7387.0)
+    assert not out["available"]
+    assert out["skip_reason"] == "gamma_declined"
+
+
+def test_magnet_anchored_strike_uses_magnet(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
+    monkeypatch.setenv("GEX_TRADER_MAGNET_ANCHORED_STRIKES", "1")
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
+    cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    prev = pd.Series([0.1, 0.5, 0.35, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7385.0)
+    assert out["recommended"]["strike"] == 7390.0
+
+
 def test_trading_cycle_opens_on_armed_trader(tmp_path, monkeypatch):
     db = tmp_path / "journal.db"
     monkeypatch.setenv("GEX_TRADING_DB", str(db))
     monkeypatch.setenv("GEX_AUTO_TRADER", "1")
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
+    monkeypatch.setenv("GEX_TRADER_REQUIRE_MOMENTUM", "0")
+    monkeypatch.setenv("GEX_TRADER_REQUIRE_FLIP_SIDE", "0")
     monkeypatch.setenv("GEX_TRADER_RISK_SIZING", "0")
     monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: False)
 

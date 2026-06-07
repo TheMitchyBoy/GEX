@@ -434,6 +434,16 @@ def prefer_signal_type() -> str:
     return os.environ.get("GEX_TRADER_PREFER_SIGNAL", "").strip().lower()
 
 
+def max_gamma_only() -> bool:
+    """Only trade max positive gamma; drop fastest-increase fallback."""
+    return _flag("GEX_TRADER_MAX_GAMMA_ONLY", "1")
+
+
+def magnet_anchored_strikes() -> bool:
+    """Trade strikes at the gamma magnet instead of nearest ATM."""
+    return _flag("GEX_TRADER_MAGNET_ANCHORED_STRIKES", "0")
+
+
 def entry_time_filter_enabled() -> bool:
     return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")
 
