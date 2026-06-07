@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from gex_core.trading.backtest import backtest_auto_trader
@@ -40,9 +41,36 @@ from gex_core.trading.config import (
 
 def _default_lookback_days() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_BACKTEST_LOOKBACK_DAYS", "7")))
+        return max(1, int(os.environ.get("GEX_BACKTEST_LOOKBACK_DAYS", "14")))
     except (TypeError, ValueError):
-        return 7
+        return 14
+
+
+def parse_lookback_days_from_message(message: str) -> int | None:
+    """Extract requested backtest window from natural language (e.g. '2 week backtest')."""
+    msg = (message or "").lower()
+    if not msg:
+        return None
+
+    patterns = (
+        r"(\d+(?:\.\d+)?)\s*[- ]?\s*week(?:s)?",
+        r"(\d+(?:\.\d+)?)\s*[- ]?\s*wk(?:s)?",
+        r"(\d+)\s*[- ]?\s*day(?:s)?",
+        r"(\d+)\s*[- ]?\s*d\b",
+        r"last\s+(\d+)\s+week(?:s)?",
+        r"last\s+(\d+)\s+day(?:s)?",
+        r"past\s+(\d+)\s+week(?:s)?",
+        r"past\s+(\d+)\s+day(?:s)?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, msg)
+        if not match:
+            continue
+        value = float(match.group(1))
+        if "week" in pattern or "wk" in pattern:
+            return max(1, int(round(value * 7)))
+        return max(1, int(round(value)))
+    return None
 
 
 def _default_max_snapshots() -> int:
@@ -96,6 +124,8 @@ def summarize_backtest_for_ai(result: dict[str, Any], *, include_trades: int = 5
             "from": result.get("date_from"),
             "to": result.get("date_to"),
             "snapshots": result.get("snapshots"),
+            "lookback_days_requested": result.get("lookback_days_requested"),
+            "data_source": "export_snapshots",
             "weekend_snapshots_excluded": result.get("weekend_snapshots_excluded"),
         },
         "message": result.get("message"),
@@ -147,6 +177,7 @@ def run_agent_backtest(
         starting_capital=capital,
     )
     result["parameters"] = params
+    result["lookback_days_requested"] = lookback
     if compact:
         return summarize_backtest_for_ai(result)
     return result
@@ -288,8 +319,10 @@ def format_backtest_reply(summary: dict[str, Any]) -> str:
     pnl_txt = f"${pnl:,.2f}" if isinstance(pnl, (int, float)) else "n/a"
 
     window = summary.get("window") or {}
+    lookback = window.get("lookback_days_requested")
+    lookback_txt = f"{lookback}-day window, " if lookback else ""
     return (
-        f"Walk-forward backtest on {window.get('snapshots', '?')} snapshots "
+        f"Walk-forward backtest on {lookback_txt}{window.get('snapshots', '?')} export snapshots "
         f"({window.get('from', '?')} → {window.get('to', '?')}) "
         f"with current settings (risk {summary['parameters']['risk_per_trade_pct']:.0%}, "
         f"stop {summary['parameters']['stop_loss_pct']:.0%}, "

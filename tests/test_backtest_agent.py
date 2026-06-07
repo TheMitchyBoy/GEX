@@ -3,10 +3,17 @@ import pandas as pd
 from gex_core.trading.backtest_agent import (
     current_trader_parameters,
     format_backtest_reply,
+    parse_lookback_days_from_message,
     run_agent_backtest,
     summarize_backtest_for_ai,
     user_wants_backtest,
 )
+
+
+def test_parse_lookback_days_from_message():
+    assert parse_lookback_days_from_message("run a 2 week backtest") == 14
+    assert parse_lookback_days_from_message("backtest last 10 days") == 10
+    assert parse_lookback_days_from_message("walk-forward backtest") is None
 
 
 def test_user_wants_backtest_detects_common_phrases():
@@ -78,7 +85,7 @@ def test_format_backtest_reply_includes_win_rate():
         )
     )
     assert "67%" in text or "win rate" in text
-    assert "12 snapshots" in text
+    assert "12 export snapshots" in text
 
 
 def test_api_agent_backtest_endpoint():

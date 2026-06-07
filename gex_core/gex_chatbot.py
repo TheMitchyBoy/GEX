@@ -36,9 +36,9 @@ _CHAT_SYSTEM = (
     "- This is market analysis, not financial advice.\n"
     "- When trade_memory is present in the data bundle, use it to refine predictions and "
     "reference past paper-trade performance.\n"
-    "- When trader_backtest is present, it is a walk-forward simulation using the CURRENT "
-    "live auto-trader parameters (risk %, stops, filters). Cite those numbers when asked "
-    "about backtests or strategy performance.\n"
+    "- When trader_backtest is present, it is a walk-forward simulation on saved GEX export "
+    "snapshots (not live UW API) using CURRENT auto-trader parameters. Always cite window "
+    "snapshots, date range, trades, win rate, and return when the user asks for a backtest.\n"
     "- When confidence_monte_carlo is present, it swept min-entry and strong-confidence "
     "advisor thresholds on history. Recommend the best_roi row for ROI optimization.\n"
 )
@@ -298,16 +298,21 @@ def chat_reply(
     confidence_monte_carlo = None
     try:
         from gex_core.trading.backtest_agent import (
+            parse_lookback_days_from_message,
             run_agent_backtest,
             run_agent_confidence_monte_carlo,
             user_wants_backtest,
             user_wants_confidence_monte_carlo,
         )
 
+        lookback_days = parse_lookback_days_from_message(user_message)
         if user_wants_confidence_monte_carlo(user_message):
-            confidence_monte_carlo = run_agent_confidence_monte_carlo(ticker)
+            confidence_monte_carlo = run_agent_confidence_monte_carlo(
+                ticker,
+                lookback_days=lookback_days,
+            )
         elif user_wants_backtest(user_message):
-            trader_backtest = run_agent_backtest(ticker)
+            trader_backtest = run_agent_backtest(ticker, lookback_days=lookback_days)
     except Exception:
         logger.exception("Agent backtest failed for %s", ticker)
 
