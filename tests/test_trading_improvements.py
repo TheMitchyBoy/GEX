@@ -14,6 +14,7 @@ from gex_core.trading.sizing import resolve_contract_qty
 
 @pytest.fixture(autouse=True)
 def enable_strict_filters(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "1")
     monkeypatch.setenv("GEX_TRADER_ENTRY_TIME_FILTER", "0")
     monkeypatch.setenv("GEX_TRADER_MIN_ZERO_DTE_RATIO", "0")

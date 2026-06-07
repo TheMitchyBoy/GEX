@@ -12,8 +12,8 @@ def _flag(name: str, default: str = "0") -> bool:
 
 
 def clear_all_filters() -> bool:
-    """Master switch: disable signal, advisor, and strict entry gates."""
-    return _flag("GEX_TRADER_CLEAR_FILTERS", "0")
+    """Master switch: disable signal, advisor, and strict entry gates (default on)."""
+    return _flag("GEX_TRADER_CLEAR_FILTERS", "1")
 
 
 def auto_trader_enabled() -> bool:

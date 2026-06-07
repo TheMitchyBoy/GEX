@@ -5,6 +5,7 @@ from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 
 
 def test_momentum_filter_blocks_call_when_spot_falling(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "1")
     monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
     monkeypatch.setenv("GEX_TRADER_REQUIRE_FLOW_ALIGN", "0")
@@ -29,6 +30,7 @@ def test_momentum_filter_blocks_call_when_spot_falling(monkeypatch):
 
 
 def test_flip_filter_blocks_call_below_gamma_flip(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "1")
     monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
     monkeypatch.setenv("GEX_TRADER_REQUIRE_FLOW_ALIGN", "0")

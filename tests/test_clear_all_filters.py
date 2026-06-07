@@ -16,6 +16,10 @@ from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.signals import compute_entry_candidates
 
 
+def test_clear_all_filters_default_on():
+    assert clear_all_filters()
+
+
 def test_clear_all_filters_disables_strict_gates(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "1")
     assert clear_all_filters()
@@ -32,6 +36,14 @@ def test_clear_all_filters_allows_declining_gamma_magnet(monkeypatch):
     prev = pd.Series({4990: 0.2, 5000: 0.4, 5010: 2.5})
     out = compute_entry_candidates(cur, prev, spot=5000.0)
     assert out["available"] is True
+
+
+def test_strict_filters_when_clear_off(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
+    from gex_core.trading.config import strict_entry_filters
+
+    assert not clear_all_filters()
+    assert strict_entry_filters()
 
 
 def test_clear_all_filters_bypasses_advisor_score_floor(monkeypatch):

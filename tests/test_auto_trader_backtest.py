@@ -6,6 +6,7 @@ from gex_core.trading.backtest import backtest_auto_trader
 
 @pytest.fixture(autouse=True)
 def relaxed_filters(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
     monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
     monkeypatch.setenv("GEX_TRADER_MIN_MAGNET_PROGRESS", "0")
