@@ -392,6 +392,7 @@ def _close_position(
             equity_after=equity_after,
         )
     )
+    pos.qty = max(0.0, pos.qty - trade_qty)
 
 
 def _check_exits(

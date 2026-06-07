@@ -53,8 +53,27 @@ def test_strong_setup_holds_for_full_target():
     assert pnl == 0.35
 
 
+def test_magnet_touch_requires_min_pnl(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_MIN_PNL_PCT", "0.08")
+    profile = ExitProfile(hold_for_target=True, full_take_profit=0.35)
+    state = ExitState()
+    reason, _ = evaluate_exit(
+        0.03,
+        state=state,
+        bars_held=3,
+        entry_spot=5000.0,
+        strike=5010.0,
+        current_spot=5050.0,
+        option_type="call",
+        profile=profile,
+        magnet_strike=5050.0,
+        magnet_primary=True,
+    )
+    assert reason is None
+
+
 def test_time_stop_skipped_when_moving_toward_magnet():
-    profile = ExitProfile(time_stop_bars=6)
+    profile = ExitProfile(time_stop_bars=10)
     state = ExitState()
     reason, _ = evaluate_exit(
         0.01,
