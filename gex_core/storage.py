@@ -23,20 +23,14 @@ DEFAULT_DB_PATH = _REPO_ROOT / "data" / "gex_index.db"
 
 
 def db_path() -> Path:
-    raw = Path(os.environ.get("GEX_INDEX_DB", str(DEFAULT_DB_PATH)))
-    if not raw.is_absolute():
-        return _REPO_ROOT / raw
-    return raw
+    raw = os.environ.get("GEX_INDEX_DB", "").strip()
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else _REPO_ROOT / path
+    return DEFAULT_DB_PATH
 
 
-def _connect(path: Path | None = None) -> sqlite3.Connection:
-    path = path or db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(
-        """
+_INDEX_SCHEMA = """
         CREATE TABLE IF NOT EXISTS snapshots (
             ticker TEXT NOT NULL,
             ts TEXT NOT NULL,
@@ -52,8 +46,12 @@ def _connect(path: Path | None = None) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_ts
             ON snapshots (ticker, ts DESC);
         """
-    )
-    return conn
+
+
+def _connect(path: Path | None = None) -> sqlite3.Connection:
+    from gex_core.sqlite_util import connect_sqlite
+
+    return connect_sqlite(path or db_path(), schema_sql=_INDEX_SCHEMA)
 
 
 def upsert_snapshot(

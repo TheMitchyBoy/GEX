@@ -25,7 +25,26 @@ logger = logging.getLogger(__name__)
 
 # Resolve relative to repo root so gunicorn/docker cwd does not break history.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-EXPORT_DIR = _REPO_ROOT / "data" / "exports"
+
+
+def _resolve_export_dir() -> Path:
+    import os
+
+    raw = os.environ.get("GEX_EXPORT_DIR", "").strip()
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else _REPO_ROOT / path
+    return _REPO_ROOT / "data" / "exports"
+
+
+EXPORT_DIR = _resolve_export_dir()
+
+
+def refresh_export_dir() -> Path:
+    """Re-read ``GEX_EXPORT_DIR`` after ``configure_data_paths()`` runs."""
+    global EXPORT_DIR
+    EXPORT_DIR = _resolve_export_dir()
+    return EXPORT_DIR
 
 TIMESTAMP_RE = re.compile(
     r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"

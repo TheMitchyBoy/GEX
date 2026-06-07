@@ -12,20 +12,7 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = _REPO_ROOT / "data" / "trading_journal.db"
 
-
-def db_path() -> Path:
-    raw = Path(os.environ.get("GEX_TRADING_DB", str(DEFAULT_DB)))
-    return _REPO_ROOT / raw if not raw.is_absolute() else raw
-
-
-def _connect() -> sqlite3.Connection:
-    path = db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(
-        """
+_JOURNAL_SCHEMA = """
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -66,8 +53,20 @@ def _connect() -> sqlite3.Connection:
             updated_at TEXT NOT NULL
         );
         """
-    )
-    return conn
+
+
+def db_path() -> Path:
+    raw = os.environ.get("GEX_TRADING_DB", "").strip()
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else _REPO_ROOT / path
+    return DEFAULT_DB
+
+
+def _connect() -> sqlite3.Connection:
+    from gex_core.sqlite_util import connect_sqlite
+
+    return connect_sqlite(db_path(), schema_sql=_JOURNAL_SCHEMA)
 
 
 def _now_iso() -> str:
