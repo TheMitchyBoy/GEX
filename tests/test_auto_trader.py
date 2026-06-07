@@ -22,7 +22,7 @@ def test_compute_gamma_signals_picks_max_and_fastest():
     assert out["available"]
     assert out["max_positive_gamma"]["gamma_bn"] == 1.5
     assert out["fastest_gamma_increase"]["gamma_delta"] == 1.0
-    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
     assert out["recommended"]["strike"] in {7380.0, 7390.0}
 
 
@@ -31,17 +31,18 @@ def test_compute_gamma_signals_switches_when_max_gamma_declines():
     prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
     assert out["available"]
-    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
     assert out["recommended"]["strike"] == 7385.0
     assert len(out.get("candidates") or []) >= 1
 
 
-def test_compute_gamma_signals_allows_flat_max_gamma():
+def test_compute_gamma_signals_allows_flat_max_gamma(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
     cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.25, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
     assert out["available"]
-    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["recommended"]["signal_type"] in {"max_positive_gamma", "fastest_gamma_increase"}
     assert out["max_pos_gamma_delta"] == 0.0
 
 
@@ -55,6 +56,7 @@ def test_compute_gamma_signals_blocks_when_max_gamma_declines():
 
 def test_entry_filter_blocks_far_strike(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "1")
+    monkeypatch.setenv("GEX_TRADER_PREFER_SIGNAL", "")
     monkeypatch.setenv("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.01")
     signals = {
         "available": True,

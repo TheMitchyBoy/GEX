@@ -7,7 +7,13 @@ from typing import Any
 
 import pandas as pd
 
-from gex_core.trading.config import max_strike_distance_pct, min_fastest_gamma_delta, multi_strike_count
+from gex_core.trading.config import (
+    max_strike_distance_pct,
+    min_fastest_gamma_delta,
+    min_gamma_delta,
+    multi_strike_count,
+    prefer_signal_type,
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +91,19 @@ def _candidate_key(rec: dict[str, Any]) -> tuple[float, str]:
     return (round(float(rec["strike"]), 2), str(rec["option_type"]).lower())
 
 
+def _rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    preferred = prefer_signal_type()
+
+    def sort_key(rec: dict[str, Any]) -> tuple:
+        sig = str(rec.get("signal_type", "")).lower()
+        pref_rank = 0 if preferred and sig == preferred else 1
+        delta = float(rec.get("gamma_delta", 0.0))
+        score = float(rec.get("score", 0.0))
+        return (pref_rank, -delta, -score)
+
+    return sorted(candidates, key=sort_key)
+
+
 def compute_entry_candidates(
     exposure: pd.Series | None,
     previous: pd.Series | None,
@@ -139,6 +158,7 @@ def compute_entry_candidates(
 
     seen: set[tuple[float, str]] = set()
     candidates: list[dict[str, Any]] = []
+    min_delta = min_gamma_delta()
 
     for magnet_strike, gamma_bn in positive.sort_values(ascending=False).items():
         if len(candidates) >= limit:
@@ -161,6 +181,12 @@ def compute_entry_candidates(
             rationale=f"Positive gamma magnet {magnet_f:.0f}, trading {trade_strike:.0f}",
         )
         rec = _signal_dict(sig)
+        if (
+            fast_trade_strike is not None
+            and fastest_delta >= min_delta
+            and _candidate_key(rec) == _candidate_key(_signal_dict(fastest_signal))
+        ):
+            rec = {**_signal_dict(fastest_signal), "strike": rec["strike"]}
         key = _candidate_key(rec)
         if key in seen:
             continue
@@ -168,16 +194,15 @@ def compute_entry_candidates(
         candidates.append(rec)
 
     min_fast = min_fastest_gamma_delta()
-    if len(candidates) < limit and fastest_delta > 0:
-        fast_rec = _signal_dict(fastest_signal)
-        if fast_trade_strike is not None and _candidate_key(fast_rec) not in seen:
-            fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
-            if fast_dist <= max_strike_distance_pct():
-                seen.add(_candidate_key(fast_rec))
-                candidates.append(fast_rec)
+    fast_rec = _signal_dict(fastest_signal)
+    if fast_trade_strike is not None and fastest_delta >= min_delta:
+        fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
+        if fast_dist <= max_strike_distance_pct() and _candidate_key(fast_rec) not in seen:
+            seen.add(_candidate_key(fast_rec))
+            candidates.append(fast_rec)
 
     if not candidates and max_pos_delta < 0:
-        if min_fast > 0 and fastest_delta >= min_fast and fast_trade_strike is not None:
+        if fastest_delta >= min_fast and fast_trade_strike is not None:
             fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
             if fast_dist <= max_strike_distance_pct():
                 candidates.append(_signal_dict(fastest_signal))
@@ -205,6 +230,7 @@ def compute_entry_candidates(
             "fastest_gamma_increase": _signal_dict(fastest_signal),
         }
 
+    candidates = _rank_candidates(candidates)[:limit]
     selection_reason = "max_positive_gamma"
     recommended_dict = candidates[0]
     if max_pos_delta < 0 and recommended_dict.get("signal_type") == "fastest_gamma_increase":

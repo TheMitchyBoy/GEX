@@ -20,6 +20,8 @@ def enable_strict_filters(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_REQUIRE_FLIP_SIDE", "0")
     monkeypatch.setenv("GEX_TRADER_MAX_IV_RANK", "1")
     monkeypatch.setenv("GEX_TRADER_MIN_MAGNET_PROGRESS", "0")
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
+    monkeypatch.setenv("GEX_TRADER_PREFER_SIGNAL", "")
     monkeypatch.setenv("GEX_TRADER_MIN_FLOW_AGGRESSIVENESS", "0")
     monkeypatch.setenv("GEX_TRADER_MIN_FLOW_BUY_RATIO", "0")
 

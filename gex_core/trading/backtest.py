@@ -20,6 +20,7 @@ from gex_core.market_time import (
 )
 from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.config import (
+    max_entries_per_cycle,
     max_open_positions,
     momentum_bars,
     stop_cooldown_bars,
@@ -169,6 +170,30 @@ def _max_exit_gap_minutes(bar_minutes: float) -> float:
     return max(bar_minutes * 2.0, 20.0)
 
 
+def _strike_profiles_equal(a, b) -> bool:
+    if a is None or b is None:
+        return False
+    if not isinstance(a, pd.Series) or not isinstance(b, pd.Series):
+        return a == b
+    if a.empty or b.empty:
+        return False
+    try:
+        return a.equals(b)
+    except Exception:
+        return False
+
+
+def _signal_previous_row(history: list[dict], idx: int) -> dict:
+    """Last snapshot with a distinct strike profile (skip duplicate GEX bars)."""
+    if idx <= 0:
+        return history[0]
+    cur = history[idx].get("strike")
+    prev_idx = idx - 1
+    while prev_idx > 0 and _strike_profiles_equal(cur, history[prev_idx].get("strike")):
+        prev_idx -= 1
+    return history[prev_idx]
+
+
 def _resolve_trade_context(
     *,
     signal_strike: float,
@@ -253,12 +278,12 @@ def _apply_backtest_exit(
     if trade_qty <= 0:
         return
     exit_premium = mark_to_market_premium(pos.entry_premium, pnl_pct)
-    equity_after = None
-    if state.account:
-        state.account.credit_exit(exit_premium, trade_qty)
-        equity_after = state.account.cash
 
     if exit_reason == "take_profit_partial" and trade_qty < pos.qty:
+        equity_after = None
+        if state.account:
+            state.account.credit_exit(exit_premium, trade_qty)
+            equity_after = state.account.cash
         partial_usd = pnl_usd(pos.entry_premium, exit_premium, trade_qty)
         state.closed_trades.append(
             _ClosedTrade(
@@ -494,9 +519,12 @@ def _maybe_enter(
     row_with_ts.setdefault("ts", ts)
     market = market_context_from_snapshot(row_with_ts, prev_spot=prev_spot, spot_history=spot_history)
     memory = _memory_from_closed(state.closed_trades)
+    opened_this_cycle = 0
 
     for rec in pack.get("candidates") or []:
         if len(state.open_positions) >= max_open:
+            return
+        if opened_this_cycle >= max_entries_per_cycle():
             return
 
         signals = {**pack, "recommended": rec}
@@ -576,6 +604,7 @@ def _maybe_enter(
         )
         if state.account:
             state.account.record_equity(ts, state.open_positions, exec_spot)
+        opened_this_cycle += 1
 
 
 def _summarize(
@@ -715,7 +744,7 @@ def backtest_auto_trader(
     export_dir=EXPORT_DIR,
     lookback_days: int | None = 7,
     max_snapshots: int | None = 500,
-    dedupe_identical_strikes: bool = False,
+    dedupe_identical_strikes: bool = True,
     stop_loss: float | None = None,
     take_profit: float | None = None,
     max_open: int | None = None,
@@ -759,7 +788,7 @@ def backtest_auto_trader(
 
     for idx in range(1, len(history)):
         row = history[idx]
-        prev = history[idx - 1]
+        prev = _signal_previous_row(history, idx)
         ts = str(row["ts"])
         if not export_ts_is_trading_day(ts):
             state.skipped_weekends += 1
@@ -775,8 +804,8 @@ def backtest_auto_trader(
             ts=str(row["ts"]),
             signal_spot=spot,
             row=row,
-            prev_ts=str(prev["ts"]),
-            prev_signal_spot=safe_float(prev.get("spot"), 0.0) or None,
+            prev_ts=str(history[idx - 1]["ts"]),
+            prev_signal_spot=safe_float(history[idx - 1].get("spot"), 0.0) or None,
         )
         lookback = momentum_bars() + 2
         spot_history = [
@@ -909,7 +938,7 @@ def backtest_auto_trader_bootstrap(
     export_dir=EXPORT_DIR,
     lookback_days: int | None = 7,
     max_snapshots: int | None = 500,
-    dedupe_identical_strikes: bool = False,
+    dedupe_identical_strikes: bool = True,
     stop_loss: float | None = None,
     take_profit: float | None = None,
     max_open: int | None = None,

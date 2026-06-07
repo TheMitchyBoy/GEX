@@ -22,6 +22,7 @@ from gex_core.trading.config import (
     eod_flatten_enabled,
     execution_ticker,
     live_trading_allowed,
+    max_entries_per_cycle,
     max_open_positions,
     paper_trading_only,
     signal_ticker,
@@ -329,8 +330,11 @@ def _maybe_enter(
         return {"action": "skipped", "reason": "No live SPY spot for SPX sync"}
 
     last_skip: dict[str, Any] | None = None
+    opened_this_cycle = 0
     for rec in pack.get("candidates") or []:
         if len(list_open_trades(ticker)) >= max_open_positions():
+            return last_skip
+        if opened_this_cycle >= max_entries_per_cycle():
             return last_skip
 
         signals = {**pack, "recommended": rec}
@@ -480,6 +484,7 @@ def _maybe_enter(
         if live_trading_allowed() and meta.get("webull_client_order_id"):
             patch_trade_meta(trade_id, {"webull_client_order_id": meta["webull_client_order_id"]})
 
+        opened_this_cycle += 1
         return {
             "action": "opened",
             "trade_id": trade_id,

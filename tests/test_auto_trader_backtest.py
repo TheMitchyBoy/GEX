@@ -7,6 +7,9 @@ from gex_core.trading.backtest import backtest_auto_trader
 @pytest.fixture(autouse=True)
 def relaxed_filters(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
+    monkeypatch.setenv("GEX_TRADER_MIN_MAGNET_PROGRESS", "0")
+    monkeypatch.setenv("GEX_TRADER_PREFER_SIGNAL", "")
 
 
 def _snapshot(ts: str, spot: float, strikes: dict[float, float], *, prev_spot: float | None = None) -> dict:
@@ -43,6 +46,7 @@ def test_backtest_opens_and_closes_on_take_profit():
 
 def test_backtest_tries_multiple_strike_candidates(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_MULTI_STRIKE", "3")
+    monkeypatch.setenv("GEX_TRADER_MAX_ENTRIES_PER_CYCLE", "3")
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0, 5020: 1.8}),
         _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2, 5020: 1.9}),
@@ -131,6 +135,29 @@ def test_backtest_skips_exits_across_snapshot_gaps():
     )
     assert result["total_trades"] == 1
     assert result["trades"][0]["exit_reason"] in {"session_gap", "time_stop", "backtest_end"}
+
+
+def test_backtest_account_cash_matches_trade_pnl(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
+    monkeypatch.setenv("GEX_TRADER_RISK_SIZING", "0")
+    history = [
+        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
+        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_102000", 5050.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+    ]
+    result = backtest_auto_trader(
+        "SPX",
+        history=history,
+        stop_loss=0.05,
+        take_profit=0.10,
+        max_open=1,
+        starting_capital=500.0,
+    )
+    account = result.get("account")
+    assert account is not None
+    trade_pnl = sum(t["pnl_usd"] for t in result["trades"])
+    expected_cash = 500.0 + trade_pnl
+    assert abs(account["ending_capital"] - expected_cash) < 0.05
 
 
 def test_backtest_account_starting_capital(monkeypatch):

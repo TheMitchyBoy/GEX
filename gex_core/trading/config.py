@@ -70,9 +70,9 @@ def take_profit_pct() -> float:
 
 def partial_take_profit_pct() -> float:
     try:
-        return max(0.05, float(os.environ.get("GEX_TRADER_PARTIAL_TP_PCT", "0.15")))
+        return max(0.05, float(os.environ.get("GEX_TRADER_PARTIAL_TP_PCT", "0.08")))
     except (TypeError, ValueError):
-        return 0.15
+        return 0.08
 
 
 def trailing_stop_trigger_pct() -> float:
@@ -91,24 +91,24 @@ def trailing_stop_floor_pct() -> float:
 
 def time_stop_bars() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "3")))
+        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "6")))
     except (TypeError, ValueError):
-        return 3
+        return 6
 
 
 def time_stop_min_pnl_pct() -> float:
     try:
-        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PNL_PCT", "0.02"))
+        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PNL_PCT", "0.05"))
     except (TypeError, ValueError):
-        return 0.02
+        return 0.05
 
 
 def time_stop_min_magnet_progress() -> float:
     """Minimum fraction of distance-to-strike closed to avoid a time stop."""
     try:
-        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PROGRESS", "0.15"))
+        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PROGRESS", "0.20"))
     except (TypeError, ValueError):
-        return 0.15
+        return 0.20
 
 
 def stop_cooldown_bars() -> int:
@@ -148,22 +148,31 @@ def high_confidence_contracts() -> int:
 
 def max_open_positions() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_MAX_OPEN", "3")))
+        return max(1, int(os.environ.get("GEX_TRADER_MAX_OPEN", "2")))
     except (TypeError, ValueError):
-        return 3
+        return 2
+
+
+def max_entries_per_cycle() -> int:
+    """Max new positions opened per trader/backtest snapshot cycle."""
+    try:
+        return max(1, int(os.environ.get("GEX_TRADER_MAX_ENTRIES_PER_CYCLE", "1")))
+    except (TypeError, ValueError):
+        return 1
+
 
 def min_gamma_delta() -> float:
     try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0")))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0.03")))
     except (TypeError, ValueError):
-        return 0.0
+        return 0.03
 
 
 def min_fastest_gamma_delta() -> float:
     try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_FASTEST_GAMMA_DELTA", "0.10")))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_FASTEST_GAMMA_DELTA", "0.03")))
     except (TypeError, ValueError):
-        return 0.10
+        return 0.03
 
 
 def max_strike_distance_pct() -> float:
@@ -325,9 +334,9 @@ def max_iv_rank() -> float:
 
 def min_magnet_progress_pct() -> float:
     try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_PROGRESS", "0.0")))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_PROGRESS", "0.10")))
     except (TypeError, ValueError):
-        return 0.0
+        return 0.10
 
 
 def momentum_bars() -> int:
@@ -400,7 +409,7 @@ def event_day_size_multiplier() -> float:
 
 
 def prefer_signal_type() -> str:
-    return os.environ.get("GEX_TRADER_PREFER_SIGNAL", "").strip().lower()
+    return os.environ.get("GEX_TRADER_PREFER_SIGNAL", "fastest_gamma_increase").strip().lower()
 
 
 def entry_time_filter_enabled() -> bool:
@@ -409,6 +418,6 @@ def entry_time_filter_enabled() -> bool:
 
 def multi_strike_count() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_MULTI_STRIKE", "3")))
+        return max(1, int(os.environ.get("GEX_TRADER_MULTI_STRIKE", "2")))
     except (TypeError, ValueError):
-        return 3
+        return 2
