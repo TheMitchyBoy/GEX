@@ -34,6 +34,56 @@ from gex_core.tickers import SUPPORTED_TICKERS
 
 _HISTORY_CACHE: dict[tuple, list[dict]] = {}
 
+_SUMMARY_METRIC_KEYS = (
+    "is_nfp_day",
+    "is_cpi_day",
+    "is_fomc_week",
+    "is_opex_week",
+    "is_quad_witching",
+    "flow_net_delta_gex_bn",
+    "flow_event_count",
+    "flow_buy_ratio",
+    "flow_aggressiveness",
+    "interval_minutes",
+    "confluence_score",
+    "vix_level",
+    "vix9d_level",
+    "iv_rank",
+    "event_risk_score",
+    "expected_move_pct",
+    "spy_return",
+)
+
+
+def _granularity_minutes(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    text = str(raw).strip().lower()
+    if text.endswith("min"):
+        try:
+            return float(text[:-3])
+        except ValueError:
+            return None
+    return None
+
+
+def _merge_summary_fields(metrics: dict, summary: dict) -> None:
+    for key in _SUMMARY_METRIC_KEYS:
+        if key not in summary or summary[key] is None:
+            continue
+        val = summary[key]
+        if isinstance(val, bool):
+            metrics[key] = val
+        elif isinstance(val, (int, float)):
+            metrics[key] = float(val)
+    regime = summary.get("net_gamma_regime")
+    if regime:
+        metrics["regime"] = str(regime)
+    if metrics.get("interval_minutes") is None:
+        parsed = _granularity_minutes(summary.get("granularity"))
+        if parsed is not None:
+            metrics["interval_minutes"] = parsed
+
 def _history_limits(
     lookback_days: int | None,
     max_snapshots: int | None,
@@ -187,6 +237,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
     source = None
     spot = None
     extended_features: dict = {}
+    summary_fields: dict = {}
     if summary_path and summary_path.exists():
         import json
 
@@ -195,6 +246,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         source = summary.get("data_source") or summary.get("source")
         spot = summary.get("spot") or summary.get("spot_price")
         extended_features = summary.get("extended_features") or {}
+        _merge_summary_fields(summary_fields, summary)
 
     metrics = {
         "ts": ts,
@@ -221,6 +273,7 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         "data_source": source,
         "spot": spot,
         "extended_features": extended_features,
+        **summary_fields,
     }
     metrics.update({k: float(v) for k, v in extended_features.items() if isinstance(v, (int, float))})
     return enrich_snapshot_metrics(metrics)

@@ -11,6 +11,7 @@ import pandas as pd
 from gex_core.exports import EXPORT_DIR
 from gex_core.features import safe_float
 from gex_core.history import _build_history_impl
+from gex_core.market_time import bars_between_timestamps, minutes_between_timestamps
 from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.config import (
     max_open_positions,
@@ -18,6 +19,7 @@ from gex_core.trading.config import (
     stop_cooldown_bars,
     stop_loss_pct,
     take_profit_pct,
+    trader_bar_minutes,
 )
 from gex_core.trading.exits import (
     ExitProfile,
@@ -136,7 +138,7 @@ class BacktestState:
     skipped_filters: int = 0
     blocked_cooldown: int = 0
     skipped_no_execution_spot: int = 0
-    strike_cooldown: dict[tuple[float, str], int] = field(default_factory=dict)
+    strike_cooldown: dict[tuple[float, str], str] = field(default_factory=dict)
     account: AccountLedger | None = None
 
 
@@ -146,6 +148,17 @@ def _mark_spot(signal_spot: float) -> float | None:
     if uses_execution_mapping():
         return resolve_backtest_execution_spot(signal_spot=signal_spot)
     return signal_spot
+
+
+def _snapshot_bar_minutes(row: dict) -> float:
+    interval = safe_float(row.get("interval_minutes"), 0.0)
+    if interval > 0:
+        return interval
+    return trader_bar_minutes()
+
+
+def _max_exit_gap_minutes(bar_minutes: float) -> float:
+    return max(bar_minutes * 2.0, 20.0)
 
 
 def _resolve_trade_context(
@@ -227,6 +240,7 @@ def _close_position(
     closed: list[_ClosedTrade],
     state: BacktestState | None = None,
     qty: float | None = None,
+    bars_held: int | None = None,
 ) -> None:
     trade_qty = pos.qty if qty is None else qty
     exit_premium = mark_to_market_premium(pos.entry_premium, pnl_pct)
@@ -234,6 +248,7 @@ def _close_position(
     if state and state.account:
         state.account.credit_exit(exit_premium, trade_qty)
         equity_after = state.account.cash
+    held = bars_held if bars_held is not None else exit_idx - pos.entry_idx
     closed.append(
         _ClosedTrade(
             entry_ts=pos.entry_ts,
@@ -248,7 +263,7 @@ def _close_position(
             pnl_pct=pnl_pct,
             pnl_usd=pnl_usd(pos.entry_premium, exit_premium, trade_qty),
             exit_reason=exit_reason,
-            bars_held=exit_idx - pos.entry_idx,
+            bars_held=held,
             signal_strike=pos.signal_strike,
             qty=trade_qty,
             equity_after=equity_after,
@@ -262,14 +277,23 @@ def _check_exits(
     idx: int,
     ts: str,
     signal_spot: float,
+    row: dict,
+    prev_ts: str | None = None,
 ) -> None:
     mark_spot = _mark_spot(signal_spot)
     if mark_spot is None or mark_spot <= 0:
         return
+    bar_minutes = _snapshot_bar_minutes(row)
+    if prev_ts:
+        gap = minutes_between_timestamps(prev_ts, ts)
+        if gap is not None and gap > _max_exit_gap_minutes(bar_minutes):
+            if state.account:
+                state.account.record_equity(ts, state.open_positions, mark_spot)
+            return
     remaining: list[_OpenPosition] = []
     for pos in state.open_positions:
         pnl_pct = _position_pnl(pos, mark_spot)
-        bars_held = idx - pos.entry_idx
+        bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
         exit_reason, exit_pnl = evaluate_exit(
             pnl_pct,
             state=pos.exit_state,
@@ -291,10 +315,17 @@ def _check_exits(
                 closed=state.closed_trades,
                 state=state,
                 qty=pos.qty,
+                bars_held=bars_held,
             )
             if exit_reason == "stop_loss":
                 key = (pos.signal_strike or pos.strike, pos.option_type.lower())
-                state.strike_cooldown[key] = idx + stop_cooldown_bars()
+                cooldown_bars = stop_cooldown_bars()
+                cooldown_minutes = cooldown_bars * bar_minutes
+                from gex_core.exports import parse_timestamp
+                from datetime import timedelta
+
+                expire = parse_timestamp(ts) + timedelta(minutes=cooldown_minutes)
+                state.strike_cooldown[key] = expire.strftime("%Y-%m-%d_%H%M%S")
         else:
             remaining.append(pos)
     state.open_positions = remaining
@@ -347,7 +378,8 @@ def _maybe_enter(
         return
     exec_strike, exec_spot, _ = trade_ctx
     cooldown_key = (signal_strike, option_type.lower())
-    if state.strike_cooldown.get(cooldown_key, 0) > idx:
+    cooldown_until = state.strike_cooldown.get(cooldown_key)
+    if cooldown_until and ts < cooldown_until:
         state.blocked_cooldown += 1
         return
     if _has_open_duplicate(state.open_positions, strike=exec_strike, option_type=option_type):
@@ -569,7 +601,14 @@ def backtest_auto_trader(
         if spot <= 0:
             continue
 
-        _check_exits(state, idx=idx, ts=str(row["ts"]), signal_spot=spot)
+        _check_exits(
+            state,
+            idx=idx,
+            ts=str(row["ts"]),
+            signal_spot=spot,
+            row=row,
+            prev_ts=str(prev["ts"]),
+        )
         _maybe_enter(
             state,
             idx=idx,
@@ -586,8 +625,10 @@ def backtest_auto_trader(
         last_idx = len(history) - 1
         last_spot = _mark_spot(last_signal_spot)
         if last_spot and last_spot > 0:
+            bar_minutes = _snapshot_bar_minutes(last)
             for pos in list(state.open_positions):
                 pnl_pct = _position_pnl(pos, last_spot)
+                bars_held = bars_between_timestamps(pos.entry_ts, str(last["ts"]), bar_minutes=bar_minutes)
                 _close_position(
                     pos,
                     exit_idx=last_idx,
@@ -598,6 +639,7 @@ def backtest_auto_trader(
                     closed=state.closed_trades,
                     state=state,
                     qty=pos.qty,
+                    bars_held=bars_held,
                 )
             state.open_positions.clear()
             if state.account:

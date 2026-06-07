@@ -44,6 +44,15 @@ def test_compute_gamma_signals_skips_when_all_gamma_declines():
     assert out["skip_reason"] == "gamma_declined"
 
 
+def test_compute_gamma_signals_rejects_flat_max_gamma():
+    cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
+    prev = pd.Series([0.2, 1.5, 0.25, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7387.0)
+    assert out["available"]
+    assert out["selection_reason"] == "max_positive_gamma_declined"
+    assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
+
+
 def test_entry_filter_blocks_far_strike(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "1")
     monkeypatch.setenv("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.01")

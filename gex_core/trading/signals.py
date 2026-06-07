@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from gex_core.trading.config import max_strike_distance_pct, min_fastest_gamma_delta
+from gex_core.trading.config import max_strike_distance_pct, min_fastest_gamma_delta, min_gamma_delta
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ def compute_gamma_signals(
     )
 
     selection_reason = "max_positive_gamma"
-    if max_pos_delta >= 0:
+    if max_pos_delta >= min_gamma_delta():
         recommended = max_pos_signal
     elif fastest_delta >= min_fastest_gamma_delta():
         max_dist = abs(max_pos_strike - spot_val) / spot_val if spot_val > 0 else 1.0

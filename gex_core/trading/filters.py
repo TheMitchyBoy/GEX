@@ -70,8 +70,8 @@ def _regime_allows(option_type: str, ctx: MarketContext, strike: float) -> bool:
         return spot >= strike and falling and (flip is None or spot <= flip)
 
     if opt == "call":
-        return spot < strike and rising
-    return spot > strike and falling
+        return spot <= strike and rising
+    return spot >= strike and falling
 
 
 def _flow_aligned(option_type: str, ctx: MarketContext) -> bool:
@@ -119,11 +119,12 @@ def evaluate_entry_filters(
         }
 
     if selection_reason == "max_positive_gamma_declined":
-        return {
-            "approve": False,
-            "reason": "Max positive gamma declined — only fastest-increase entries allowed via signal layer",
-            "filter": "selection_reason",
-        }
+        if str(rec.get("signal_type", "")) != "fastest_gamma_increase":
+            return {
+                "approve": False,
+                "reason": "Max positive gamma declined — only fastest-increase entries allowed via signal layer",
+                "filter": "selection_reason",
+            }
 
     market = market or MarketContext(spot=spot)
     if block_event_days() and (market.is_cpi_day or market.is_nfp_day or market.is_fomc_week):

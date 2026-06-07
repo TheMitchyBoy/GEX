@@ -68,6 +68,26 @@ def bars_held_since_entry(entry_ts: str, *, bar_minutes: float) -> int:
     return max(0, int(elapsed.total_seconds() // (bar_minutes * 60)))
 
 
+def minutes_between_timestamps(start_ts: str, end_ts: str) -> float | None:
+    """Wall-clock minutes between export snapshot timestamps."""
+    try:
+        from gex_core.exports import parse_timestamp
+
+        start = parse_timestamp(start_ts)
+        end = parse_timestamp(end_ts)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, (end - start).total_seconds() / 60.0)
+
+
+def bars_between_timestamps(entry_ts: str, current_ts: str, *, bar_minutes: float) -> int:
+    """Gamma bars elapsed between two snapshot timestamps."""
+    minutes = minutes_between_timestamps(entry_ts, current_ts)
+    if minutes is None or bar_minutes <= 0:
+        return 0
+    return max(0, int(minutes // bar_minutes))
+
+
 def is_trader_session_active(*, now: datetime | None = None) -> bool:
     """True during configured US equity session (weekdays, market hours ET)."""
     if os.environ.get("GEX_TRADER_SESSION_ONLY", "1").strip().lower() in {"0", "false", "no", "off"}:
