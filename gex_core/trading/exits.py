@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from gex_core.trading.config import (
+    dynamic_take_profit_enabled,
     far_otm_distance_pct,
     far_otm_stop_loss_pct,
     magnet_proximity_pct,
+    magnet_touch_exit_enabled,
     partial_take_profit_pct,
     stop_loss_pct,
     strong_entry_confidence,
@@ -39,6 +41,15 @@ class ExitProfile:
     full_take_profit: float = 0.35
 
 
+def resolve_full_take_profit(profile: ExitProfile, *, expected_move_pct: float | None) -> float:
+    """Scale take-profit to expected move when IV data is available."""
+    if not dynamic_take_profit_enabled() or not expected_move_pct or expected_move_pct <= 0:
+        return profile.full_take_profit
+    # Rough option move ≈ 8× underlying expected move for near-ATM 0DTE.
+    dynamic = expected_move_pct * 8.0
+    return max(0.08, min(profile.full_take_profit, dynamic))
+
+
 def build_exit_profile(
     *,
     ai_confidence: float,
@@ -46,6 +57,7 @@ def build_exit_profile(
     regime: str | None,
     entry_spot: float,
     strike: float,
+    expected_move_pct: float | None = None,
 ) -> ExitProfile:
     """Strong gamma + confidence setups skip early partials and use wider trails."""
     near_magnet = False
@@ -56,7 +68,7 @@ def build_exit_profile(
     short_gamma = "SHORT" in (regime or "").upper()
 
     if strong or near_magnet:
-        return ExitProfile(
+        profile = ExitProfile(
             hold_for_target=True,
             partial_take_profit=None,
             trail_trigger=0.15,
@@ -64,9 +76,8 @@ def build_exit_profile(
             time_stop_bars=12,
             full_take_profit=take_profit_pct(),
         )
-
-    if short_gamma:
-        return ExitProfile(
+    elif short_gamma:
+        profile = ExitProfile(
             hold_for_target=False,
             partial_take_profit=partial_take_profit_pct(),
             trail_trigger=0.12,
@@ -74,15 +85,27 @@ def build_exit_profile(
             time_stop_bars=8,
             full_take_profit=take_profit_pct(),
         )
+    else:
+        profile = ExitProfile(
+            hold_for_target=False,
+            partial_take_profit=partial_take_profit_pct(),
+            trail_trigger=trailing_stop_trigger_pct(),
+            trail_floor=trailing_stop_floor_pct(),
+            time_stop_bars=time_stop_bars(),
+            full_take_profit=take_profit_pct(),
+        )
 
-    return ExitProfile(
-        hold_for_target=False,
-        partial_take_profit=partial_take_profit_pct(),
-        trail_trigger=trailing_stop_trigger_pct(),
-        trail_floor=trailing_stop_floor_pct(),
-        time_stop_bars=time_stop_bars(),
-        full_take_profit=take_profit_pct(),
-    )
+    tp = resolve_full_take_profit(profile, expected_move_pct=expected_move_pct)
+    if tp != profile.full_take_profit:
+        return ExitProfile(
+            hold_for_target=profile.hold_for_target,
+            partial_take_profit=profile.partial_take_profit,
+            trail_trigger=profile.trail_trigger,
+            trail_floor=profile.trail_floor,
+            time_stop_bars=profile.time_stop_bars,
+            full_take_profit=tp,
+        )
+    return profile
 
 
 def effective_stop_loss(*, entry_spot: float, strike: float) -> float:
@@ -144,12 +167,23 @@ def evaluate_exit(
     profile = profile or ExitProfile()
     state.peak_pnl_pct = max(state.peak_pnl_pct, pnl_pct)
     stop = effective_stop_loss(entry_spot=entry_spot, strike=strike)
+    full_tp = profile.full_take_profit
 
     if pnl_pct <= -stop:
         return "stop_loss", max(pnl_pct, -stop)
 
-    if pnl_pct >= profile.full_take_profit:
-        return "take_profit", min(pnl_pct, profile.full_take_profit)
+    if magnet_touch_exit_enabled() and not profile.hold_for_target:
+        progress = spot_progress_toward_strike(
+            entry_spot=entry_spot,
+            current_spot=current_spot,
+            strike=strike,
+            option_type=option_type,
+        )
+        if progress >= 1.0 - magnet_proximity_pct() and pnl_pct > 0:
+            return "magnet_touch", pnl_pct
+
+    if pnl_pct >= full_tp:
+        return "take_profit", min(pnl_pct, full_tp)
 
     if (
         not profile.hold_for_target

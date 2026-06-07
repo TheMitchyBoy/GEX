@@ -106,3 +106,65 @@ def is_trader_session_active(*, now: datetime | None = None) -> bool:
     close_minutes = close_h * 60 + close_m
     now_minutes = anchor.hour * 60 + anchor.minute
     return open_minutes <= now_minutes < close_minutes
+
+
+def _session_minutes(*, now: datetime | None = None) -> tuple[int, int, int]:
+    anchor = (now or datetime.now(MARKET_TZ)).astimezone(MARKET_TZ)
+    try:
+        open_h = int(os.environ.get("GEX_TRADER_SESSION_OPEN_HOUR", "9"))
+        open_m = int(os.environ.get("GEX_TRADER_SESSION_OPEN_MIN", "30"))
+        close_h = int(os.environ.get("GEX_TRADER_SESSION_CLOSE_HOUR", "16"))
+        close_m = int(os.environ.get("GEX_TRADER_SESSION_CLOSE_MIN", "0"))
+    except (TypeError, ValueError):
+        open_h, open_m, close_h, close_m = 9, 30, 16, 0
+    open_minutes = open_h * 60 + open_m
+    close_minutes = close_h * 60 + close_m
+    now_minutes = anchor.hour * 60 + anchor.minute
+    return now_minutes, open_minutes, close_minutes
+
+
+def is_entry_window_active(*, now: datetime | None = None) -> bool:
+    """True during entry-friendly session window (skip open chop / close decay)."""
+    from gex_core.trading.config import (
+        entry_time_filter_enabled,
+        entry_window_after_open_min,
+        entry_window_before_close_min,
+    )
+
+    if not entry_time_filter_enabled():
+        return is_trader_session_active(now=now)
+    anchor = (now or datetime.now(MARKET_TZ)).astimezone(MARKET_TZ)
+    if anchor.weekday() >= 5:
+        return False
+    now_minutes, open_minutes, close_minutes = _session_minutes(now=anchor)
+    earliest = open_minutes + entry_window_after_open_min()
+    latest = close_minutes - entry_window_before_close_min()
+    return earliest <= now_minutes < latest
+
+
+def is_eod_flatten_time(*, now: datetime | None = None) -> bool:
+    from gex_core.trading.config import eod_flatten_enabled, eod_flatten_hour, eod_flatten_minute
+
+    if not eod_flatten_enabled():
+        return False
+    anchor = (now or datetime.now(MARKET_TZ)).astimezone(MARKET_TZ)
+    if anchor.weekday() >= 5:
+        return False
+    flatten_minutes = eod_flatten_hour() * 60 + eod_flatten_minute()
+    now_minutes = anchor.hour * 60 + anchor.minute
+    return now_minutes >= flatten_minutes
+
+
+def export_ts_entry_window_ok(ts: str) -> bool:
+    """Entry window check for walk-forward backtests using export timestamps."""
+    from gex_core.trading.config import entry_time_filter_enabled
+
+    if not entry_time_filter_enabled():
+        return True
+    local = parse_export_ts_utc(ts).astimezone(MARKET_TZ)
+    return is_entry_window_active(now=local)
+
+
+def export_ts_eod_flatten(ts: str) -> bool:
+    local = parse_export_ts_utc(ts).astimezone(MARKET_TZ)
+    return is_eod_flatten_time(now=local)

@@ -269,6 +269,13 @@ def strike_stop_cooldown_active(
     return False
 
 
+def get_account_equity() -> float:
+    from gex_core.trading.config import account_equity_usd
+
+    perf = get_performance_summary()
+    return account_equity_usd() + float(perf.get("total_pnl_usd") or 0.0)
+
+
 def get_performance_summary(ticker: str | None = None) -> dict[str, Any]:
     with _connect() as conn:
         if ticker:
@@ -328,7 +335,15 @@ def _derive_lessons(closed: list[dict[str, Any]], by_signal: dict[str, dict[str,
     if stop_exits > len(closed) * 0.4:
         lessons.append("Stop-loss exits are frequent — consider requiring stronger gamma acceleration before entry.")
     if tp_exits > len(closed) * 0.35:
-        lessons.append("Take-profit targets are working well — current 35% target fits this gamma regime.")
+        lessons.append("Take-profit targets are working well — current target fits this gamma regime.")
+
+    eod = sum(1 for t in closed if t.get("exit_reason") in {"eod_flatten", "session_gap"})
+    if eod > len(closed) * 0.3:
+        lessons.append("Many session-end exits — entries may be too late in the day for 0DTE.")
+
+    magnet = sum(1 for t in closed if t.get("exit_reason") == "magnet_touch")
+    if magnet > 0:
+        lessons.append(f"Magnet-touch exits working ({magnet} trades) — keep magnet proximity targets.")
 
     best_sig = max(by_signal.items(), key=lambda kv: kv[1].get("avg_pnl_pct", -999), default=(None, None))
     worst_sig = min(by_signal.items(), key=lambda kv: kv[1].get("avg_pnl_pct", 999), default=(None, None))

@@ -58,7 +58,21 @@ def _rule_based_advice(
             "suggestions": [filter_result.get("reason", "Wait for cleaner setup.")],
             "source": "rule_based",
             "filter": filter_result.get("filter"),
+            "size_multiplier": float(filter_result.get("size_multiplier") or 0.0),
         }
+
+    if hist.get("count", 0) >= 3 and float(hist.get("avg_pnl_pct", 0)) < -0.03:
+        confidence *= 0.75
+        if confidence < min_ai_confidence():
+            return {
+                "approve": False,
+                "confidence": round(confidence, 3),
+                "option_type": rec.get("option_type", "call"),
+                "reason": f"{sig_type} track record weak ({hist.get('avg_pnl_pct', 0):+.1%} avg) — waiting for stronger edge.",
+                "suggestions": list(perf.get("lessons") or [])[:3],
+                "source": "rule_based",
+                "size_multiplier": float(filter_result.get("size_multiplier") or 1.0),
+            }
 
     approve = confidence >= min_ai_confidence() and score > min_gamma_delta() and delta >= min_gamma_delta()
     suggestions = list(perf.get("lessons") or [])[:3]
@@ -74,6 +88,7 @@ def _rule_based_advice(
         "reason": rec.get("rationale", "Rule-based gamma signal review."),
         "suggestions": suggestions[:5],
         "source": "rule_based",
+        "size_multiplier": float(filter_result.get("size_multiplier") or 1.0),
     }
 
 

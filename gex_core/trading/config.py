@@ -293,3 +293,123 @@ def live_trading_allowed() -> bool:
 
 def require_live_confirm() -> bool:
     return _flag("GEX_TRADER_LIVE_CONFIRM", "1")
+
+
+def account_equity_usd() -> float:
+    try:
+        return max(1.0, float(os.environ.get("GEX_TRADER_ACCOUNT_EQUITY", "500")))
+    except (TypeError, ValueError):
+        return 500.0
+
+
+def risk_per_trade_pct() -> float:
+    try:
+        return max(0.001, float(os.environ.get("GEX_TRADER_RISK_PER_TRADE_PCT", "0.02")))
+    except (TypeError, ValueError):
+        return 0.02
+
+
+def use_risk_based_sizing() -> bool:
+    return _flag("GEX_TRADER_RISK_SIZING", "1")
+
+
+def min_zero_dte_ratio() -> float:
+    try:
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_ZERO_DTE_RATIO", "0.4")))
+    except (TypeError, ValueError):
+        return 0.4
+
+
+def require_gamma_flip_side() -> bool:
+    return _flag("GEX_TRADER_REQUIRE_FLIP_SIDE", "1")
+
+
+def max_iv_rank() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_MAX_IV_RANK", "0.85"))
+    except (TypeError, ValueError):
+        return 0.85
+
+
+def min_magnet_progress_pct() -> float:
+    try:
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_PROGRESS", "0.0")))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def momentum_bars() -> int:
+    try:
+        return max(1, int(os.environ.get("GEX_TRADER_MOMENTUM_BARS", "2")))
+    except (TypeError, ValueError):
+        return 2
+
+
+def entry_window_after_open_min() -> int:
+    try:
+        return max(0, int(os.environ.get("GEX_TRADER_ENTRY_AFTER_OPEN_MIN", "15")))
+    except (TypeError, ValueError):
+        return 15
+
+
+def entry_window_before_close_min() -> int:
+    try:
+        return max(0, int(os.environ.get("GEX_TRADER_ENTRY_BEFORE_CLOSE_MIN", "30")))
+    except (TypeError, ValueError):
+        return 30
+
+
+def eod_flatten_enabled() -> bool:
+    return _flag("GEX_TRADER_EOD_FLATTEN", "1")
+
+
+def eod_flatten_hour() -> int:
+    try:
+        return int(os.environ.get("GEX_TRADER_EOD_FLATTEN_HOUR", "15"))
+    except (TypeError, ValueError):
+        return 15
+
+
+def eod_flatten_minute() -> int:
+    try:
+        return int(os.environ.get("GEX_TRADER_EOD_FLATTEN_MIN", "45"))
+    except (TypeError, ValueError):
+        return 45
+
+
+def magnet_touch_exit_enabled() -> bool:
+    return _flag("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
+
+
+def dynamic_take_profit_enabled() -> bool:
+    return _flag("GEX_TRADER_DYNAMIC_TP", "1")
+
+
+def min_flow_buy_ratio() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_MIN_FLOW_BUY_RATIO", "0.55"))
+    except (TypeError, ValueError):
+        return 0.55
+
+
+def min_flow_aggressiveness() -> float:
+    try:
+        return float(os.environ.get("GEX_TRADER_MIN_FLOW_AGGRESSIVENESS", "0"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def event_day_size_multiplier() -> float:
+    """0 = hard block on event days; 0.5 = half size; 1 = ignore events."""
+    try:
+        return max(0.0, float(os.environ.get("GEX_TRADER_EVENT_SIZE_MULT", "0")))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def prefer_signal_type() -> str:
+    return os.environ.get("GEX_TRADER_PREFER_SIGNAL", "").strip().lower()
+
+
+def entry_time_filter_enabled() -> bool:
+    return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")

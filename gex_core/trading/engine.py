@@ -8,11 +8,18 @@ from typing import Any
 import pandas as pd
 
 from gex_core.features import safe_float
-from gex_core.market_time import bars_held_since_entry, is_trader_session_active, market_today
+from gex_core.market_time import (
+    bars_held_since_entry,
+    is_eod_flatten_time,
+    is_trader_session_active,
+    market_today,
+)
 from gex_core.trading.advisor import advise_entry, build_suggestions
 from gex_core.trading.broker import broker_mode_label, get_broker
 from gex_core.trading.config import (
+    account_equity_usd,
     auto_trader_enabled,
+    eod_flatten_enabled,
     execution_ticker,
     live_trading_allowed,
     max_open_positions,
@@ -26,10 +33,11 @@ from gex_core.trading.config import (
     webull_underlying,
 )
 from gex_core.trading.execution import execution_summary, map_execution_strike, resolve_execution_spot
-from gex_core.trading.exits import ExitProfile, ExitState, build_exit_profile, contracts_for_confidence, evaluate_exit
+from gex_core.trading.exits import ExitProfile, ExitState, build_exit_profile, evaluate_exit
 from gex_core.trading.filters import MarketContext, market_context_from_snapshot
 from gex_core.trading.journal import (
     close_trade,
+    get_account_equity,
     get_performance_summary,
     is_trader_armed,
     list_open_trades,
@@ -46,6 +54,7 @@ from gex_core.trading.paper_broker import (
     pnl_usd,
 )
 from gex_core.trading.signals import compute_gamma_signals
+from gex_core.trading.sizing import resolve_contract_qty
 from gex_core.trading.webull_broker import limit_price_for_buy
 
 logger = logging.getLogger(__name__)
@@ -69,6 +78,8 @@ def trader_status(ticker: str = "SPX") -> dict[str, Any]:
         "cycle_seconds": trader_cycle_seconds(),
         "bar_minutes": trader_bar_minutes(),
         "session_only": trader_session_only(),
+        "account_equity": get_account_equity(),
+        "starting_equity": account_equity_usd(),
         "open_positions": list_open_trades(ticker),
         "performance": perf,
         "suggestions": build_suggestions(ticker),
@@ -259,6 +270,35 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
     return exits
 
 
+def _flatten_eod(ticker: str, spot: float) -> list[dict[str, Any]]:
+    """Close all open 0DTE positions at end-of-day flatten time."""
+    if not eod_flatten_enabled() or not is_eod_flatten_time():
+        return []
+    broker = get_broker()
+    exec_spot, _ = _resolve_execution_context(signal_spot=spot)
+    if _uses_execution_mapping() and (exec_spot is None or exec_spot <= 0):
+        return []
+    mark_spot = exec_spot if _uses_execution_mapping() else spot
+    closed: list[dict[str, Any]] = []
+    for pos in list_open_trades(ticker):
+        pnl_pct = broker.position_pnl_pct(pos, spot=mark_spot)
+        if pnl_pct is None:
+            pnl_pct = 0.0
+        result = _apply_exit(
+            ticker=ticker,
+            pos=pos,
+            meta=pos.get("meta") or {},
+            spot=mark_spot,
+            exit_reason="eod_flatten",
+            exit_pnl=pnl_pct,
+            sell_qty=int(pos.get("qty") or 1),
+            broker=broker,
+        )
+        if result:
+            closed.append(result)
+    return closed
+
+
 def _maybe_enter(
     *,
     ticker: str,
@@ -295,7 +335,7 @@ def _maybe_enter(
 
     broker = get_broker()
     confidence = float(advice.get("confidence", 0.5))
-    qty = int(contracts_for_confidence(confidence))
+    size_mult = float(advice.get("size_multiplier") or 1.0)
     underlying = webull_underlying()
     expire_date = _option_expire_date()
     regime = str((market.regime if market else "") or "")
@@ -311,12 +351,15 @@ def _maybe_enter(
     )
     exec_map = execution_summary(signal_strike=float(rec["strike"]), signal_spot=spot, execution_spot=exec_spot)
 
+    mark_entry_spot = float(exec_spot if _uses_execution_mapping() else spot)
+    expected_move = float(market.expected_move_pct) if market and market.expected_move_pct else None
     exit_profile = build_exit_profile(
         ai_confidence=confidence,
         gamma_delta=float(rec["gamma_delta"]),
         regime=regime,
-        entry_spot=float(exec_spot if _uses_execution_mapping() else spot),
+        entry_spot=mark_entry_spot,
         strike=float(exec_strike),
+        expected_move_pct=expected_move,
     )
     profile_meta = {
         "hold_for_target": exit_profile.hold_for_target,
@@ -326,6 +369,18 @@ def _maybe_enter(
         "time_stop_bars": exit_profile.time_stop_bars,
         "full_take_profit": exit_profile.full_take_profit,
     }
+
+    premium_est = estimate_entry_premium(mark_entry_spot, exec_strike)
+    qty = resolve_contract_qty(
+        confidence=confidence,
+        premium=premium_est,
+        entry_spot=mark_entry_spot,
+        strike=float(exec_strike),
+        account_equity=get_account_equity(),
+        size_multiplier=size_mult,
+    )
+    if qty < 1:
+        return {"action": "skipped", "reason": "Risk sizing blocked entry (insufficient budget)", "advice": advice}
 
     if live_trading_allowed():
         limit_price = limit_price_for_buy(
@@ -422,6 +477,7 @@ def run_trading_cycle(
     uw_bundle: dict[str, Any] | None = None,
     snapshot: dict[str, Any] | None = None,
     previous_spot: float | None = None,
+    spot_history: list[float] | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     """Run one evaluate cycle: manage exits, maybe open new trade."""
@@ -440,7 +496,14 @@ def run_trading_cycle(
 
     snap = dict(snapshot or {})
     snap.setdefault("spot", spot)
-    market = market_context_from_snapshot(snap, prev_spot=previous_spot)
+    if snap.get("ts") is None and snap.get("export_ts"):
+        snap["ts"] = snap["export_ts"]
+    history = list(spot_history or [])
+    if not history and previous_spot is not None:
+        history = [float(previous_spot), float(spot)]
+    elif not history:
+        history = [float(spot)]
+    market = market_context_from_snapshot(snap, prev_spot=previous_spot, spot_history=history)
 
     result: dict[str, Any] = {
         "ran": True,
@@ -448,8 +511,10 @@ def run_trading_cycle(
         "spot": spot,
         "broker_mode": broker_mode_label(),
         "exits": [],
+        "eod_exits": [],
         "entry": None,
     }
+    result["eod_exits"] = _flatten_eod(ticker, float(spot))
     result["exits"] = _check_exits(ticker, float(spot))
     result["entry"] = _maybe_enter(
         ticker=ticker,

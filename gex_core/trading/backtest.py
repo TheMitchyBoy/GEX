@@ -11,11 +11,16 @@ import pandas as pd
 from gex_core.exports import EXPORT_DIR
 from gex_core.features import safe_float
 from gex_core.history import _build_history_impl
-from gex_core.market_time import bars_between_timestamps, minutes_between_timestamps
+from gex_core.market_time import (
+    bars_between_timestamps,
+    export_ts_eod_flatten,
+    minutes_between_timestamps,
+)
 from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.config import (
     max_open_positions,
     min_ai_confidence,
+    momentum_bars,
     stop_cooldown_bars,
     stop_loss_pct,
     take_profit_pct,
@@ -25,7 +30,6 @@ from gex_core.trading.exits import (
     ExitProfile,
     ExitState,
     build_exit_profile,
-    contracts_for_confidence,
     evaluate_exit,
 )
 from gex_core.trading.filters import MarketContext, market_context_from_snapshot
@@ -37,6 +41,7 @@ from gex_core.trading.paper_broker import (
 )
 from gex_core.trading.execution import map_execution_strike, resolve_backtest_execution_spot, uses_execution_mapping
 from gex_core.trading.signals import compute_gamma_signals
+from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
 
 
 @dataclass
@@ -229,6 +234,91 @@ def _position_pnl(pos: _OpenPosition, spot: float) -> float:
     )
 
 
+def _apply_backtest_exit(
+    state: BacktestState,
+    pos: _OpenPosition,
+    *,
+    idx: int,
+    exit_ts: str,
+    exit_spot: float,
+    pnl_pct: float,
+    exit_reason: str,
+    bars_held: int,
+    sell_qty: float | None = None,
+) -> None:
+    trade_qty = pos.qty if sell_qty is None else sell_qty
+    if trade_qty <= 0:
+        return
+    exit_premium = mark_to_market_premium(pos.entry_premium, pnl_pct)
+    equity_after = None
+    if state.account:
+        state.account.credit_exit(exit_premium, trade_qty)
+        equity_after = state.account.cash
+
+    if exit_reason == "take_profit_partial" and trade_qty < pos.qty:
+        partial_usd = pnl_usd(pos.entry_premium, exit_premium, trade_qty)
+        state.closed_trades.append(
+            _ClosedTrade(
+                entry_ts=pos.entry_ts,
+                exit_ts=exit_ts,
+                option_type=pos.option_type,
+                strike=pos.strike,
+                signal_type=pos.signal_type,
+                entry_spot=pos.entry_spot,
+                exit_spot=exit_spot,
+                entry_premium=pos.entry_premium,
+                exit_premium=exit_premium,
+                pnl_pct=pnl_pct,
+                pnl_usd=partial_usd,
+                exit_reason=exit_reason,
+                bars_held=bars_held,
+                signal_strike=pos.signal_strike,
+                qty=trade_qty,
+                equity_after=equity_after,
+            )
+        )
+        pos.qty -= trade_qty
+        pos.exit_state.partial_taken = True
+        return
+
+    _close_position(
+        pos,
+        exit_idx=idx,
+        exit_ts=exit_ts,
+        exit_spot=exit_spot,
+        pnl_pct=pnl_pct,
+        exit_reason=exit_reason,
+        closed=state.closed_trades,
+        state=state,
+        qty=trade_qty,
+        bars_held=bars_held,
+    )
+
+
+def _flatten_backtest_eod(
+    state: BacktestState,
+    *,
+    idx: int,
+    ts: str,
+    mark_spot: float,
+    bar_minutes: float,
+) -> None:
+    for pos in list(state.open_positions):
+        pnl_pct = _position_pnl(pos, mark_spot)
+        bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
+        _apply_backtest_exit(
+            state,
+            pos,
+            idx=idx,
+            exit_ts=ts,
+            exit_spot=mark_spot,
+            pnl_pct=pnl_pct,
+            exit_reason="eod_flatten",
+            bars_held=bars_held,
+        )
+    state.open_positions.clear()
+
+
 def _close_position(
     pos: _OpenPosition,
     *,
@@ -311,6 +401,13 @@ def _check_exits(
                     )
                 state.open_positions = []
             return
+
+    if export_ts_eod_flatten(ts) and state.open_positions:
+        _flatten_backtest_eod(state, idx=idx, ts=ts, mark_spot=mark_spot, bar_minutes=bar_minutes)
+        if state.account:
+            state.account.record_equity(ts, state.open_positions, mark_spot)
+        return
+
     remaining: list[_OpenPosition] = []
     for pos in state.open_positions:
         pnl_pct = _position_pnl(pos, mark_spot)
@@ -326,27 +423,35 @@ def _check_exits(
             profile=pos.exit_profile,
         )
         if exit_reason:
-            _close_position(
+            sell_qty = pos.qty
+            reason = exit_reason
+            if exit_reason == "take_profit_partial" and pos.qty > 1:
+                sell_qty = max(1, pos.qty // 2)
+            elif exit_reason == "take_profit_partial":
+                reason = "take_profit"
+            _apply_backtest_exit(
+                state,
                 pos,
-                exit_idx=idx,
+                idx=idx,
                 exit_ts=ts,
                 exit_spot=mark_spot,
                 pnl_pct=exit_pnl,
-                exit_reason=exit_reason,
-                closed=state.closed_trades,
-                state=state,
-                qty=pos.qty,
+                exit_reason=reason if reason != "take_profit_partial" else exit_reason,
                 bars_held=bars_held,
+                sell_qty=sell_qty,
             )
-            if exit_reason == "stop_loss":
+            if reason == "stop_loss":
                 key = (pos.signal_strike or pos.strike, pos.option_type.lower())
                 cooldown_bars = stop_cooldown_bars()
                 cooldown_minutes = cooldown_bars * bar_minutes
-                from gex_core.exports import parse_timestamp
                 from datetime import timedelta
+
+                from gex_core.exports import parse_timestamp
 
                 expire = parse_timestamp(ts) + timedelta(minutes=cooldown_minutes)
                 state.strike_cooldown[key] = expire.strftime("%Y-%m-%d_%H%M%S")
+            if pos.qty > 0:
+                remaining.append(pos)
         else:
             remaining.append(pos)
     state.open_positions = remaining
@@ -361,6 +466,7 @@ def _maybe_enter(
     ts: str,
     row: dict,
     prev_row: dict,
+    spot_history: list[float],
     max_open: int,
     min_confidence: float,
 ) -> None:
@@ -381,7 +487,9 @@ def _maybe_enter(
             state.skipped_strike_distance += 1
         return
 
-    market = market_context_from_snapshot(row, prev_spot=prev_spot)
+    row_with_ts = dict(row)
+    row_with_ts.setdefault("ts", ts)
+    market = market_context_from_snapshot(row_with_ts, prev_spot=prev_spot, spot_history=spot_history)
     memory = _memory_from_closed(state.closed_trades)
     advice = _rule_based_advice(signals, memory, market=market)
     if not advice.get("approve") or float(advice.get("confidence", 0)) < min_confidence:
@@ -408,23 +516,38 @@ def _maybe_enter(
         return
 
     confidence = float(advice.get("confidence", 0.5))
-    desired_qty = contracts_for_confidence(confidence)
+    size_mult = float(advice.get("size_multiplier") or 1.0)
     premium = estimate_entry_premium(exec_spot, exec_strike)
-    qty = desired_qty
+    equity = state.account.cash if state.account else None
+    qty = float(
+        resolve_contract_qty(
+            confidence=confidence,
+            premium=premium,
+            entry_spot=exec_spot,
+            strike=exec_strike,
+            account_equity=equity,
+            size_multiplier=size_mult,
+        )
+    )
     if state.account:
-        qty = float(state.account.affordable_qty(premium, desired_qty))
+        qty = float(affordable_qty(premium, state.account.cash, qty))
         if qty < 1:
             state.account.skipped_insufficient_capital += 1
             return
         state.account.debit_entry(premium, qty)
+    elif qty < 1:
+        state.skipped_entries += 1
+        return
 
     regime = str(row.get("regime") or "")
+    expected_move = safe_float(row.get("expected_move_pct"), 0.0) or None
     profile = build_exit_profile(
         ai_confidence=confidence,
         gamma_delta=float(rec["gamma_delta"]),
         regime=regime,
         entry_spot=exec_spot,
         strike=exec_strike,
+        expected_move_pct=expected_move,
     )
     state.open_positions.append(
         _OpenPosition(
@@ -631,12 +754,19 @@ def backtest_auto_trader(
             prev_ts=str(prev["ts"]),
             prev_signal_spot=safe_float(prev.get("spot"), 0.0) or None,
         )
+        lookback = momentum_bars() + 2
+        spot_history = [
+            safe_float(history[j].get("spot"), 0.0)
+            for j in range(max(0, idx - lookback + 1), idx + 1)
+            if safe_float(history[j].get("spot"), 0.0) > 0
+        ]
         _maybe_enter(
             state,
             idx=idx,
             ts=str(row["ts"]),
             row=row,
             prev_row=prev,
+            spot_history=spot_history,
             max_open=max_open,
             min_confidence=min_confidence,
         )
