@@ -880,6 +880,35 @@ def api_agent_analyze():
     return jsonify(result)
 
 
+@APP.get("/api/agent/backtest")
+def api_agent_backtest():
+    """Walk-forward auto-trader backtest using current env parameters."""
+    from gex_core.trading.backtest_agent import current_trader_parameters, run_agent_backtest
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    if not is_supported_ticker(ticker):
+        return jsonify({"error": "Unsupported ticker"}), 404
+
+    lookback_days = request.args.get("lookback_days", type=int)
+    max_snapshots = request.args.get("max_snapshots", type=int)
+    starting_capital = request.args.get("starting_capital", type=float)
+    compact = request.args.get("compact", "1").lower() not in {"0", "false", "no"}
+
+    try:
+        result = run_agent_backtest(
+            ticker,
+            lookback_days=lookback_days,
+            max_snapshots=max_snapshots,
+            starting_capital=starting_capital,
+            compact=compact,
+        )
+    except Exception as exc:
+        logger.exception("Agent backtest failed for %s", ticker)
+        return jsonify({"error": str(exc), "parameters": current_trader_parameters()}), 500
+
+    return jsonify(result)
+
+
 @APP.get("/api/agent/predict")
 def api_agent_predict():
     """Feed all Unusual Whales data to the AI and return structured predictions."""
