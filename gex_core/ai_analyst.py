@@ -449,8 +449,9 @@ def _openai_narrative(base_narrative: str, analysis_dict: dict) -> str:
             "'may' or 'might' when the signal is clear. Include a clear directional call.\n\n"
             f"Draft: {base_narrative}\n\nKey data: {analysis_dict}"
         )
+        model = os.environ.get("GEX_AGENT_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=400,
             temperature=0.4,

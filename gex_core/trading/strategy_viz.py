@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 from plotly.utils import PlotlyJSONEncoder
 
 from gex_core.features import safe_float
-from gex_core.trading.advisor import _rule_based_advice
+from gex_core.trading.advisor import advise_entry
 from gex_core.trading.config import (
     max_strike_distance_pct,
     partial_take_profit_pct,
@@ -57,6 +57,7 @@ def build_strategy_state(
     previous_exposure: pd.Series | None,
     snapshot: dict[str, Any] | None = None,
     prev_spot: float | None = None,
+    uw_bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Current signals, filter checklist, and open-position marks for the dashboard."""
     spot_val = safe_float(spot, 0.0)
@@ -76,12 +77,11 @@ def build_strategy_state(
         flow_net_delta_gex_bn=safe_float(snap.get("flow_net_delta_gex_bn"), 0.0) or None,
     )
 
-    memory = {"performance": get_performance_summary(ticker)}
-    advice = {"approve": False, "reason": "No signal"}
+    advice = {"approve": False, "reason": "No signal", "source": "none"}
     filters = {"approve": False, "reason": "No signal"}
     if signals.get("available"):
-        filters = evaluate_entry_filters(signals, market=market)
-        advice = _rule_based_advice(signals, memory, market=market)
+        filters = evaluate_entry_filters(signals, market=market, uw_bundle=uw_bundle)
+        advice = advise_entry(ticker=ticker, signals=signals, uw_bundle=uw_bundle, market=market)
 
     open_positions = list_open_trades(ticker)
     marked_positions = []
@@ -121,7 +121,7 @@ def build_strategy_state(
         "filters": filters,
         "advice": advice,
         "open_positions": marked_positions,
-        "performance": memory["performance"],
+        "performance": get_performance_summary(ticker),
         "recent_trades": list_recent_trades(limit=15, ticker=ticker),
         "rules": {
             "stop_loss_pct": stop_loss_pct(),
@@ -317,6 +317,7 @@ def build_strategy_dashboard(
     previous_exposure: pd.Series | None,
     snapshot: dict[str, Any] | None = None,
     prev_spot: float | None = None,
+    uw_bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = build_strategy_state(
         ticker=ticker,
@@ -325,6 +326,7 @@ def build_strategy_dashboard(
         previous_exposure=previous_exposure,
         snapshot=snapshot,
         prev_spot=prev_spot,
+        uw_bundle=uw_bundle,
     )
     fig = build_strategy_chart(spot=spot, exposure=exposure, state=state)
     return {"state": state, "chart_json": _encode(fig)}

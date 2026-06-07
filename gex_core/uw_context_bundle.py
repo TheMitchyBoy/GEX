@@ -364,6 +364,33 @@ def build_uw_context_bundle(
     return bundle
 
 
+def try_build_uw_bundle_from_entry(
+    *,
+    ticker: str,
+    spot: float,
+    uw_entry: dict[str, Any] | None,
+    gamma_flip: float | None = None,
+    history: list[dict[str, Any]] | None = None,
+    knn_prediction: dict[str, Any] | None = None,
+    api_key: str | None = None,
+    fetch_extras: bool = False,
+) -> dict[str, Any] | None:
+    """Build a UW context bundle when live aggregation is available."""
+    if not uw_entry or uw_entry.get("agg") is None or spot <= 0:
+        return None
+    return build_uw_context_bundle(
+        ticker=ticker,
+        spot=float(spot),
+        agg=uw_entry["agg"],
+        gamma_flip=gamma_flip,
+        spot_gamma_bn=uw_entry.get("spot_gamma_bn"),
+        history=history,
+        knn_prediction=knn_prediction,
+        api_key=api_key,
+        fetch_extras=fetch_extras,
+    )
+
+
 def bundle_to_prompt_json(bundle: dict[str, Any]) -> str:
     """Serialize the context bundle for LLM consumption."""
     return json.dumps(bundle, indent=None, default=str)

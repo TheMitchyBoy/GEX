@@ -7,24 +7,108 @@ import logging
 from typing import Any
 
 from gex_core.gex_chatbot import _openai_chat, _resolve_openai_config
-from gex_core.trading.config import clear_all_filters, min_gamma_delta
+from gex_core.trading.config import (
+    advisor_context_max_chars,
+    clear_all_filters,
+    min_entry_confidence,
+    min_gamma_delta,
+)
 from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.journal import get_trade_memory_for_ai
+from gex_core.uw_context_bundle import bundle_to_prompt_json
 
 logger = logging.getLogger(__name__)
 
 _ADVISOR_SYSTEM = (
     "You are the GEX Auto-Trader advisor. You review gamma-based option entry signals and "
-    "decide whether to approve a paper trade. You have memory of past trade performance.\n\n"
+    "decide whether to approve a paper trade. You receive the full candidate signal pack, "
+    "trade memory, and Unusual Whales context when available.\n\n"
     "Rules:\n"
-    "- Prefer trades aligned with dealer gamma magnets (positive gamma strikes).\n"
+    "- Prefer trades aligned with dealer gamma magnets (max positive gamma strikes).\n"
     "- Require spot momentum toward the magnet and regime alignment.\n"
-    "- Down-weight signal types with poor historical win rate in the memory bundle.\n"
-    "- Require confidence 0.0-1.0; approve only when edge is clear.\n"
+    "- Reject when gamma at the magnet is declining (negative gamma_delta on max +γ).\n"
+    "- Down-weight signal types with poor historical win rate in trade_memory.\n"
+    "- confidence 0.0-1.0: approve only when edge is clear (typically >= 0.55).\n"
+    "- If uw_context is present, cite specific strikes, flow, and intraday trends.\n"
     "- Output ONLY valid JSON with keys: approve (bool), confidence (float), option_type (call|put), "
     "reason (string), suggestions (array of strings).\n"
     "- This is paper trading analysis, not financial advice.\n"
 )
+
+
+def _build_advisor_context(
+    *,
+    signals: dict[str, Any],
+    memory: dict[str, Any],
+    market: MarketContext | None,
+    uw_bundle: dict[str, Any] | None,
+) -> str:
+    payload: dict[str, Any] = {
+        "candidate_signals": signals,
+        "trade_memory": memory,
+    }
+    if market is not None:
+        payload["market"] = {
+            "spot": market.spot,
+            "prev_spot": market.prev_spot,
+            "regime": market.regime,
+            "gamma_flip": market.gamma_flip,
+            "flow_net_delta_gex_bn": market.flow_net_delta_gex_bn,
+        }
+    if uw_bundle:
+        payload["uw_context"] = uw_bundle
+    text = bundle_to_prompt_json(payload)
+    cap = advisor_context_max_chars()
+    if len(text) > cap:
+        compact = {
+            "candidate_signals": signals,
+            "trade_memory": memory,
+            "uw_summary": (uw_bundle or {}).get("summary"),
+            "uw_strikes_near_spot": (uw_bundle or {}).get("strikes_near_spot"),
+            "knn_forecast": (uw_bundle or {}).get("knn_forecast"),
+        }
+        text = bundle_to_prompt_json(compact)
+        if len(text) > cap:
+            text = text[:cap]
+    return text
+
+
+def _apply_advisor_gates(
+    parsed: dict[str, Any],
+    *,
+    signals: dict[str, Any],
+    market: MarketContext | None,
+    uw_bundle: dict[str, Any] | None,
+    memory: dict[str, Any],
+) -> dict[str, Any]:
+    parsed["confidence"] = float(parsed.get("confidence", 0.5))
+    parsed["approve"] = bool(parsed.get("approve"))
+    parsed["option_type"] = str(
+        parsed.get("option_type", signals.get("recommended", {}).get("option_type", "call"))
+    )
+    parsed["reason"] = str(parsed.get("reason", ""))
+    parsed["suggestions"] = parsed.get("suggestions") or memory.get("performance", {}).get("lessons", [])
+
+    floor = min_entry_confidence()
+    if parsed["approve"] and floor > 0 and parsed["confidence"] < floor:
+        parsed["approve"] = False
+        parsed["reason"] = (
+            f"Confidence {parsed['confidence']:.2f} below minimum {floor:.2f} — "
+            + (parsed["reason"] or "wait for clearer edge.")
+        )
+
+    if parsed["approve"]:
+        filter_result = evaluate_entry_filters(signals, market=market, uw_bundle=uw_bundle)
+        if not filter_result.get("approve"):
+            parsed["approve"] = False
+            parsed["reason"] = filter_result.get("reason", parsed["reason"])
+        parsed["size_multiplier"] = float(filter_result.get("size_multiplier") or 1.0)
+        if filter_result.get("filter"):
+            parsed["filter"] = filter_result.get("filter")
+    else:
+        parsed.setdefault("size_multiplier", 0.0)
+
+    return parsed
 
 
 def _rule_based_advice(
@@ -74,7 +158,7 @@ def _rule_based_advice(
     if not approve:
         suggestions.insert(0, "Wait for stronger gamma edge or better signal-type track record.")
 
-    return {
+    verdict = {
         "approve": approve,
         "confidence": round(confidence, 3),
         "option_type": rec.get("option_type", "call"),
@@ -83,6 +167,13 @@ def _rule_based_advice(
         "source": "rule_based",
         "size_multiplier": float(filter_result.get("size_multiplier") or 1.0),
     }
+    return _apply_advisor_gates(
+        verdict,
+        signals=signals,
+        market=market,
+        uw_bundle=uw_bundle,
+        memory=memory,
+    )
 
 
 def advise_entry(
@@ -92,39 +183,33 @@ def advise_entry(
     uw_bundle: dict[str, Any] | None = None,
     market: MarketContext | None = None,
 ) -> dict[str, Any]:
-    """Return AI/r rule-based entry verdict with suggestions."""
+    """Return AI or rule-based entry verdict with suggestions."""
     memory = get_trade_memory_for_ai(ticker)
-    payload = {
-        "candidate_signals": signals,
-        "trade_memory": memory,
-        "market_summary": (uw_bundle or {}).get("summary"),
-    }
+    context = _build_advisor_context(
+        signals=signals,
+        memory=memory,
+        market=market,
+        uw_bundle=uw_bundle,
+    )
 
     if _resolve_openai_config():
-        system = _ADVISOR_SYSTEM + "\n\nContext:\n" + json.dumps(payload, default=str)[:12000]
+        system = _ADVISOR_SYSTEM + "\n\nContext:\n" + context
         prompt = (
-            "Review the recommended gamma signal and trade memory. "
+            "Review the recommended gamma signal, trade memory, and market context. "
             "Should we open a paper option trade? Return JSON only."
         )
-        reply, err = _openai_chat(system, [], prompt)
+        reply, err = _openai_chat(system, [], prompt, json_mode=True, temperature=0.2, max_tokens=600)
         if reply:
             try:
-                start = reply.find("{")
-                end = reply.rfind("}") + 1
-                if start >= 0 and end > start:
-                    parsed = json.loads(reply[start:end])
-                    parsed["source"] = "openai"
-                    parsed["suggestions"] = parsed.get("suggestions") or memory.get("performance", {}).get("lessons", [])
-                    parsed["confidence"] = float(parsed.get("confidence", 0.5))
-                    parsed["approve"] = bool(parsed.get("approve"))
-                    parsed["option_type"] = str(parsed.get("option_type", signals.get("recommended", {}).get("option_type", "call")))
-                    parsed["reason"] = str(parsed.get("reason", ""))
-                    if parsed["approve"]:
-                        filter_result = evaluate_entry_filters(signals, market=market, uw_bundle=uw_bundle)
-                        if not filter_result.get("approve"):
-                            parsed["approve"] = False
-                            parsed["reason"] = filter_result.get("reason", parsed["reason"])
-                    return parsed
+                parsed = json.loads(reply)
+                parsed["source"] = "openai"
+                return _apply_advisor_gates(
+                    parsed,
+                    signals=signals,
+                    market=market,
+                    uw_bundle=uw_bundle,
+                    memory=memory,
+                )
             except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 logger.warning("AI advisor JSON parse failed: %s", exc)
         if err:

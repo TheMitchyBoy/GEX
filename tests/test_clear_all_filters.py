@@ -16,8 +16,8 @@ from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.signals import compute_entry_candidates
 
 
-def test_clear_all_filters_default_on():
-    assert clear_all_filters()
+def test_clear_all_filters_default_off():
+    assert not clear_all_filters()
 
 
 def test_clear_all_filters_disables_strict_gates(monkeypatch):

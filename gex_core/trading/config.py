@@ -12,8 +12,8 @@ def _flag(name: str, default: str = "0") -> bool:
 
 
 def clear_all_filters() -> bool:
-    """Master switch: disable signal, advisor, and strict entry gates (default on)."""
-    return _flag("GEX_TRADER_CLEAR_FILTERS", "1")
+    """Master switch: disable signal, advisor, and strict entry gates."""
+    return _flag("GEX_TRADER_CLEAR_FILTERS", "0")
 
 
 def auto_trader_enabled() -> bool:
@@ -154,9 +154,17 @@ def min_entry_confidence() -> float:
     if clear_all_filters():
         return 0.0
     try:
-        return max(0.0, min(1.0, float(os.environ.get("GEX_TRADER_MIN_ENTRY_CONFIDENCE", "0.0"))))
+        return max(0.0, min(1.0, float(os.environ.get("GEX_TRADER_MIN_ENTRY_CONFIDENCE", "0.55"))))
     except (TypeError, ValueError):
-        return 0.0
+        return 0.55
+
+
+def advisor_context_max_chars() -> int:
+    """Max characters of UW + signal context sent to the entry advisor LLM."""
+    try:
+        return max(4000, int(os.environ.get("GEX_ADVISOR_CONTEXT_MAX_CHARS", "24000")))
+    except (TypeError, ValueError):
+        return 24000
 
 
 def strong_gamma_delta() -> float:

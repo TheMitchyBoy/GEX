@@ -163,7 +163,15 @@ def _classify_llm_error(exc: Exception) -> str:
     return "LLM request failed — see server logs for details"
 
 
-def _openai_chat(system: str, history: list[dict[str, str]], user_message: str) -> tuple[str | None, str | None]:
+def _openai_chat(
+    system: str,
+    history: list[dict[str, str]],
+    user_message: str,
+    *,
+    json_mode: bool = False,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> tuple[str | None, str | None]:
     """Return (reply, user_error). user_error is set when the call fails."""
     cfg = _resolve_openai_config()
     if not cfg:
@@ -176,12 +184,15 @@ def _openai_chat(system: str, history: list[dict[str, str]], user_message: str) 
         messages = [{"role": "system", "content": system}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_message})
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=int(os.environ.get("GEX_AI_MAX_TOKENS", "800")),
-            temperature=float(os.environ.get("GEX_AI_TEMPERATURE", "0.4")),
-        )
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens if max_tokens is not None else int(os.environ.get("GEX_AI_MAX_TOKENS", "1200")),
+            "temperature": temperature if temperature is not None else float(os.environ.get("GEX_AI_TEMPERATURE", "0.35")),
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content
         return (content.strip() if content else None), None
     except Exception as exc:

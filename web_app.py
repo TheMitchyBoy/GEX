@@ -400,6 +400,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
 
     from gex_core.trading.strategy_viz import build_strategy_dashboard
 
+    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     strategy = build_strategy_dashboard(
         ticker=ticker,
         spot=spot,
@@ -407,6 +408,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         previous_exposure=prev_series,
         snapshot=selected,
         prev_spot=prev_spot,
+        uw_bundle=uw_bundle,
     )
     strategy_chart_json = strategy["chart_json"]
     strategy_state = strategy["state"]
@@ -737,7 +739,6 @@ def api_trader_arm():
 def api_trader_run():
     """Manual paper-trading evaluation cycle."""
     from gex_core.trading.engine import run_trading_cycle
-    from gex_core.uw_context_bundle import build_uw_context_bundle
 
     ticker = PRIMARY_TICKER
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
@@ -750,17 +751,7 @@ def api_trader_run():
     spot = ctx.get("spot")
     if not spot:
         return jsonify({"error": "No spot price available"}), 503
-    uw_bundle = None
-    if uw_entry and uw_entry.get("agg") is not None:
-        uw_bundle = build_uw_context_bundle(
-            ticker=ticker,
-            spot=float(spot),
-            agg=uw_entry["agg"],
-            gamma_flip=ctx.get("gamma_flip"),
-            spot_gamma_bn=uw_entry.get("spot_gamma_bn"),
-            api_key=uw_api_key(),
-            fetch_extras=False,
-        )
+    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     result = run_trading_cycle(
         ticker=ticker,
         spot=float(spot),
@@ -796,6 +787,7 @@ def api_trader_strategy():
             if row.get("ts") == sel_ts and i > 0:
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
+    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     payload = build_strategy_dashboard(
         ticker=ticker,
         spot=ctx.get("spot"),
@@ -803,6 +795,7 @@ def api_trader_strategy():
         previous_exposure=ctx.get("previous_exposure"),
         snapshot=ctx.get("selected"),
         prev_spot=prev_spot,
+        uw_bundle=uw_bundle,
     )
     return jsonify(payload)
 
@@ -862,6 +855,7 @@ def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
             if row.get("ts") == sel_ts and i > 0:
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
+    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     state = build_strategy_state(
         ticker=ticker,
         spot=ctx.get("spot"),
@@ -869,6 +863,7 @@ def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
         previous_exposure=ctx.get("previous_exposure"),
         snapshot=ctx.get("selected"),
         prev_spot=prev_spot,
+        uw_bundle=uw_bundle,
     )
     trade = build_recommended_trade(strategy_state=state)
     return {"strategy_state": state, "recommended_trade": trade}
@@ -1388,6 +1383,29 @@ def _previous_spot_from_context(ctx: dict) -> float | None:
                 prev = safe_float(row.get("spot"), 0.0)
                 return prev if prev > 0 else None
     return safe_float(selected.get("spot"), 0.0) or None
+
+
+def _uw_bundle_for_context(
+    *,
+    ticker: str,
+    ctx: dict[str, Any],
+    uw_entry: dict[str, Any] | None,
+    fetch_extras: bool = False,
+) -> dict[str, Any] | None:
+    from gex_core.uw_context_bundle import try_build_uw_bundle_from_entry
+
+    spot = safe_float(ctx.get("spot"), 0.0)
+    if spot <= 0:
+        return None
+    return try_build_uw_bundle_from_entry(
+        ticker=ticker,
+        spot=spot,
+        uw_entry=uw_entry,
+        gamma_flip=ctx.get("gamma_flip"),
+        history=ctx.get("history"),
+        api_key=uw_api_key(),
+        fetch_extras=fetch_extras,
+    )
 
 
 def _resolve_trader_spot(ticker: str, fallback: float | None) -> float | None:
