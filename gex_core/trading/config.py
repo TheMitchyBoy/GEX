@@ -11,6 +11,11 @@ def _flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def clear_all_filters() -> bool:
+    """Master switch: disable signal, advisor, and strict entry gates."""
+    return _flag("GEX_TRADER_CLEAR_FILTERS", "0")
+
+
 def auto_trader_enabled() -> bool:
     return _flag("GEX_AUTO_TRADER", "0")
 
@@ -146,6 +151,8 @@ def strong_entry_confidence() -> float:
 
 def min_entry_confidence() -> float:
     """Minimum AI advisor confidence required to open a new position (0 = no floor)."""
+    if clear_all_filters():
+        return 0.0
     try:
         return max(0.0, min(1.0, float(os.environ.get("GEX_TRADER_MIN_ENTRY_CONFIDENCE", "0.0"))))
     except (TypeError, ValueError):
@@ -189,6 +196,8 @@ def max_entries_per_cycle() -> int:
 
 
 def min_gamma_delta() -> float:
+    if clear_all_filters():
+        return 0.0
     try:
         return max(0.0, float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0.03")))
     except (TypeError, ValueError):
@@ -196,6 +205,8 @@ def min_gamma_delta() -> float:
 
 
 def min_fastest_gamma_delta() -> float:
+    if clear_all_filters():
+        return 0.0
     try:
         return max(0.0, float(os.environ.get("GEX_TRADER_MIN_FASTEST_GAMMA_DELTA", "0.03")))
     except (TypeError, ValueError):
@@ -203,6 +214,8 @@ def min_fastest_gamma_delta() -> float:
 
 
 def max_strike_distance_pct() -> float:
+    if clear_all_filters():
+        return 1.0
     try:
         return max(0.001, float(os.environ.get("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.02")))
     except (TypeError, ValueError):
@@ -210,6 +223,8 @@ def max_strike_distance_pct() -> float:
 
 
 def min_confluence_score() -> float:
+    if clear_all_filters():
+        return 0.0
     try:
         return float(os.environ.get("GEX_TRADER_MIN_CONFLUENCE", "50"))
     except (TypeError, ValueError):
@@ -217,18 +232,26 @@ def min_confluence_score() -> float:
 
 
 def require_spot_momentum() -> bool:
+    if clear_all_filters():
+        return False
     return _flag("GEX_TRADER_REQUIRE_MOMENTUM", "1")
 
 
 def block_event_days() -> bool:
+    if clear_all_filters():
+        return False
     return _flag("GEX_TRADER_BLOCK_EVENTS", "1")
 
 
 def require_flow_alignment() -> bool:
+    if clear_all_filters():
+        return False
     return _flag("GEX_TRADER_REQUIRE_FLOW_ALIGN", "0")
 
 
 def strict_entry_filters() -> bool:
+    if clear_all_filters():
+        return False
     return _flag("GEX_TRADER_STRICT_FILTERS", "1")
 
 
@@ -361,6 +384,8 @@ def min_zero_dte_ratio() -> float:
 
 
 def require_gamma_flip_side() -> bool:
+    if clear_all_filters():
+        return False
     return _flag("GEX_TRADER_REQUIRE_FLIP_SIDE", "1")
 
 
@@ -372,6 +397,8 @@ def max_iv_rank() -> float:
 
 
 def min_magnet_progress_pct() -> float:
+    if clear_all_filters():
+        return 0.0
     try:
         return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_PROGRESS", "0.0")))
     except (TypeError, ValueError):
@@ -475,6 +502,8 @@ def fix_magnet_exit_scale() -> bool:
 
 
 def min_magnet_distance_pct() -> float:
+    if clear_all_filters():
+        return 0.0
     try:
         return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_DISTANCE_PCT", "0")))
     except (TypeError, ValueError):
@@ -492,6 +521,8 @@ def equity_from_mark() -> bool:
 
 def regime_strict() -> bool:
     """Block entries in short-gamma regime."""
+    if clear_all_filters():
+        return False
     return _flag("GEX_TRADER_REGIME_STRICT", "0")
 
 
@@ -507,6 +538,8 @@ def magnet_partial_progress_pct() -> float:
 
 
 def entry_time_filter_enabled() -> bool:
+    if clear_all_filters():
+        return False
     return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")
 
 

@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from gex_core.gex_chatbot import _openai_chat, _resolve_openai_config
-from gex_core.trading.config import min_gamma_delta
+from gex_core.trading.config import clear_all_filters, min_gamma_delta
 from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.journal import get_trade_memory_for_ai
 
@@ -67,7 +67,7 @@ def _rule_based_advice(
     min_delta = min_gamma_delta()
     score_ok = min_delta <= 0 or score > min_delta
     delta_ok = min_delta <= 0 or delta >= min_delta
-    approve = score_ok and delta_ok
+    approve = True if clear_all_filters() else (score_ok and delta_ok)
     suggestions = list(perf.get("lessons") or [])[:3]
     if delta > 0.08:
         suggestions.insert(0, "Strong gamma acceleration — momentum entry favored.")

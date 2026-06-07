@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from gex_core.trading.config import (
+    clear_all_filters,
     magnet_anchored_strikes,
     max_gamma_only,
     max_strike_distance_pct,
@@ -168,7 +169,7 @@ def _compute_max_gamma_only(
     fastest_signal: GammaSignal,
 ) -> dict[str, Any]:
     """Single max-positive-gamma candidate locked to the magnet direction."""
-    if max_pos_delta < 0:
+    if max_pos_delta < 0 and not clear_all_filters():
         return _unavailable(
             reason=(
                 f"Largest positive gamma at {max_pos_strike:.0f} declined "
