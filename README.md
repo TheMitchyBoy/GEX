@@ -213,7 +213,7 @@ Implemented in `gex_core.trading.signals.compute_entry_candidates()`. A snapshot
 | Check | Env / logic | Default | Skip reason |
 |-------|-------------|---------|-------------|
 | Max-gamma mode | `GEX_TRADER_MAX_GAMMA_ONLY=1` | on | Only the largest **positive** gamma magnet; no `fastest_gamma_increase` fallback |
-| Gamma rising | compare current vs previous strike profile | — | `gamma_declined` if top magnet Δγ &lt; 0 |
+| Gamma rising | compare current vs previous strike profile | — | `gamma_declined` if top magnet Δγ < 0 |
 | Tradeable strike | `GEX_TRADER_MAX_STRIKE_DISTANCE_PCT` | `0.02` (2%) | `strike_too_far` if no ATM/slightly-ITM positive-γ strike in range |
 | Strike selection | `GEX_TRADER_MAGNET_ANCHORED_STRIKES` | off | Off: nearest ATM positive-γ strike; on: trade at magnet strike |
 | Multi-candidate | `GEX_TRADER_MULTI_STRIKE` | `2` | Up to N ranked magnets (legacy mode only; max-gamma-only emits one) |
@@ -228,7 +228,7 @@ Implemented in `gex_core.trading.signals.compute_entry_candidates()`. A snapshot
 
 | Order | Filter | Env | Default | Rule |
 |-------|--------|-----|---------|------|
-| 1 | Valid data | — | — | Spot and strike must be &gt; 0 |
+| 1 | Valid data | — | — | Spot and strike must be > 0 |
 | 2 | Gamma delta | `GEX_TRADER_MIN_GAMMA_DELTA` | `0.03` | Recommended signal Δγ must meet floor |
 | 3 | Direction lock | `master_direction` | — | Trade call/put must match max-gamma direction |
 | 4 | Magnet distance | `GEX_TRADER_MIN_MAGNET_DISTANCE_PCT` | `0` | Reject if magnet too **close** to spot (optional) |
@@ -284,7 +284,7 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 | 4 | Magnet partial | `GEX_TRADER_MAGNET_PARTIAL_EXIT` | off | Exit fraction at `GEX_TRADER_MAGNET_PARTIAL_PROGRESS` (default 80%) toward magnet |
 | 5 | Partial TP | `GEX_TRADER_PARTIAL_TP_PCT` | `8%` | Only when `hold_for_target=False` (non-strong profiles) |
 | 6 | Trailing stop | `GEX_TRADER_TRAIL_TRIGGER_PCT` / `TRAIL_FLOOR_PCT` | `10%` / `5%` | After peak PnL hits trigger, exit at floor |
-| 7 | Time stop | `GEX_TRADER_TIME_STOP_BARS` | `6` bars | If held ≥ N bars, PnL &lt; `TIME_STOP_MIN_PNL_PCT` (`5%`), and magnet progress &lt; `TIME_STOP_MIN_PROGRESS` (`20%`) |
+| 7 | Time stop | `GEX_TRADER_TIME_STOP_BARS` | `6` bars | If held ≥ N bars, PnL < `TIME_STOP_MIN_PNL_PCT` (`5%`), and magnet progress < `TIME_STOP_MIN_PROGRESS` (`20%`) |
 | 8 | EOD flatten | `GEX_TRADER_EOD_FLATTEN` | on | Close all at `EOD_FLATTEN_HOUR:MIN` (default 15:45 ET) |
 
 **Exit profiles** (`build_exit_profile`): strong confidence + gamma, max-gamma-only, or near-magnet setups set `hold_for_target=True` (skip early partial TP, longer time stop, wider trail). `GEX_TRADER_DYNAMIC_TIME_STOP=1` extends time-stop bars when magnet is far from entry spot. `GEX_TRADER_FIX_MAGNET_EXIT_SCALE=1` maps SPX magnet levels to SPY scale for progress checks.
