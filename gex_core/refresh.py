@@ -10,9 +10,9 @@ a lookback window for prediction history.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import date, datetime, timedelta
 
+from gex_core.env_bootstrap import parse_env_minutes
 from gex_core.exports import parse_timestamp
 from gex_core.history import get_latest_ts, list_timestamps
 from gex_core.tickers import PRIMARY_TICKER, SUPPORTED_TICKERS, is_supported_ticker
@@ -20,10 +20,10 @@ from gex_core.tickers import PRIMARY_TICKER, SUPPORTED_TICKERS, is_supported_tic
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICKERS = list(SUPPORTED_TICKERS)
-DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
+DEFAULT_REFRESH_MINUTES = parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 10.0)
 
 
-def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:
+def is_snapshot_stale(ticker: str, max_age_minutes: float | None = None) -> bool:
     max_age = max_age_minutes if max_age_minutes is not None else DEFAULT_REFRESH_MINUTES
     latest = get_latest_ts(ticker)
     if latest is None:

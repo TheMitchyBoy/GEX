@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from gex_core.charts import safe_float
-from gex_core.env_bootstrap import uw_api_configured, uw_api_key
+from gex_core.env_bootstrap import parse_env_minutes, uw_api_configured, uw_api_key
 from gex_core.features import enrich_snapshot_metrics, estimate_gamma_flip
 from gex_core.history import load_snapshot_at_ts
 from gex_core.market_time import (
@@ -36,11 +36,11 @@ from gex_core.tickers import PRIMARY_TICKER
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_INTERVAL = int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"))
+_DEFAULT_INTERVAL = parse_env_minutes("GEX_BACKFILL_INTERVAL_MINUTES", 10.0)
 _CACHE_TTL = int(
     os.environ.get(
         "GEX_PERISCOPE_API_CACHE_TTL_SECONDS",
-        str(max(30, int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10")) * 60)),
+        str(max(30, int(parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 10.0) * 60))),
     )
 )
 

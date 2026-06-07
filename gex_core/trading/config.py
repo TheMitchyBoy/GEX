@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from gex_core.env_bootstrap import parse_env_minutes
+
 
 def _flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
@@ -23,13 +25,13 @@ def trader_cycle_seconds() -> int:
 
 def trader_bar_minutes() -> float:
     """Minutes per gamma bar for time stops and cooldown semantics."""
-    try:
-        explicit = os.environ.get("GEX_TRADER_BAR_MINUTES", "").strip()
-        if explicit:
-            return max(1.0, float(explicit))
-        return max(1.0, float(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "2")))
-    except (TypeError, ValueError):
-        return 2.0
+    explicit = os.environ.get("GEX_TRADER_BAR_MINUTES", "").strip()
+    if explicit:
+        try:
+            return max(0.1, float(explicit))
+        except (TypeError, ValueError):
+            pass
+    return max(0.1, parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 2.0))
 
 
 def trader_session_only() -> bool:

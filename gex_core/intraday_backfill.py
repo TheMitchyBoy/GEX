@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from gex_core.env_bootstrap import parse_env_minutes
 from gex_core.exports import EXPORT_DIR, list_export_timestamps
 from gex_core.extended_features import merge_extended_features
 from gex_core.history import clear_history_cache, get_latest_ts
@@ -21,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 _RAW_GAMMA_SCALE = 1e9  # spot-exposures aggregate fields are raw dollars per 1%
 DEFAULT_BACKFILL_DAYS = int(os.environ.get("GEX_INTRADAY_BACKFILL_DAYS", "90"))
-DEFAULT_BACKFILL_INTERVAL_MINUTES = int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"))
-DEFAULT_LIVE_INTERVAL_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
+DEFAULT_BACKFILL_INTERVAL_MINUTES = parse_env_minutes("GEX_BACKFILL_INTERVAL_MINUTES", 10.0)
+DEFAULT_LIVE_INTERVAL_MINUTES = parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 10.0)
 DEFAULT_DAILY_BACKFILL_DAYS = int(os.environ.get("GEX_DAILY_BACKFILL_DAYS", "90"))
 
 
@@ -139,7 +140,7 @@ def export_live_strike_snapshot(
     export_dir = export_dir or EXPORT_DIR
     interval = DEFAULT_LIVE_INTERVAL_MINUTES
     if not force and _snapshot_fresh_within_interval(ticker, export_dir, interval_minutes=interval):
-        logger.info("Skipping %s — snapshot already exists for current %d-min window", ticker, interval)
+        logger.info("Skipping %s — snapshot already exists for current %.2g-min window", ticker, interval)
         return get_latest_ts(ticker, export_dir)
 
     spot, agg = fetch_uw_gex(ticker, api_key=api_key)
@@ -363,7 +364,7 @@ def _snapshot_fresh_within_interval(
     ticker: str,
     export_dir: Path,
     *,
-    interval_minutes: int,
+    interval_minutes: float,
 ) -> bool:
     latest = get_latest_ts(ticker, export_dir)
     if not latest:
@@ -371,11 +372,5 @@ def _snapshot_fresh_within_interval(
     from gex_core.exports import parse_timestamp
 
     latest_ts = parse_timestamp(latest)
-    now = datetime.now()
-    bucket_start = now.replace(second=0, microsecond=0) - timedelta(
-        minutes=now.minute % interval_minutes
-    )
-    latest_bucket = latest_ts.replace(second=0, microsecond=0) - timedelta(
-        minutes=latest_ts.minute % interval_minutes
-    )
-    return latest_bucket >= bucket_start
+    age = datetime.now() - latest_ts
+    return age <= timedelta(minutes=interval_minutes)

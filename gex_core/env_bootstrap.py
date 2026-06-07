@@ -7,8 +7,11 @@ Files are parsed in order; existing environment variables are never overwritten.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_ENV_FILES = (
@@ -94,6 +97,22 @@ def load_env_files(paths: tuple[Path, ...] | None = None) -> list[str]:
                 os.environ[key] = value
         loaded.append(str(path))
     return loaded
+
+
+def parse_env_minutes(name: str, default: float = 10.0) -> float:
+    """Parse an env var as minutes; accepts floats like ``0.5`` or ``.5``."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return float(default)
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default %.4g minutes", name, raw, default)
+        return float(default)
+    if value <= 0:
+        logger.warning("Non-positive %s=%r; using default %.4g minutes", name, raw, default)
+        return float(default)
+    return value
 
 
 def uw_api_key() -> str | None:
