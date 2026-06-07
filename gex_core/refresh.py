@@ -20,10 +20,27 @@ from gex_core.tickers import PRIMARY_TICKER, SUPPORTED_TICKERS, is_supported_tic
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICKERS = list(SUPPORTED_TICKERS)
-DEFAULT_REFRESH_MINUTES = int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10"))
 
 
-def is_snapshot_stale(ticker: str, max_age_minutes: int | None = None) -> bool:
+def refresh_interval_minutes(default: str = "10") -> float:
+    """Parse ``GEX_REFRESH_INTERVAL_MINUTES`` (supports fractional values like ``0.5``)."""
+    raw = os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", default).strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid GEX_REFRESH_INTERVAL_MINUTES=%r; using default %s",
+            raw,
+            default,
+        )
+        value = float(default)
+    return max(0.1, value)
+
+
+DEFAULT_REFRESH_MINUTES = refresh_interval_minutes()
+
+
+def is_snapshot_stale(ticker: str, max_age_minutes: float | None = None) -> bool:
     max_age = max_age_minutes if max_age_minutes is not None else DEFAULT_REFRESH_MINUTES
     latest = get_latest_ts(ticker)
     if latest is None:

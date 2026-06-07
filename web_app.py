@@ -90,7 +90,7 @@ from gex_core.predict import (
 )
 from gex_core.alert_dispatch import maybe_dispatch_alerts
 from gex_core.env_bootstrap import bootstrap_env, uw_api_configured, uw_api_key
-from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
+from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_interval_minutes, refresh_ticker, refresh_tickers
 from gex_core.export_diagnostics import prediction_lookback_days, summarize_export_state
 from gex_core.system_status import build_system_status
 from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
@@ -109,7 +109,7 @@ _UW_CACHE: dict[str, dict] = {}          # ticker → {spot, agg, ts, analysis}
 _UW_CACHE_TTL = int(
     os.environ.get(
         "GEX_UW_CACHE_TTL_SECONDS",
-        str(max(30, int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10")) * 60)),
+        str(max(30, int(refresh_interval_minutes() * 60))),
     )
 )  # keep cache aligned to refresh cadence by default
 
