@@ -526,7 +526,15 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
 @APP.get("/health")
 def health():
     status = build_system_status(PRIMARY_TICKER)
-    # Liveness: return 200 when exports exist so stale data does not block routing.
+    # Liveness: always 200 when the process responds. Use ``ready`` / ``healthy``
+    # in the JSON for readiness probes (fresh deploys have no exports yet).
+    return jsonify(status), 200
+
+
+@APP.get("/health/ready")
+def health_ready():
+    """Strict readiness probe — 503 until export history exists."""
+    status = build_system_status(PRIMARY_TICKER)
     code = 200 if status.get("ready") else 503
     return jsonify(status), code
 
