@@ -138,8 +138,8 @@ python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UW_API_KEY` | (required) | Unusual Whales API key |
-| `GEX_REFRESH_INTERVAL_MINUTES` | `10` | Web dashboard auto-refresh (10-minute snapshots) |
-| `GEX_BACKFILL_INTERVAL_MINUTES` | `10` | Sample UW 1-minute API rows every N minutes |
+| `GEX_REFRESH_INTERVAL_MINUTES` | `2` | Web dashboard auto-refresh (2-minute snapshots) |
+| `GEX_BACKFILL_INTERVAL_MINUTES` | `2` | Sample UW 1-minute API rows every N minutes |
 | `GEX_INTRADAY_BACKFILL_DAYS` | `90` | Default lookback for intraday backfill script |
 | `GEX_DAILY_BACKFILL_DAYS` | `90` | EOD strike backfill via `gex_backfill_intraday.py` |
 | `GEX_DASHBOARD_HISTORY_DAYS` | `90` | Recent snapshots for KNN / panels |
@@ -193,7 +193,7 @@ python scripts/gex_compact_exports.py --ticker SPX --keep-full-days 14
 ## Scheduled exports
 
 - Daily: `.github/workflows/daily_exports.yml`
-- Intraday (weekdays, every 10 minutes during US session): `.github/workflows/intraday_exports.yml`
+- Intraday (weekdays, every 2 minutes during US session): `.github/workflows/intraday_exports.yml`
 
 See [ROADMAP.md](ROADMAP.md) for planned work.
 

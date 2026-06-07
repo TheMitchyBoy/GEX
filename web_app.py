@@ -95,7 +95,7 @@ _UW_CACHE: dict[str, dict] = {}          # ticker → {spot, agg, ts, analysis}
 _UW_CACHE_TTL = int(
     os.environ.get(
         "GEX_UW_CACHE_TTL_SECONDS",
-        str(max(30, int(parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 10.0) * 60))),
+        str(max(30, int(parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 2.0) * 60))),
     )
 )  # keep cache aligned to refresh cadence by default
 

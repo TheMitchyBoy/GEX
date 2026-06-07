@@ -260,7 +260,7 @@ def fetch_spx_price_series_for_dashboard(
 
     index_days = int(os.environ.get("GEX_DASHBOARD_TIMELINE_DAYS", "90")) if index_days is None else index_days
     index_interval = (
-        int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"))
+        int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "2"))
         if index_interval_minutes is None
         else index_interval_minutes
     )

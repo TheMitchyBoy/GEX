@@ -1,3 +1,4 @@
+import importlib
 from unittest.mock import patch
 
 import pandas as pd
@@ -10,6 +11,16 @@ from gex_core.intraday_backfill import (
     scale_strike_profile,
     uw_time_to_export_ts,
 )
+
+
+def test_default_interval_constants_two_minutes(monkeypatch):
+    monkeypatch.delenv("GEX_BACKFILL_INTERVAL_MINUTES", raising=False)
+    monkeypatch.delenv("GEX_REFRESH_INTERVAL_MINUTES", raising=False)
+    import gex_core.intraday_backfill as intraday_backfill
+
+    importlib.reload(intraday_backfill)
+    assert intraday_backfill.DEFAULT_BACKFILL_INTERVAL_MINUTES == 2.0
+    assert intraday_backfill.DEFAULT_LIVE_INTERVAL_MINUTES == 2.0
 
 
 def test_uw_time_to_export_ts_utc():

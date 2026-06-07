@@ -459,7 +459,7 @@ def build_index_timeline_history(
     from gex_core.storage import fetch_index_spot_series
 
     days = int(os.environ.get("GEX_DASHBOARD_TIMELINE_DAYS", "90")) if days is None else days
-    interval = int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10")) if interval_minutes is None else interval_minutes
+    interval = int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "2")) if interval_minutes is None else interval_minutes
     cap = int(os.environ.get("GEX_DASHBOARD_TIMELINE_MAX_POINTS", "400")) if max_points is None else max_points
     rows = fetch_index_spot_series(
         ticker,

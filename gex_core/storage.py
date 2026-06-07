@@ -301,7 +301,7 @@ def fetch_index_spot_series(
     ticker: str,
     *,
     days: int = 90,
-    interval_minutes: int = 10,
+    interval_minutes: int = 2,
     max_points: int | None = 500,
     export_dir: Path | None = None,
 ) -> list[dict[str, Any]]:

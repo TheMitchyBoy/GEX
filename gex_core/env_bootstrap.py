@@ -102,7 +102,7 @@ def load_env_files(paths: tuple[Path, ...] | None = None) -> list[str]:
     return loaded
 
 
-def parse_env_minutes(name: str, default: float = 10.0) -> float:
+def parse_env_minutes(name: str, default: float = 2.0) -> float:
     """Parse an env var as minutes; accepts floats like ``0.5`` or ``.5``."""
     raw = os.environ.get(name)
     if raw is None or not str(raw).strip():
