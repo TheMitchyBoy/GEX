@@ -307,7 +307,7 @@ def account_equity_usd() -> float:
 
 def risk_per_trade_pct() -> float:
     try:
-        return max(0.001, float(os.environ.get("GEX_TRADER_RISK_PER_TRADE_PCT", "0.01")))
+        return max(0.001, float(os.environ.get("GEX_TRADER_RISK_PER_TRADE_PCT", "0.50")))
     except (TypeError, ValueError):
         return 0.01
 
