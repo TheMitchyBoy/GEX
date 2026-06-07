@@ -13,6 +13,7 @@ from gex_core.trading.config import (
     magnet_partial_progress_pct,
     magnet_proximity_pct,
     magnet_touch_exit_enabled,
+    magnet_touch_min_pnl_pct,
     max_gamma_only,
     partial_take_profit_pct,
     stop_loss_pct,
@@ -208,9 +209,15 @@ def evaluate_exit(
             option_type=option_type,
         )
         at_magnet = progress >= 1.0 - magnet_proximity_pct()
-        if primary_magnet and at_magnet and pnl_pct >= 0:
+        min_magnet_pnl = magnet_touch_min_pnl_pct()
+        if primary_magnet and at_magnet and pnl_pct >= min_magnet_pnl:
             return "magnet_touch", pnl_pct
-        if not primary_magnet and not profile.hold_for_target and at_magnet and pnl_pct > 0:
+        if (
+            not primary_magnet
+            and not profile.hold_for_target
+            and at_magnet
+            and pnl_pct >= min_magnet_pnl
+        ):
             return "magnet_touch", pnl_pct
 
     if pnl_pct >= full_tp:

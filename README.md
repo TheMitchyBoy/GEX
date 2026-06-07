@@ -279,12 +279,12 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 | Priority | Exit | Env | Default | Condition |
 |----------|------|-----|---------|-----------|
 | 1 | Stop loss | `GEX_TRADER_STOP_LOSS_PCT` | `5%` | PnL ≤ −stop; far-OTM uses `GEX_TRADER_FAR_OTM_STOP_PCT` (`3%`) beyond `FAR_OTM_DISTANCE_PCT` |
-| 2 | Magnet touch | `GEX_TRADER_MAGNET_TOUCH_EXIT` | on | Spot within `GEX_TRADER_MAGNET_PROXIMITY_PCT` of magnet; max-gamma mode requires PnL ≥ 0 |
+| 2 | Magnet touch | `GEX_TRADER_MAGNET_TOUCH_EXIT` | on | Spot at magnet **and** PnL ≥ `GEX_TRADER_MAGNET_TOUCH_MIN_PNL_PCT` (default `4%`) |
 | 3 | Take profit | `GEX_TRADER_TAKE_PROFIT_PCT` | `35%` | Full target; scaled by `GEX_TRADER_DYNAMIC_TP` + `expected_move_pct` when set |
 | 4 | Magnet partial | `GEX_TRADER_MAGNET_PARTIAL_EXIT` | off | Exit fraction at `GEX_TRADER_MAGNET_PARTIAL_PROGRESS` (default 80%) toward magnet |
 | 5 | Partial TP | `GEX_TRADER_PARTIAL_TP_PCT` | `8%` | Only when `hold_for_target=False` (non-strong profiles) |
 | 6 | Trailing stop | `GEX_TRADER_TRAIL_TRIGGER_PCT` / `TRAIL_FLOOR_PCT` | `10%` / `5%` | After peak PnL hits trigger, exit at floor |
-| 7 | Time stop | `GEX_TRADER_TIME_STOP_BARS` | `6` bars | If held ≥ N bars, PnL < `TIME_STOP_MIN_PNL_PCT` (`5%`), and magnet progress < `TIME_STOP_MIN_PROGRESS` (`20%`) |
+| 7 | Time stop | `GEX_TRADER_TIME_STOP_BARS` | `10` bars | If held ≥ N bars, PnL < `TIME_STOP_MIN_PNL_PCT` (default `0` = losers only), and magnet progress < `TIME_STOP_MIN_PROGRESS` (`35%`) |
 | 8 | EOD flatten | `GEX_TRADER_EOD_FLATTEN` | on | Close all at `EOD_FLATTEN_HOUR:MIN` (default 15:45 ET) |
 
 **Exit profiles** (`build_exit_profile`): strong confidence + gamma, max-gamma-only, or near-magnet setups set `hold_for_target=True` (skip early partial TP, longer time stop, wider trail). `GEX_TRADER_DYNAMIC_TIME_STOP=1` extends time-stop bars when magnet is far from entry spot. `GEX_TRADER_FIX_MAGNET_EXIT_SCALE=1` maps SPX magnet levels to SPY scale for progress checks.
@@ -306,6 +306,7 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 | `GEX_TRADER_MAGNET_ANCHORED_STRIKES` | `0` | Signal strike pick |
 | `GEX_TRADER_FIX_MAGNET_EXIT_SCALE` | `1` | Exit progress (SPX→SPY) |
 | `GEX_TRADER_DYNAMIC_TIME_STOP` | `1` | Exit time stop |
+| `GEX_TRADER_MAGNET_TOUCH_MIN_PNL_PCT` | `0.04` | Min gain before magnet-touch exit |
 | `GEX_TRADER_CYCLE_SECONDS` | `15` | Live poll interval between snapshots |
 
 Full trader block: [config/spx.env.example](config/spx.env.example).

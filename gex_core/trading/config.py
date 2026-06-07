@@ -93,24 +93,25 @@ def trailing_stop_floor_pct() -> float:
 
 def time_stop_bars() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "6")))
+        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "10")))
     except (TypeError, ValueError):
-        return 6
+        return 10
 
 
 def time_stop_min_pnl_pct() -> float:
+    """Time-stop when PnL is below this (default 0 = underwater / stale losers only)."""
     try:
-        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PNL_PCT", "0.05"))
+        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PNL_PCT", "0"))
     except (TypeError, ValueError):
-        return 0.05
+        return 0.0
 
 
 def time_stop_min_magnet_progress() -> float:
     """Minimum fraction of distance-to-strike closed to avoid a time stop."""
     try:
-        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PROGRESS", "0.20"))
+        return float(os.environ.get("GEX_TRADER_TIME_STOP_MIN_PROGRESS", "0.35"))
     except (TypeError, ValueError):
-        return 0.20
+        return 0.35
 
 
 def stop_cooldown_bars() -> int:
@@ -402,6 +403,14 @@ def eod_flatten_minute() -> int:
 
 def magnet_touch_exit_enabled() -> bool:
     return _flag("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
+
+
+def magnet_touch_min_pnl_pct() -> float:
+    """Minimum option PnL %% before magnet-touch exit (avoids scratching at the magnet)."""
+    try:
+        return max(0.0, float(os.environ.get("GEX_TRADER_MAGNET_TOUCH_MIN_PNL_PCT", "0.04")))
+    except (TypeError, ValueError):
+        return 0.04
 
 
 def dynamic_take_profit_enabled() -> bool:
