@@ -176,9 +176,9 @@ def min_fastest_gamma_delta() -> float:
 
 def max_strike_distance_pct() -> float:
     try:
-        return max(0.001, float(os.environ.get("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.01")))
+        return max(0.001, float(os.environ.get("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.02")))
     except (TypeError, ValueError):
-        return 0.01
+        return 0.02
 
 
 def min_confluence_score() -> float:
@@ -412,4 +412,4 @@ def prefer_signal_type() -> str:
 
 
 def entry_time_filter_enabled() -> bool:
-    return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "0")
+    return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")

@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from gex_core.trading.config import max_strike_distance_pct, min_fastest_gamma_delta, min_gamma_delta
+from gex_core.trading.config import max_strike_distance_pct, min_fastest_gamma_delta
 
 
 @dataclass(frozen=True)
@@ -129,18 +129,37 @@ def compute_gamma_signals(
 
     selection_reason = "max_positive_gamma"
     recommended = max_pos_signal
-    min_delta = min_gamma_delta()
     min_fast = min_fastest_gamma_delta()
 
-    if min_delta > 0 and max_pos_delta >= min_delta:
-        pass
-    elif min_delta > 0 and min_fast > 0 and fastest_delta >= min_fast:
-        max_dist = abs(max_pos_strike - spot_val) / spot_val if spot_val > 0 else 1.0
-        fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
-        if fast_trade_strike is not None and fast_dist <= max_strike_distance_pct():
-            if min_delta <= 0 or fast_dist <= max_dist:
+    if max_pos_delta < 0:
+        if min_fast > 0 and fastest_delta >= min_fast:
+            max_dist = abs(max_pos_strike - spot_val) / spot_val if spot_val > 0 else 1.0
+            fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
+            if fast_trade_strike is not None and fast_dist <= max_strike_distance_pct():
                 recommended = fastest_signal
                 selection_reason = "max_positive_gamma_declined"
+            else:
+                return {
+                    "available": False,
+                    "reason": "Max gamma declined and fastest increase strike is too far from spot",
+                    "skip_reason": "strike_too_far",
+                    "spot": spot_val,
+                    "max_positive_gamma": _signal_dict(max_pos_signal),
+                    "fastest_gamma_increase": _signal_dict(fastest_signal),
+                }
+        else:
+            return {
+                "available": False,
+                "reason": (
+                    f"Largest positive gamma at {max_pos_strike:.0f} declined "
+                    f"(Δ{max_pos_delta:+.3f} Bn) and no strike shows sufficient rising gamma"
+                ),
+                "skip_reason": "gamma_declined",
+                "spot": spot_val,
+                "max_positive_gamma": _signal_dict(max_pos_signal),
+                "fastest_gamma_increase": _signal_dict(fastest_signal),
+                "max_pos_gamma_delta": max_pos_delta,
+            }
 
     return {
         "available": True,

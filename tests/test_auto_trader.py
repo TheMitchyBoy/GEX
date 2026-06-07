@@ -26,8 +26,7 @@ def test_compute_gamma_signals_picks_max_and_fastest():
     assert out["recommended"]["strike"] in {7380.0, 7390.0}
 
 
-def test_compute_gamma_signals_switches_when_max_gamma_declines(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0.05")
+def test_compute_gamma_signals_switches_when_max_gamma_declines():
     cur = pd.Series([0.2, 1.0, 0.8, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
@@ -37,22 +36,21 @@ def test_compute_gamma_signals_switches_when_max_gamma_declines(monkeypatch):
     assert out["recommended"]["strike"] == 7385.0
 
 
-def test_compute_gamma_signals_keeps_max_magnet_when_gamma_flat_or_declines():
-    cur = pd.Series([0.1, 0.8, 0.3, 0.2], index=[7380.0, 7390.0, 7400.0, 7410.0])
-    prev = pd.Series([0.2, 1.5, 0.5, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
-    out = compute_gamma_signals(cur, prev, spot=7385.0)
-    assert out["available"]
-    assert out["recommended"]["signal_type"] == "max_positive_gamma"
-
-
-def test_compute_gamma_signals_prefers_fastest_when_min_delta_enabled(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0.05")
+def test_compute_gamma_signals_allows_flat_max_gamma():
     cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.25, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
     assert out["available"]
-    assert out["selection_reason"] == "max_positive_gamma_declined"
-    assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
+    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["max_pos_gamma_delta"] == 0.0
+
+
+def test_compute_gamma_signals_blocks_when_max_gamma_declines():
+    cur = pd.Series([0.1, 0.8, 0.3, 0.2], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    prev = pd.Series([0.2, 1.5, 0.5, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
+    out = compute_gamma_signals(cur, prev, spot=7385.0)
+    assert not out["available"]
+    assert out["skip_reason"] == "gamma_declined"
 
 
 def test_entry_filter_blocks_far_strike(monkeypatch):

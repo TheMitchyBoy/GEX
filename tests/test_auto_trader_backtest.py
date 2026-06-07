@@ -101,11 +101,11 @@ def test_backtest_blocks_duplicate_strike_entries():
     assert len({t["strike"] for t in result["trades"]}) == 1
 
 
-def test_backtest_enters_on_magnet_without_gamma_rise():
+def test_backtest_enters_on_flat_gamma_magnet():
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
-        _snapshot("2026-06-01_101000", 5000.0, {4990: 0.1, 5000: 0.3, 5010: 1.0}),
-        _snapshot("2026-06-01_102000", 5000.0, {4990: 0.05, 5000: 0.2, 5010: 0.8}),
+        _snapshot("2026-06-01_101000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
+        _snapshot("2026-06-01_102000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
     ]
     result = backtest_auto_trader(
         "SPX",
