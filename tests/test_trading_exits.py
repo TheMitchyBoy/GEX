@@ -32,6 +32,8 @@ def test_strong_setup_holds_for_full_target():
         current_spot=5020.0,
         option_type="call",
         profile=profile,
+        magnet_strike=5050.0,
+        magnet_primary=False,
     )
     assert reason is None
 
@@ -44,6 +46,8 @@ def test_strong_setup_holds_for_full_target():
         current_spot=5035.0,
         option_type="call",
         profile=profile,
+        magnet_strike=5050.0,
+        magnet_primary=False,
     )
     assert reason == "take_profit"
     assert pnl == 0.35

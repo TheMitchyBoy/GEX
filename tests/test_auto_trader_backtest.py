@@ -10,6 +10,8 @@ def relaxed_filters(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
     monkeypatch.setenv("GEX_TRADER_MIN_MAGNET_PROGRESS", "0")
     monkeypatch.setenv("GEX_TRADER_PREFER_SIGNAL", "")
+    monkeypatch.setenv("GEX_TRADER_REQUIRE_MOMENTUM", "0")
+    monkeypatch.setenv("GEX_TRADER_REQUIRE_FLIP_SIDE", "0")
 
 
 def _snapshot(ts: str, spot: float, strikes: dict[float, float], *, prev_spot: float | None = None) -> dict:
@@ -45,6 +47,8 @@ def test_backtest_opens_and_closes_on_take_profit():
 
 
 def test_backtest_tries_multiple_strike_candidates(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "0")
+    monkeypatch.setenv("GEX_TRADER_MAGNET_ANCHORED_STRIKES", "1")
     monkeypatch.setenv("GEX_TRADER_MULTI_STRIKE", "3")
     monkeypatch.setenv("GEX_TRADER_MAX_ENTRIES_PER_CYCLE", "3")
     history = [

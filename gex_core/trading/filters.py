@@ -10,7 +10,10 @@ from gex_core.trading.config import (
     min_flow_aggressiveness,
     min_flow_buy_ratio,
     min_gamma_delta,
+    momentum_bars,
     require_flow_alignment,
+    require_gamma_flip_side,
+    require_spot_momentum,
     strict_entry_filters,
 )
 
@@ -92,6 +95,32 @@ def _flow_aligned(option_type: str, ctx: MarketContext) -> bool:
     return flow <= 0
 
 
+def _spot_momentum_aligned(option_type: str, ctx: MarketContext) -> bool:
+    if not require_spot_momentum():
+        return True
+    history = ctx.spot_history
+    bars = momentum_bars()
+    if len(history) < bars + 1:
+        return True
+    start = float(history[-(bars + 1)])
+    end = float(history[-1])
+    if option_type.lower() == "call":
+        return end > start
+    return end < start
+
+
+def _gamma_flip_aligned(option_type: str, ctx: MarketContext) -> bool:
+    if not require_gamma_flip_side():
+        return True
+    flip = ctx.gamma_flip
+    if flip is None or flip <= 0:
+        return True
+    spot = ctx.spot
+    if option_type.lower() == "call":
+        return spot > flip
+    return spot < flip
+
+
 def evaluate_entry_filters(
     signals: dict[str, Any],
     *,
@@ -122,6 +151,31 @@ def evaluate_entry_filters(
 
     market = market or MarketContext(spot=spot)
 
+    master = signals.get("master_direction")
+    if master and str(master).lower() != option_type.lower():
+        return {
+            "approve": False,
+            "reason": f"Trade direction {option_type} conflicts with max-gamma direction {master}",
+            "filter": "direction_lock",
+            "size_multiplier": 0.0,
+        }
+
+    if not _spot_momentum_aligned(option_type, market):
+        return {
+            "approve": False,
+            "reason": "Spot not moving in trade direction over recent bars",
+            "filter": "momentum",
+            "size_multiplier": 0.0,
+        }
+
+    if not _gamma_flip_aligned(option_type, market):
+        return {
+            "approve": False,
+            "reason": "Spot on wrong side of gamma flip for trade direction",
+            "filter": "gamma_flip",
+            "size_multiplier": 0.0,
+        }
+
     if require_flow_alignment() and not _flow_aligned(option_type, market):
         return {
             "approve": False,
@@ -130,4 +184,4 @@ def evaluate_entry_filters(
             "size_multiplier": 0.0,
         }
 
-    return {"approve": True, "reason": "Entry filters passed (gamma delta and flow)", "size_multiplier": 1.0}
+    return {"approve": True, "reason": "Entry filters passed", "size_multiplier": 1.0}

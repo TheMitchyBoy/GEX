@@ -111,6 +111,7 @@ class _OpenPosition:
     gamma_delta: float
     ai_confidence: float
     signal_strike: float | None = None
+    magnet_strike: float | None = None
     qty: float = 1.0
     exit_profile: ExitProfile = field(default_factory=ExitProfile)
     exit_state: ExitState = field(default_factory=ExitState)
@@ -451,6 +452,7 @@ def _check_exits(
             current_spot=mark_spot,
             option_type=pos.option_type,
             profile=pos.exit_profile,
+            magnet_strike=pos.magnet_strike,
         )
         if exit_reason:
             sell_qty = pos.qty
@@ -539,6 +541,7 @@ def _maybe_enter(
 
         option_type = str(advice.get("option_type") or rec["option_type"])
         signal_strike = float(rec["strike"])
+        magnet_strike = float(rec.get("magnet_strike") or signal_strike)
         trade_ctx = _resolve_trade_context(signal_strike=signal_strike, signal_spot=spot)
         if trade_ctx is None:
             state.skipped_no_execution_spot += 1
@@ -603,6 +606,7 @@ def _maybe_enter(
                 gamma_delta=float(rec["gamma_delta"]),
                 ai_confidence=confidence,
                 signal_strike=signal_strike if uses_execution_mapping() else None,
+                magnet_strike=magnet_strike,
                 qty=qty,
                 exit_profile=profile,
             )
