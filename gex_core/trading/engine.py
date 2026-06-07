@@ -110,11 +110,15 @@ def _uses_execution_mapping() -> bool:
     return execution_ticker().upper() != signal_ticker().upper()
 
 
-def _resolve_execution_context(signal_spot: float) -> tuple[float, str]:
+def _resolve_execution_context(signal_spot: float) -> tuple[float | None, str]:
     underlying = webull_underlying()
     exec_spot = resolve_execution_spot(signal_spot=signal_spot)
+    if _uses_execution_mapping():
+        if exec_spot is None or exec_spot <= 0:
+            return None, underlying
+        return float(exec_spot), underlying
     if exec_spot is None or exec_spot <= 0:
-        exec_spot = float(signal_spot)
+        return float(signal_spot), underlying
     return float(exec_spot), underlying
 
 
@@ -201,6 +205,8 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
     exits: list[dict[str, Any]] = []
     bar_minutes = trader_bar_minutes()
     exec_spot, _ = _resolve_execution_context(signal_spot=spot)
+    if _uses_execution_mapping() and (exec_spot is None or exec_spot <= 0):
+        return exits
     mark_spot = exec_spot if _uses_execution_mapping() else spot
     for pos in list_open_trades(ticker):
         pnl_pct = broker.position_pnl_pct(pos, spot=mark_spot)
@@ -295,12 +301,15 @@ def _maybe_enter(
     regime = str((market.regime if market else "") or "")
 
     exec_spot, _ = _resolve_execution_context(signal_spot=spot)
+    if _uses_execution_mapping() and (exec_spot is None or exec_spot <= 0):
+        return {"action": "skipped", "reason": "No live SPY spot for SPX sync", "advice": advice}
+
     exec_strike = (
-        map_execution_strike(signal_strike, signal_spot=spot, execution_spot=exec_spot)
+        map_execution_strike(float(rec["strike"]), signal_spot=spot, execution_spot=exec_spot)
         if _uses_execution_mapping()
-        else signal_strike
+        else float(rec["strike"])
     )
-    exec_map = execution_summary(signal_strike=signal_strike, signal_spot=spot, execution_spot=exec_spot)
+    exec_map = execution_summary(signal_strike=float(rec["strike"]), signal_spot=spot, execution_spot=exec_spot)
 
     exit_profile = build_exit_profile(
         ai_confidence=confidence,

@@ -22,8 +22,8 @@ def test_build_webull_option_symbol_spy():
 
 
 def test_map_execution_strike_spx_to_spy():
-    strike = map_execution_strike(5900.0, signal_spot=5900.0, execution_spot=590.0)
-    assert strike == 590
+    strike = map_execution_strike(5900.0, signal_spot=5900.0, execution_spot=589.41)
+    assert strike == 589
 
 
 def test_build_option_order_payload():

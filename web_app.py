@@ -1499,9 +1499,17 @@ def _previous_spot_from_context(ctx: dict) -> float | None:
 def _resolve_trader_spot(ticker: str, fallback: float | None) -> float | None:
     """Prefer UW websocket spot for high-frequency exit checks."""
     from gex_core.uw_price_stream import get_uw_price_stream
+    from gex_core.trading.config import execution_ticker, signal_ticker
+    from gex_core.trading.execution import record_spot_ratio
 
     live = get_uw_price_stream().get_latest_price(ticker)
     if live and live > 0:
+        sig = signal_ticker().upper()
+        exe = execution_ticker().upper()
+        if ticker.upper() == sig and exe != sig:
+            exec_live = get_uw_price_stream().get_latest_price(exe)
+            if exec_live and exec_live > 0:
+                record_spot_ratio(signal_spot=float(live), execution_spot=float(exec_live))
         return float(live)
     if fallback and fallback > 0:
         return float(fallback)
