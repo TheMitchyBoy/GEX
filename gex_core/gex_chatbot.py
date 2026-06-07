@@ -36,6 +36,9 @@ _CHAT_SYSTEM = (
     "- This is market analysis, not financial advice.\n"
     "- When trade_memory is present in the data bundle, use it to refine predictions and "
     "reference past paper-trade performance.\n"
+    "- When trader_backtest is present, it is a walk-forward simulation using the CURRENT "
+    "live auto-trader parameters (risk %, stops, filters). Cite those numbers when asked "
+    "about backtests or strategy performance.\n"
 )
 
 _MAX_SESSIONS = int(os.environ.get("GEX_CHAT_MAX_SESSIONS", "200"))
@@ -108,7 +111,7 @@ def build_welcome_message(
         f"I have Unusual Whales {exposure} exposure for this snapshot "
         f"(spot {spot_str}, {regime}, net GEX {total_gex:+.2f} Bn$/%, flip {flip_str}).\n\n"
         "Ask me about regime, key levels, predictions, charm/vanna, or trade setups. "
-        "I also learn from paper auto-trader history when available."
+        "Ask me to **backtest** the strategy to simulate current auto-trader settings on history."
     )
 
 
@@ -120,17 +123,20 @@ def _build_system_message(
     exposure: str,
     uw_bundle: dict[str, Any] | None,
     base_analysis,
+    trader_backtest: dict[str, Any] | None = None,
 ) -> str:
     parts = [_CHAT_SYSTEM, f"Current ticker: {ticker}, exposure type: {exposure}, spot: {spot:,.0f}."]
     if uw_bundle:
         parts.append(f"Unusual Whales data bundle:\n{bundle_to_prompt_json(uw_bundle)}")
-    else:
+    elif not trader_backtest:
         parts.append(
             f"Summary (limited data): regime={base_analysis.regime}, "
             f"net GEX={total_gex_bn:+.2f} Bn$/%, bias={base_analysis.bias}, "
             f"flip={base_analysis.gamma_flip}, call wall={base_analysis.call_wall}, "
             f"put wall={base_analysis.put_wall}."
         )
+    if trader_backtest:
+        parts.append(f"Trader walk-forward backtest (current parameters):\n{bundle_to_prompt_json(trader_backtest)}")
     return "\n\n".join(parts)
 
 
@@ -279,6 +285,15 @@ def chat_reply(
             fetch_extras=bool(api_key),
         )
 
+    trader_backtest = None
+    try:
+        from gex_core.trading.backtest_agent import run_agent_backtest, user_wants_backtest
+
+        if user_wants_backtest(user_message):
+            trader_backtest = run_agent_backtest(ticker)
+    except Exception:
+        logger.exception("Agent backtest failed for %s", ticker)
+
     system = _build_system_message(
         ticker=ticker,
         spot=spot,
@@ -286,6 +301,7 @@ def chat_reply(
         exposure=exposure_type,
         uw_bundle=uw_bundle,
         base_analysis=base,
+        trader_backtest=trader_backtest,
     )
 
     prior = session.messages[-_MAX_MESSAGES:]
@@ -300,8 +316,14 @@ def chat_reply(
         if hermes_err:
             llm_errors.append(hermes_err)
     if reply is None:
-        reply = _rule_based_reply(user_message, base, llm_errors=llm_errors)
-        llm_source = "rule_based"
+        if trader_backtest is not None:
+            from gex_core.trading.backtest_agent import format_backtest_reply
+
+            reply = format_backtest_reply(trader_backtest) + _fallback_notice(llm_errors)
+            llm_source = "rule_based"
+        else:
+            reply = _rule_based_reply(user_message, base, llm_errors=llm_errors)
+            llm_source = "rule_based"
 
     with _lock:
         session.messages.append({"role": "user", "content": user_message})
@@ -317,5 +339,6 @@ def chat_reply(
         "llm_error": llm_errors[0] if llm_errors and llm_source == "rule_based" else None,
         "openai_configured": _resolve_openai_config() is not None,
         "uw_data_fed": uw_bundle is not None,
+        "trader_backtest": trader_backtest,
         "messages": list(session.messages),
     }
