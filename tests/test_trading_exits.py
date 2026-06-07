@@ -38,7 +38,7 @@ def test_strong_setup_holds_for_full_target():
     assert reason is None
 
     reason, pnl = evaluate_exit(
-        0.36,
+        0.61,
         state=state,
         bars_held=8,
         entry_spot=5000.0,
@@ -50,10 +50,30 @@ def test_strong_setup_holds_for_full_target():
         magnet_primary=False,
     )
     assert reason == "take_profit"
-    assert pnl == 0.35
+    assert pnl == 0.60
+
+
+def test_max_hold_exits_at_bar_limit(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_HOLD_MINUTES", "30")
+    monkeypatch.setenv("GEX_TRADER_BAR_MINUTES", "2")
+    profile = ExitProfile(hold_for_target=True, full_take_profit=0.60, time_stop_bars=15)
+    state = ExitState()
+    reason, pnl = evaluate_exit(
+        0.12,
+        state=state,
+        bars_held=15,
+        entry_spot=5000.0,
+        strike=5010.0,
+        current_spot=5020.0,
+        option_type="call",
+        profile=profile,
+    )
+    assert reason == "max_hold"
+    assert pnl == 0.12
 
 
 def test_magnet_touch_requires_min_pnl(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
     monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_MIN_PNL_PCT", "0.08")
     profile = ExitProfile(hold_for_target=True, full_take_profit=0.35)
     state = ExitState()

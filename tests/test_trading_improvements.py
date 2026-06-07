@@ -35,6 +35,7 @@ def test_risk_based_sizing_caps_contracts(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_RISK_SIZING", "1")
     monkeypatch.setenv("GEX_TRADER_ACCOUNT_EQUITY", "500")
     monkeypatch.setenv("GEX_TRADER_RISK_PER_TRADE_PCT", "0.02")
+    monkeypatch.setenv("GEX_TRADER_STOP_LOSS_PCT", "0.05")
     qty = resolve_contract_qty(
         confidence=0.9,
         premium=1.35,
@@ -114,8 +115,9 @@ def test_flow_and_gamma_delta_pass(monkeypatch):
     assert result["approve"]
 
 
-def test_magnet_touch_exit_triggers():
-    profile = ExitProfile(full_take_profit=0.35)
+def test_magnet_touch_exit_triggers(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
+    profile = ExitProfile(full_take_profit=0.60)
     state = ExitState()
     reason, pnl = evaluate_exit(
         0.08,
@@ -130,10 +132,11 @@ def test_magnet_touch_exit_triggers():
     assert reason == "magnet_touch"
 
 
-def test_dynamic_take_profit_scales_down():
-    profile = ExitProfile(full_take_profit=0.35)
+def test_dynamic_take_profit_scales_down(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_DYNAMIC_TP", "1")
+    profile = ExitProfile(full_take_profit=0.60)
     tp = resolve_full_take_profit(profile, expected_move_pct=0.005)
-    assert tp < 0.35
+    assert tp < 0.60
     assert tp >= 0.08
 
 

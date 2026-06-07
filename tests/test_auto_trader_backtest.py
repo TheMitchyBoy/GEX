@@ -72,7 +72,9 @@ def test_backtest_insufficient_history():
     assert "Not enough history" in result.get("message", "")
 
 
-def test_backtest_caps_stop_and_take_profit():
+def test_backtest_caps_stop_and_take_profit(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_STOP_LOSS_PCT", "0.05")
+    monkeypatch.setenv("GEX_TRADER_TAKE_PROFIT_PCT", "0.35")
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
         _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
