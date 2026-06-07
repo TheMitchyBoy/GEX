@@ -70,3 +70,25 @@ def test_manual_dispatch_requires_token(monkeypatch):
     assert web_app._manual_dispatch_authorized(_Req(args={"admin_token": "wrong"})) is False
     assert web_app._manual_dispatch_authorized(_Req(args={"admin_token": "s3cret"})) is True
     assert web_app._manual_dispatch_authorized(_Req(headers={"X-Admin-Token": "s3cret"})) is True
+
+
+def test_dispatch_alerts_route_requires_token(monkeypatch):
+    monkeypatch.setenv("GEX_DISABLE_SCHEDULER", "1")
+    import web_app
+
+    client = web_app.APP.test_client()
+    monkeypatch.setenv("GEX_ADMIN_TOKEN", "s3cret")
+    denied = client.post("/ticker/SPX/dispatch-alerts")
+    assert denied.status_code == 403
+
+    monkeypatch.setattr(
+        web_app,
+        "maybe_dispatch_alerts",
+        lambda *_a, **_k: {"ok": True, "message": "sent", "dispatched": True},
+    )
+    ok = client.post(
+        "/ticker/SPX/dispatch-alerts",
+        headers={"X-Admin-Token": "s3cret"},
+    )
+    assert ok.status_code == 200
+    assert ok.get_json()["dispatched"] is True

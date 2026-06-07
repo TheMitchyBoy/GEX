@@ -81,19 +81,42 @@ def test_api_agent_predict_returns_503_without_live_uw(monkeypatch):
     assert "error" in payload
 
 
-def test_force_refresh_failure_with_history_degrades_to_stale(monkeypatch):
-    """A failed forced refresh must not show the hard error when cached data exists."""
+def test_get_force_refresh_query_is_ignored(monkeypatch):
+    """GET force_refresh must not trigger UW fetches (crawler-safe)."""
     import web_app
 
-    monkeypatch.setattr(web_app, "refresh_ticker", lambda *a, **k: False)
-    monkeypatch.setattr(web_app, "refresh_uw_data", lambda *a, **k: None)
+    calls = {"refresh": 0}
+
+    def _fake_refresh(*_a, **_k):
+        calls["refresh"] += 1
+        return False, "error"
+
+    monkeypatch.setattr(web_app, "_run_ticker_refresh", _fake_refresh)
 
     client = web_app.APP.test_client()
     response = client.get("/ticker/SPX/?force_refresh=1")
     assert response.status_code == 200
-    # Soft, reassuring message — not the alarming hard-failure banner.
-    assert b"Showing last saved snapshot" in response.data
-    assert b"check service logs" not in response.data
+    assert calls["refresh"] == 0
+
+
+def test_post_refresh_failure_with_history_degrades_to_stale(monkeypatch):
+    """A failed authorized refresh must not show the hard error when cached data exists."""
+    import web_app
+
+    monkeypatch.setenv("GEX_ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setattr(web_app, "refresh_ticker", lambda *a, **k: False)
+    monkeypatch.setattr(web_app, "refresh_uw_data", lambda *a, **k: None)
+
+    client = web_app.APP.test_client()
+    response = client.post(
+        "/ticker/SPX/refresh",
+        headers={"X-Admin-Token": "test-admin-token"},
+    )
+    assert response.status_code == 302
+    follow = client.get(response.headers["Location"])
+    assert follow.status_code == 200
+    assert b"Showing last saved snapshot" in follow.data
+    assert b"check service logs" not in follow.data
 
 
 def test_classify_uw_error_categories():
@@ -121,9 +144,19 @@ def test_uw_failure_reason_not_configured(monkeypatch):
     assert web_app._uw_failure_reason("SPX") == "not_configured"
 
 
-def test_force_refresh_without_uw_key_skips_fetch(monkeypatch):
+def test_post_refresh_without_token_is_forbidden(monkeypatch):
     import web_app
 
+    monkeypatch.setenv("GEX_ADMIN_TOKEN", "test-admin-token")
+    client = web_app.APP.test_client()
+    response = client.post("/ticker/SPX/refresh")
+    assert response.status_code == 403
+
+
+def test_post_refresh_without_uw_key_skips_fetch(monkeypatch):
+    import web_app
+
+    monkeypatch.setenv("GEX_ADMIN_TOKEN", "test-admin-token")
     monkeypatch.setenv("UW_API_KEY", "")
     monkeypatch.setattr(web_app, "uw_api_configured", lambda: False)
     calls = {"csv": 0, "uw": 0}
@@ -140,11 +173,31 @@ def test_force_refresh_without_uw_key_skips_fetch(monkeypatch):
     monkeypatch.setattr(web_app, "refresh_uw_data", _uw_refresh)
 
     client = web_app.APP.test_client()
-    response = client.get("/ticker/SPX/?force_refresh=1")
+    response = client.post(
+        "/ticker/SPX/refresh",
+        headers={"X-Admin-Token": "test-admin-token"},
+    )
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     assert calls == {"csv": 0, "uw": 0}
-    assert b"last saved snapshot" in response.data or b"Live data isn't configured" in response.data
+    follow = client.get(response.headers["Location"])
+    assert b"last saved snapshot" in follow.data or b"Live data isn't configured" in follow.data
+
+
+def test_live_uw_failure_shows_stale_banner_on_latest_slice(monkeypatch):
+    import web_app
+
+    monkeypatch.setenv("UW_API_KEY", "dummy-key")
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
+    monkeypatch.setattr(web_app, "_uw_live_enabled", lambda: True)
+    monkeypatch.setattr(web_app, "get_uw_data", lambda *_a, **_k: None)
+    monkeypatch.setattr(web_app, "_uw_failure_reason", lambda *_a, **_k: "rate_limited")
+
+    client = web_app.APP.test_client()
+    response = client.get("/ticker/SPX/")
+    assert response.status_code == 200
+    assert b"Showing last saved snapshot" in response.data
+    assert b"rate-limiting" in response.data
 
 
 def test_persistent_banner_when_uw_not_configured(monkeypatch):
