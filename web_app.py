@@ -24,18 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
-from gex_core.calibration import calibrate_confidence
-from gex_core.charts import (
-    make_ai_insights_chart,
-    make_0dte_movement_chart,
-    make_cumulative_gex_chart,
-    make_gex_profile_chart,
-    make_positive_strike_chart,
-    make_prediction_gamma_chart,
-    make_spx_price_chart,
-    make_timeline_chart,
-    safe_float,
-)
+from gex_core.charts import safe_float
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
@@ -52,7 +41,6 @@ from gex_core.periscope_api import (
 )
 from gex_core.exports import EXPORT_DIR
 from gex_core.history import (
-    build_gamma_levels_timeline,
     build_history,
     get_latest_ts,
     list_tickers,
@@ -79,14 +67,12 @@ from gex_core.intelligence import (
     compute_confluence_overlay,
     compute_forecast_probabilities,
     generate_alerts,
-    simulate_spot_scenario,
 )
 from gex_core.predict import (
     apply_flow_to_prediction,
     forecast_blocker_message,
     load_flow_predictions,
     predict_next_snapshot,
-    similar_setups,
 )
 from gex_core.alert_dispatch import maybe_dispatch_alerts
 from gex_core.env_bootstrap import bootstrap_env, parse_env_minutes, uw_api_configured, uw_api_key
@@ -286,49 +272,6 @@ def _prediction_history(ticker: str) -> list[dict]:
     )
 
 
-def _fallback_predicted_strike(selected: dict, prediction: dict):
-    """Scale the current strike profile when KNN neighbors lack per-strike targets."""
-    import pandas as pd
-
-    strike = selected.get("strike")
-    if strike is None or (isinstance(strike, pd.Series) and strike.empty):
-        return None
-    strike = pd.Series(strike, dtype=float)
-    cur_total = safe_float(selected.get("total_gex"), 0.0)
-    delta = safe_float(prediction.get("predicted_delta_gex"), 0.0)
-    if abs(cur_total) < 1e-9:
-        return None
-    return strike * (delta / cur_total)
-
-
-def _build_predicted_strike_chart(
-    prediction: dict | None,
-    *,
-    selected: dict,
-    ticker: str,
-    csv_spot: float | None,
-) -> str | None:
-    if not prediction:
-        return None
-    knn_strike = prediction.get("knn_strike")
-    if knn_strike is None:
-        knn_strike = prediction.get("predicted_strike")
-    flow_strike = prediction.get("flow_strike")
-    combined_strike = prediction.get("predicted_strike")
-    if knn_strike is None and combined_strike is None:
-        knn_strike = _fallback_predicted_strike(selected, prediction)
-        combined_strike = knn_strike
-    if knn_strike is None and combined_strike is None:
-        return None
-    return make_prediction_gamma_chart(
-        knn_strike=knn_strike,
-        combined_strike=combined_strike,
-        flow_strike=flow_strike,
-        ticker=ticker,
-        spot=csv_spot,
-    )
-
-
 def _dashboard_spx_price_context(ticker: str) -> tuple[list[dict], float, str]:
     points, current, source = fetch_spx_price_series_for_dashboard(ticker)
     if current <= 0:
@@ -341,75 +284,6 @@ def _dashboard_spx_price_context(ticker: str) -> tuple[list[dict], float, str]:
                     points = [{"ts": loaded.get("ts_label", latest), "close": current}]
                     source = "snapshots"
     return points, current, source
-
-
-def _previous_same_day_snapshot(history: list, selected: dict) -> dict | None:
-    selected_ts = selected.get("ts")
-    if not selected_ts:
-        return None
-    selected_day = selected_ts[:10]
-    idx = -1
-    for i, row in enumerate(history):
-        if row.get("ts") == selected_ts:
-            idx = i
-            break
-    if idx <= 0:
-        return None
-    for row in reversed(history[:idx]):
-        if str(row.get("ts", ""))[:10] == selected_day:
-            return row
-    return None
-
-
-def _build_0dte_movement_panel(selected: dict, previous: dict | None) -> dict:
-    if not previous:
-        return {
-            "available": False,
-            "message": "Waiting for the next same-day snapshot to measure 0DTE movement.",
-        }
-    import pandas as pd
-
-    current_strike = pd.Series(selected.get("strike"), dtype=float).sort_index()
-    previous_strike = pd.Series(previous.get("strike"), dtype=float).sort_index()
-    if current_strike.empty or previous_strike.empty:
-        return {
-            "available": False,
-            "message": "Strike-level data is unavailable for 0DTE movement.",
-        }
-
-    delta = current_strike.subtract(previous_strike, fill_value=0.0)
-    top_abs = delta.abs().sort_values(ascending=False)
-    top_strike = float(top_abs.index[0]) if not top_abs.empty else None
-    top_delta = float(delta.loc[top_strike]) if top_strike is not None else 0.0
-    spot_delta = safe_float(selected.get("spot"), 0.0) - safe_float(previous.get("spot"), 0.0)
-    elapsed_minutes = None
-    try:
-        elapsed = datetime.strptime(selected["ts"], "%Y-%m-%d_%H%M%S") - datetime.strptime(previous["ts"], "%Y-%m-%d_%H%M%S")
-        elapsed_minutes = max(0, int(elapsed.total_seconds() // 60))
-    except Exception:
-        pass
-
-    return {
-        "available": True,
-        "previous_label": previous.get("ts_label"),
-        "current_label": selected.get("ts_label"),
-        "elapsed_minutes": elapsed_minutes,
-        "net_delta": float(delta.sum()),
-        "gross_delta": float(delta.abs().sum()),
-        "positive_delta": float(delta[delta > 0].sum()),
-        "negative_delta": float(delta[delta < 0].sum()),
-        "top_strike": top_strike,
-        "top_delta": top_delta,
-        "spot_delta": spot_delta,
-    }
-
-
-def _safe_similar_setups(history: list) -> list:
-    try:
-        return similar_setups(history, top_n=5)
-    except Exception:
-        logger.exception("Similar setups lookup failed")
-        return []
 
 
 def _prediction_public_view(prediction: dict | None) -> dict | None:
@@ -463,7 +337,6 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         bootstrap_status = "stale"
 
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
-    _, _, price_source = _dashboard_spx_price_context(ticker)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -472,7 +345,6 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         uw_entry=uw_entry,
         api_key=uw_api_key(),
     )
-    price_points = ctx.get("price_points") or []
     timeline = ctx.get("timeline") or {}
 
     selected = ctx.get("selected") or {}
@@ -635,366 +507,6 @@ def ticker_page(ticker):
     if not is_supported_ticker(ticker):
         return _spx_redirect()
     return _render_periscope_dashboard(ticker)
-
-
-@APP.route("/legacy/ticker/<ticker>")
-@APP.route("/legacy/ticker/<ticker>/")
-def legacy_ticker_page(ticker):
-    """Legacy full gamma dashboard (preserved for deep analysis)."""
-    ticker = ticker.upper()
-    if not is_supported_ticker(ticker):
-        return _spx_redirect()
-    bootstrap_status = request.args.get("bootstrap")
-    force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
-    force_refresh_failed = False
-    refresh_message = None
-    if force_refresh:
-        refreshed_csv = False
-        refreshed_live = False
-        if not uw_api_configured():
-            logger.warning("Forced refresh skipped for %s — UW_API_KEY is not configured", ticker)
-        else:
-            try:
-                refreshed_csv = refresh_ticker(ticker, force=True)
-            except Exception:
-                logger.exception("Force CSV refresh failed for %s", ticker)
-            try:
-                refreshed_live = refresh_uw_data(ticker, force=True) is not None
-            except Exception:
-                logger.exception("Force UW refresh failed for %s", ticker)
-        if refreshed_csv or refreshed_live:
-            bootstrap_status = "ok"
-        else:
-            # Distinguish "no data at all" (hard failure) from "couldn't fetch
-            # fresh data but a cached snapshot exists" (soft, stale). The latter
-            # is downgraded once we confirm history is available below.
-            force_refresh_failed = True
-            reason = _uw_failure_reason(ticker)
-            refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
-            logger.warning("Forced refresh failed for %s (reason=%s)", ticker, reason)
-            bootstrap_status = "failed"
-
-    history = _dashboard_history(ticker)
-
-    if force_refresh_failed and history:
-        bootstrap_status = "stale"
-
-    if not history:
-        selected = {
-            "ts_label": "No snapshot history available yet",
-            "regime": "N/A",
-            "total_gex": 0.0,
-            "pos_gex": 0.0,
-            "neg_gex": 0.0,
-            "call_wall": None,
-            "put_wall": None,
-            "gamma_flip": None,
-            "spot": None,
-            "near_term_ratio": 0.0,
-        }
-        uw_entry = get_uw_data(ticker)
-        profile_json = None
-        current_strike_chart_json = None
-        if uw_entry and uw_entry.get("agg") is not None:
-            uw_agg = uw_entry["agg"]
-            selected.update(
-                {
-                    "regime": "LONG gamma" if uw_agg.total_gex_bn >= 0 else "SHORT gamma",
-                    "total_gex": float(uw_agg.total_gex_bn),
-                    "pos_gex": float(uw_agg.gex_by_strike[uw_agg.gex_by_strike > 0].sum()),
-                    "neg_gex": float(uw_agg.gex_by_strike[uw_agg.gex_by_strike < 0].sum()),
-                    "call_wall": float(uw_agg.gex_by_strike.idxmax()) if len(uw_agg.gex_by_strike) else None,
-                    "put_wall": float(uw_agg.gex_by_strike.idxmin()) if len(uw_agg.gex_by_strike) else None,
-                    "gamma_flip": uw_entry.get("gamma_flip"),
-                    "spot": uw_entry.get("spot"),
-                    "near_term_ratio": 0.0,
-                }
-            )
-            profile_json = make_gex_profile_chart(
-                uw_agg.gex_by_strike,
-                ticker,
-                spot=uw_entry.get("spot"),
-                title="Gamma Exposure Map (UW Live)",
-                cumulative_series=uw_agg.cumulative_gex,
-                gamma_flip=uw_entry.get("gamma_flip"),
-                call_wall=selected.get("call_wall"),
-                put_wall=selected.get("put_wall"),
-            )
-            current_strike_chart_json = make_positive_strike_chart(
-                uw_agg.gex_by_strike,
-                ticker,
-                "Current Position Focus (Positive GEX)",
-                spot=uw_entry.get("spot") if uw_entry else None,
-            )
-
-        spx_price_points, spx_current_price, spx_price_source = _dashboard_spx_price_context(ticker)
-        if spx_current_price <= 0 and uw_entry and uw_entry.get("spot"):
-            spx_current_price = float(uw_entry["spot"])
-        return render_template(
-            "ticker.html",
-            ticker=ticker,
-            profile_json=profile_json,
-            selected=selected,
-            prediction=None,
-            has_history=False,
-            bootstrap_status=bootstrap_status,
-            refresh_message=refresh_message,
-            latest_ts=None,
-            refresh_minutes=REFRESH_MINUTES,
-            current_strike_chart_json=current_strike_chart_json,
-            zero_dte_movement_chart_json=None,
-            zero_dte_movement=None,
-            predicted_strike_chart_json=None,
-            uw_fetched_at=uw_entry["fetched_at"] if uw_entry else None,
-            uw_profile_json=None,
-            spx_price_chart_json=make_spx_price_chart(
-                spx_price_points,
-                ticker=ticker,
-                price_source=spx_price_source,
-            ),
-            spx_current_price=spx_current_price or None,
-            timestamps=[],
-            selected_ts=None,
-            timeline_chart_json=None,
-            cumulative_chart_json=None,
-            similar_setups=[],
-            flow_overlay=None,
-            data_source="Unusual Whales (live)" if uw_entry else "No data",
-            spot_distance_to_flip=None,
-            ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
-            today_regime=build_today_regime_snapshot(selected, None),
-            gamma_analysis=build_gamma_analysis_panel(selected),
-            alert_feed=[],
-            forecast_probs=None,
-            confluence_overlay=compute_confluence_overlay(selected, None, None),
-            strategy_notes=build_strategy_assistant(selected, None, None),
-            data_quality=build_data_quality_panel(selected, history),
-            outcome_panel=None,
-            term_structure=build_term_structure_panel(selected),
-            model_accountability=build_model_accountability_panel(ticker, None, {}),
-            scenario=None,
-            scenario_pct=0.0,
-            replay_index=0,
-            prev_ts=None,
-            next_ts=None,
-            alert_dispatch_status=None,
-            system_status=build_system_status(ticker),
-        )
-
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
-    uw_spot = uw_entry["spot"] if uw_entry else None
-    uw_agg = uw_entry["agg"] if uw_entry else None
-    uw_fetched_at = uw_entry["fetched_at"] if uw_entry else None
-
-    requested_ts = request.args.get("ts")
-    selected = _select_snapshot(history, requested_ts, ticker=ticker)
-    prediction_history = _prediction_history(ticker)
-    export_state = summarize_export_state(ticker, forecast_history=prediction_history)
-    timestamps = list_timestamps(ticker)
-    gamma_timeline = build_gamma_levels_timeline(ticker, history=history)
-    replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
-    prev_ts = timestamps[replay_index - 1] if replay_index > 0 else None
-    next_ts = timestamps[replay_index + 1] if replay_index + 1 < len(timestamps) else None
-
-    selected_spot = safe_float(selected.get("spot"), 0.0)
-    csv_spot = selected_spot if selected_spot > 0 else (uw_spot if uw_spot else None)
-
-    spx_price_points, spx_current_price, spx_price_source = _dashboard_spx_price_context(ticker)
-    if spx_current_price <= 0:
-        spx_current_price = safe_float(uw_spot, 0.0) or csv_spot or 0.0
-    spx_price_chart_json = make_spx_price_chart(
-        spx_price_points,
-        history=history if not spx_price_points else None,
-        ticker=ticker,
-        gamma_flip=selected.get("gamma_flip"),
-        call_wall=selected.get("call_wall"),
-        put_wall=selected.get("put_wall"),
-        price_source=spx_price_source,
-    )
-
-    profile_spot = spx_current_price if spx_current_price and spx_current_price > 0 else csv_spot
-    profile_json = make_gex_profile_chart(
-        selected.get("strike"),
-        ticker,
-        spot=profile_spot,
-        title="Gamma Exposure Map (UW CSV)",
-        cumulative_series=selected.get("cumulative"),
-        gamma_flip=selected.get("gamma_flip"),
-        call_wall=selected.get("call_wall"),
-        put_wall=selected.get("put_wall"),
-    )
-    current_profile_series = selected.get("strike")
-    previous_same_day = _previous_same_day_snapshot(history, selected)
-    zero_dte_movement = _build_0dte_movement_panel(selected, previous_same_day)
-    zero_dte_movement_chart_json = make_0dte_movement_chart(
-        selected,
-        previous_same_day,
-        ticker,
-        spot=profile_spot,
-    )
-
-    uw_profile_json = None
-    if uw_agg is not None:
-        uw_profile_json = make_gex_profile_chart(
-            uw_agg.gex_by_strike,
-            ticker,
-            spot=uw_spot,
-            title="Live Gamma Exposure Map · Unusual Whales",
-            cumulative_series=uw_agg.cumulative_gex,
-            gamma_flip=uw_entry.get("gamma_flip"),
-            call_wall=float(uw_agg.gex_by_strike.idxmax()) if len(uw_agg.gex_by_strike) else None,
-            put_wall=float(uw_agg.gex_by_strike.idxmin()) if len(uw_agg.gex_by_strike) else None,
-        )
-
-    prediction = None
-    flow_overlay = None
-    prediction_lookback = prediction_lookback_days(ticker)
-    forecast_blocker = None
-    try:
-        prediction = predict_next_snapshot(prediction_history, lookback_days=prediction_lookback)
-        if prediction is None:
-            forecast_blocker = forecast_blocker_message(
-                prediction_history,
-                lookback_days=prediction_lookback,
-                export_state=export_state,
-            )
-    except Exception:
-        logger.exception("Prediction failed for %s", ticker)
-        forecast_blocker = "Forecast failed with an internal error — check service logs."
-
-    spot_for_flow = csv_spot or selected_spot or 4800.0
-    try:
-        flow_overlay = load_flow_predictions(FLOW_FEED_PATH, spot=float(spot_for_flow))
-        prediction = apply_flow_to_prediction(prediction, flow_overlay)
-    except Exception:
-        logger.exception("Flow overlay failed for %s", ticker)
-
-    backtest: dict = {}
-    try:
-        if not _dashboard_skip_backtest():
-            backtest = backtest_delta_sign_accuracy(ticker, history=history)
-        if prediction and backtest.get("accuracy") is not None:
-            prediction = dict(prediction)
-            prediction["backtest_sign_accuracy"] = backtest["accuracy"]
-            prediction["backtest_n"] = backtest["n"]
-            prediction["backtest_mae_delta"] = backtest.get("mae_delta")
-            prediction["backtest_baseline_momentum_accuracy"] = backtest.get("baseline_momentum_accuracy")
-            prediction["backtest_baseline_accuracy"] = backtest.get("baseline_accuracy")
-            prediction["calibrated_confidence"] = calibrate_confidence(
-                safe_float(prediction.get("confidence"), 0.0),
-                backtest.get("accuracy"),
-                backtest.get("n", 0) or 0,
-            )
-    except Exception:
-        logger.exception("Backtest metrics failed for %s", ticker)
-        backtest = {}
-
-    current_strike_chart_json = make_positive_strike_chart(
-        current_profile_series,
-        ticker,
-        "Current Position Focus (Positive GEX)",
-        spot=profile_spot,
-    )
-    predicted_strike_chart_json = _build_predicted_strike_chart(
-        prediction,
-        selected=selected,
-        ticker=ticker,
-        csv_spot=csv_spot,
-    )
-
-    prediction_raw = prediction
-    prediction = _prediction_public_view(prediction_raw)
-
-    today_regime = build_today_regime_snapshot(selected, prediction_raw)
-    alert_feed = generate_alerts(history, selected, prediction_raw)
-    forecast_probs = compute_forecast_probabilities(selected, prediction_raw, history)
-    confluence_overlay = compute_confluence_overlay(selected, prediction_raw, flow_overlay)
-    strategy_notes = build_strategy_assistant(selected, prediction_raw, confluence_overlay)
-    data_quality = build_data_quality_panel(selected, history)
-    outcome_panel = build_outcome_panel(history, selected.get("ts"))
-    term_structure = build_term_structure_panel(selected, prediction_raw)
-    model_accountability = build_model_accountability_panel(ticker, prediction_raw, backtest)
-
-    scenario_pct = safe_float(request.args.get("scenario_pct"), 0.0)
-    scenario = simulate_spot_scenario(selected, scenario_pct / 100.0) if scenario_pct else None
-
-    # Auto-dispatch runs only from the background scheduler (see
-    # ``_auto_dispatch_alerts``); page renders never trigger webhooks. Manual
-    # dispatch over HTTP requires a valid admin token to prevent unauthenticated
-    # callers (links, crawlers, CSRF) from firing the webhook.
-    alert_dispatch_status = None
-    if request.args.get("dispatch_alerts") == "1":
-        if _manual_dispatch_authorized(request):
-            alert_dispatch_status = maybe_dispatch_alerts(ticker, alert_feed, manual=True)
-        else:
-            alert_dispatch_status = {
-                "ok": False,
-                "message": "Manual dispatch requires a valid admin token (set GEX_ADMIN_TOKEN).",
-                "dispatched": False,
-            }
-
-    system_status = build_system_status(ticker)
-    latest_raw = get_latest_ts(ticker)
-    csv_source = selected.get("data_source") or "unusual_whales"
-    data_source = f"Unusual Whales CSV · {selected['ts_label']} ({csv_source})"
-    if uw_agg is not None:
-        data_source += " · live API"
-    spot_dist = None
-    if selected.get("spot") and selected.get("gamma_flip"):
-        spot_dist = abs(float(selected["spot"]) - float(selected["gamma_flip"]))
-
-    return render_template(
-        "ticker.html",
-        ticker=ticker,
-        profile_json=profile_json,
-        uw_profile_json=uw_profile_json,
-        uw_fetched_at=uw_fetched_at,
-        spx_price_chart_json=spx_price_chart_json,
-        spx_current_price=spx_current_price,
-        selected=selected,
-        timestamps=timestamps,
-        selected_ts=selected.get("ts"),
-        prediction=prediction,
-        latest_ts=ts_label(latest_raw) if latest_raw else None,
-        refresh_minutes=REFRESH_MINUTES,
-        has_history=True,
-        bootstrap_status=bootstrap_status,
-        refresh_message=refresh_message,
-        current_strike_chart_json=current_strike_chart_json,
-        zero_dte_movement_chart_json=zero_dte_movement_chart_json,
-        zero_dte_movement=zero_dte_movement,
-        predicted_strike_chart_json=predicted_strike_chart_json,
-        timeline_chart_json=make_timeline_chart(gamma_timeline or history, ticker),
-        cumulative_chart_json=make_cumulative_gex_chart(
-            selected.get("cumulative"), ticker, gamma_flip=selected.get("gamma_flip"),
-        ),
-        similar_setups=_safe_similar_setups(history),
-        flow_overlay=flow_overlay,
-        data_source=data_source,
-        spot_distance_to_flip=spot_dist,
-        ai_insights_json=make_ai_insights_chart(uw_entry.get("analysis")) if uw_entry else None,
-        today_regime=today_regime,
-        gamma_analysis=build_gamma_analysis_panel(selected, prediction_raw),
-        alert_feed=alert_feed,
-        forecast_probs=forecast_probs,
-        confluence_overlay=confluence_overlay,
-        strategy_notes=strategy_notes,
-        data_quality=data_quality,
-        outcome_panel=outcome_panel,
-        term_structure=term_structure,
-        model_accountability=model_accountability,
-        forecast_blocker=forecast_blocker,
-        forecast_snapshot_count=len(prediction_history),
-        export_timestamp_count=len(timestamps),
-        export_state=export_state,
-        scenario=scenario,
-        scenario_pct=scenario_pct,
-        replay_index=replay_index,
-        prev_ts=prev_ts,
-        next_ts=next_ts,
-        alert_dispatch_status=alert_dispatch_status,
-        system_status=system_status,
-    )
 
 
 @APP.post("/ticker/<ticker>/bootstrap")

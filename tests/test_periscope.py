@@ -9,7 +9,6 @@ from gex_core.periscope import (
     slices_for_date,
 )
 from gex_core.market_exposure_agent import analyze_market_exposure
-from gex_core.periscope_charts import exposure_by_strike_chart, dealer_positions_chart
 
 
 def test_build_periscope_context_from_history():
@@ -93,14 +92,3 @@ def test_build_timeline_navigation_rewind_target():
         assert nav["next_ts"] == "2026-06-05_203000"
         assert nav["selected_date"] == "2026-06-05"
         assert len(slices_for_date(timestamps, "2026-06-05")) == 3
-
-
-def test_periscope_charts_render_json():
-    strikes = pd.Series({5000: 1.0, 5050: -0.5})
-    chart = exposure_by_strike_chart(strikes, spot=5025.0)
-    assert chart is not None
-    assert "data" in chart
-    pos = dealer_positions_chart(
-        {"net_call_delta_bn": 1.0, "net_put_delta_bn": -0.5, "net_call_gex_bn": 2.0, "net_put_gex_bn": -1.0}
-    )
-    assert pos is not None
