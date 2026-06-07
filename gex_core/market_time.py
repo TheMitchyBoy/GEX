@@ -88,6 +88,37 @@ def bars_between_timestamps(entry_ts: str, current_ts: str, *, bar_minutes: floa
     return max(0, int(minutes // bar_minutes))
 
 
+def parse_export_ts_market(ts: str) -> datetime:
+    """Export key instant in the market timezone."""
+    return parse_export_ts_utc(ts).astimezone(MARKET_TZ)
+
+
+def is_trading_weekday(*, now: datetime | None = None) -> bool:
+    """True Mon–Fri in the market timezone."""
+    anchor = (now or datetime.now(MARKET_TZ)).astimezone(MARKET_TZ)
+    return anchor.weekday() < 5
+
+
+def export_ts_is_trading_day(ts: str) -> bool:
+    """True when the export timestamp falls on a weekday (market calendar)."""
+    try:
+        return is_trading_weekday(now=parse_export_ts_market(ts))
+    except (TypeError, ValueError):
+        return False
+
+
+def export_ts_is_trading_session(ts: str) -> bool:
+    """True during weekday regular session hours for an export timestamp."""
+    return is_trader_session_active(now=parse_export_ts_market(ts))
+
+
+def filter_trading_history(history: list[dict], *, session_only: bool = True) -> list[dict]:
+    """Drop weekend snapshots from walk-forward history when session-only trading is enabled."""
+    if not session_only:
+        return list(history)
+    return [row for row in history if export_ts_is_trading_day(str(row.get("ts") or ""))]
+
+
 def is_trader_session_active(*, now: datetime | None = None) -> bool:
     """True during configured US equity session (weekdays, market hours ET)."""
     if os.environ.get("GEX_TRADER_SESSION_ONLY", "1").strip().lower() in {"0", "false", "no", "off"}:
@@ -159,12 +190,14 @@ def export_ts_entry_window_ok(ts: str) -> bool:
     """Entry window check for walk-forward backtests using export timestamps."""
     from gex_core.trading.config import entry_time_filter_enabled
 
+    if not export_ts_is_trading_day(ts):
+        return False
+    local = parse_export_ts_market(ts)
     if not entry_time_filter_enabled():
-        return True
-    local = parse_export_ts_utc(ts).astimezone(MARKET_TZ)
+        return is_trader_session_active(now=local)
     return is_entry_window_active(now=local)
 
 
 def export_ts_eod_flatten(ts: str) -> bool:
-    local = parse_export_ts_utc(ts).astimezone(MARKET_TZ)
+    local = parse_export_ts_market(ts)
     return is_eod_flatten_time(now=local)

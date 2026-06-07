@@ -70,6 +70,8 @@ def main() -> None:
     if result.get("message") and not result.get("total_trades"):
         print(result["message"])
         print(f"snapshots: {result.get('snapshots', 0)}")
+        if result.get("weekend_snapshots_excluded"):
+            print(f"weekend snapshots excluded: {result['weekend_snapshots_excluded']}")
         account = result.get("account")
         if account:
             print(
@@ -93,6 +95,8 @@ def main() -> None:
     print(f"skipped strike distance: {result.get('skipped_strike_distance', 0)}")
     print(f"skipped filters: {result.get('skipped_filters', 0)}")
     print(f"blocked cooldown: {result.get('blocked_cooldown', 0)}")
+    if result.get("weekend_snapshots_excluded"):
+        print(f"weekend snapshots excluded: {result['weekend_snapshots_excluded']}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")
 
     account = result.get("account")

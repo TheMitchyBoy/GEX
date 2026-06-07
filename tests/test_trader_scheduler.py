@@ -40,6 +40,12 @@ def test_is_trader_session_active_closed_after_hours(monkeypatch):
     assert not is_trader_session_active(now=dt)
 
 
+def test_is_trader_session_active_rejects_weekend(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_SESSION_ONLY", "1")
+    dt = datetime(2026, 6, 6, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert not is_trader_session_active(now=dt)
+
+
 def test_is_trader_session_active_can_disable(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_SESSION_ONLY", "0")
     dt = datetime(2026, 6, 5, 20, 0, tzinfo=ZoneInfo("America/New_York"))

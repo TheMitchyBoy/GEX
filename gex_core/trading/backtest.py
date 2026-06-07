@@ -14,6 +14,8 @@ from gex_core.history import _build_history_impl
 from gex_core.market_time import (
     bars_between_timestamps,
     export_ts_eod_flatten,
+    export_ts_is_trading_day,
+    filter_trading_history,
     minutes_between_timestamps,
 )
 from gex_core.trading.advisor import _rule_based_advice
@@ -25,6 +27,7 @@ from gex_core.trading.config import (
     stop_loss_pct,
     take_profit_pct,
     trader_bar_minutes,
+    trader_session_only,
 )
 from gex_core.trading.exits import (
     ExitProfile,
@@ -143,6 +146,7 @@ class BacktestState:
     skipped_filters: int = 0
     blocked_cooldown: int = 0
     skipped_no_execution_spot: int = 0
+    skipped_weekends: int = 0
     strike_cooldown: dict[tuple[float, str], str] = field(default_factory=dict)
     account: AccountLedger | None = None
 
@@ -470,6 +474,10 @@ def _maybe_enter(
     max_open: int,
     min_confidence: float,
 ) -> None:
+    if not export_ts_is_trading_day(ts):
+        state.skipped_weekends += 1
+        return
+
     if len(state.open_positions) >= max_open:
         return
 
@@ -578,6 +586,7 @@ def _summarize(
     state: BacktestState,
     stop_loss: float,
     take_profit: float,
+    weekend_snapshots_excluded: int = 0,
 ) -> dict[str, Any]:
     trades = state.closed_trades
     date_from = str(history[0]["ts"]) if history else None
@@ -597,6 +606,8 @@ def _summarize(
             "skipped_filters": state.skipped_filters,
             "blocked_cooldown": state.blocked_cooldown,
             "skipped_no_execution_spot": state.skipped_no_execution_spot,
+            "skipped_weekends": state.skipped_weekends,
+            "weekend_snapshots_excluded": weekend_snapshots_excluded,
             "message": "No trades triggered in walk-forward window",
             "stop_loss_pct": stop_loss,
             "take_profit_pct": take_profit,
@@ -656,6 +667,8 @@ def _summarize(
         "skipped_filters": state.skipped_filters,
         "blocked_cooldown": state.blocked_cooldown,
         "skipped_no_execution_spot": state.skipped_no_execution_spot,
+        "skipped_weekends": state.skipped_weekends,
+        "weekend_snapshots_excluded": weekend_snapshots_excluded,
         "stop_loss_pct": stop_loss,
         "take_profit_pct": take_profit,
         "execution_ticker": "SPY" if uses_execution_mapping() else ticker,
@@ -726,10 +739,18 @@ def backtest_auto_trader(
             dedupe_identical_strikes=dedupe_identical_strikes,
         )
 
+    raw_len = len(history)
+    weekend_snapshots_excluded = 0
+    if trader_session_only():
+        filtered = filter_trading_history(history, session_only=True)
+        weekend_snapshots_excluded = raw_len - len(filtered)
+        history = filtered
+
     if len(history) < 2:
         return {
             "ticker": ticker,
             "snapshots": len(history),
+            "weekend_snapshots_excluded": weekend_snapshots_excluded,
             "total_trades": 0,
             "message": "Not enough history (need at least 2 snapshots)",
         }
@@ -741,6 +762,11 @@ def backtest_auto_trader(
     for idx in range(1, len(history)):
         row = history[idx]
         prev = history[idx - 1]
+        ts = str(row["ts"])
+        if not export_ts_is_trading_day(ts):
+            state.skipped_weekends += 1
+            continue
+
         spot = safe_float(row.get("spot"), 0.0)
         if spot <= 0:
             continue
@@ -804,6 +830,7 @@ def backtest_auto_trader(
         state=state,
         stop_loss=stop_loss,
         take_profit=take_profit,
+        weekend_snapshots_excluded=weekend_snapshots_excluded,
     )
 
 
