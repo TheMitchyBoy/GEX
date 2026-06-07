@@ -6,7 +6,6 @@ import pandas as pd
 import pytest
 
 from gex_core.market_time import export_ts_entry_window_ok, is_eod_flatten_time
-from gex_core.trading.config import momentum_bars
 from gex_core.trading.exits import ExitProfile, ExitState, evaluate_exit, resolve_full_take_profit
 from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.sizing import resolve_contract_qty
@@ -41,8 +40,28 @@ def test_risk_based_sizing_caps_contracts(monkeypatch):
     assert qty <= 2
 
 
-def test_zero_dte_filter_blocks_low_ratio(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MIN_ZERO_DTE_RATIO", "0.4")
+def test_gamma_delta_filter_blocks_weak_signal(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0.05")
+    signals = {
+        "available": True,
+        "spot": 5000.0,
+        "recommended": {
+            "strike": 5010.0,
+            "option_type": "call",
+            "gamma_delta": 0.02,
+            "score": 1.0,
+            "signal_type": "max_positive_gamma",
+        },
+    }
+    ctx = MarketContext(spot=5000.0, prev_spot=4995.0, spot_history=(4995.0, 5000.0))
+    result = evaluate_entry_filters(signals, market=ctx)
+    assert not result["approve"]
+    assert result["filter"] == "gamma_delta"
+
+
+def test_flow_filter_blocks_misaligned_call(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_REQUIRE_FLOW_ALIGN", "1")
+    monkeypatch.setenv("GEX_TRADER_MIN_FLOW_BUY_RATIO", "0.55")
     signals = {
         "available": True,
         "spot": 5000.0,
@@ -56,18 +75,18 @@ def test_zero_dte_filter_blocks_low_ratio(monkeypatch):
     }
     ctx = MarketContext(
         spot=5000.0,
-        prev_spot=4995.0,
-        zero_dte_ratio=0.2,
+        flow_net_delta_gex_bn=-0.5,
+        flow_buy_ratio=0.40,
         spot_history=(4995.0, 5000.0),
-        export_ts="2026-06-05_143000",
     )
     result = evaluate_entry_filters(signals, market=ctx)
     assert not result["approve"]
-    assert result["filter"] == "zero_dte"
+    assert result["filter"] == "flow"
 
 
-def test_iv_rank_filter_blocks_high_iv(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MAX_IV_RANK", "0.85")
+def test_flow_and_gamma_delta_pass(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0.03")
+    monkeypatch.setenv("GEX_TRADER_REQUIRE_FLOW_ALIGN", "1")
     signals = {
         "available": True,
         "spot": 5000.0,
@@ -81,14 +100,12 @@ def test_iv_rank_filter_blocks_high_iv(monkeypatch):
     }
     ctx = MarketContext(
         spot=5000.0,
-        prev_spot=4995.0,
-        iv_rank=0.92,
+        flow_net_delta_gex_bn=0.5,
+        flow_buy_ratio=0.60,
         spot_history=(4995.0, 5000.0),
-        export_ts="2026-06-05_143000",
     )
     result = evaluate_entry_filters(signals, market=ctx)
-    assert not result["approve"]
-    assert result["filter"] == "iv_rank"
+    assert result["approve"]
 
 
 def test_magnet_touch_exit_triggers():
@@ -114,62 +131,6 @@ def test_dynamic_take_profit_scales_down():
     assert tp >= 0.08
 
 
-def test_multi_bar_momentum_requires_trend(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MOMENTUM_BARS", "2")
-    _ = momentum_bars()
-    signals = {
-        "available": True,
-        "spot": 5000.0,
-        "recommended": {
-            "strike": 5010.0,
-            "option_type": "call",
-            "gamma_delta": 0.2,
-            "score": 1.0,
-            "signal_type": "max_positive_gamma",
-        },
-    }
-    flat_ctx = MarketContext(
-        spot=5000.0,
-        spot_history=(5002.0, 5001.0, 5000.0),
-        regime="LONG gamma",
-        export_ts="2026-06-05_143000",
-    )
-    assert not evaluate_entry_filters(signals, market=flat_ctx)["approve"]
-
-    rising_ctx = MarketContext(
-        spot=5000.0,
-        spot_history=(4996.0, 4998.0, 5000.0),
-        regime="LONG gamma",
-        export_ts="2026-06-05_143000",
-    )
-    assert evaluate_entry_filters(signals, market=rising_ctx)["approve"]
-
-
 def test_entry_window_midday_ok():
     assert export_ts_entry_window_ok("2026-06-05_143000")
 
-
-def test_event_day_size_multiplier(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_BLOCK_EVENTS", "1")
-    monkeypatch.setenv("GEX_TRADER_EVENT_SIZE_MULT", "0.5")
-    signals = {
-        "available": True,
-        "spot": 5000.0,
-        "recommended": {
-            "strike": 5010.0,
-            "option_type": "call",
-            "gamma_delta": 0.2,
-            "score": 1.0,
-            "signal_type": "max_positive_gamma",
-        },
-    }
-    ctx = MarketContext(
-        spot=5000.0,
-        prev_spot=4995.0,
-        is_nfp_day=True,
-        spot_history=(4995.0, 5000.0),
-        export_ts="2026-06-05_143000",
-    )
-    result = evaluate_entry_filters(signals, market=ctx)
-    assert result["approve"]
-    assert result["size_multiplier"] == 0.5

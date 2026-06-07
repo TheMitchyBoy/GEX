@@ -334,9 +334,9 @@ def max_iv_rank() -> float:
 
 def min_magnet_progress_pct() -> float:
     try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_PROGRESS", "0.10")))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_PROGRESS", "0.0")))
     except (TypeError, ValueError):
-        return 0.10
+        return 0.0
 
 
 def momentum_bars() -> int:
@@ -409,7 +409,7 @@ def event_day_size_multiplier() -> float:
 
 
 def prefer_signal_type() -> str:
-    return os.environ.get("GEX_TRADER_PREFER_SIGNAL", "fastest_gamma_increase").strip().lower()
+    return os.environ.get("GEX_TRADER_PREFER_SIGNAL", "").strip().lower()
 
 
 def entry_time_filter_enabled() -> bool:

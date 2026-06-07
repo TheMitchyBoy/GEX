@@ -54,23 +54,23 @@ def test_compute_gamma_signals_blocks_when_max_gamma_declines():
     assert out["skip_reason"] == "gamma_declined"
 
 
-def test_entry_filter_blocks_far_strike(monkeypatch):
+def test_entry_filter_blocks_low_gamma_delta(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "1")
-    monkeypatch.setenv("GEX_TRADER_PREFER_SIGNAL", "")
-    monkeypatch.setenv("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.01")
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0.05")
+    monkeypatch.setenv("GEX_TRADER_REQUIRE_FLOW_ALIGN", "0")
     signals = {
         "available": True,
         "spot": 5000.0,
         "recommended": {
-            "strike": 5100.0,
+            "strike": 5010.0,
             "option_type": "call",
-            "gamma_delta": 0.2,
+            "gamma_delta": 0.02,
             "score": 1.0,
         },
     }
     result = evaluate_entry_filters(signals, market=MarketContext(spot=5000.0, prev_spot=4990.0, regime="LONG gamma"))
     assert not result["approve"]
-    assert result["filter"] == "strike_distance"
+    assert result["filter"] == "gamma_delta"
 
 
 def test_paper_broker_stop_loss_threshold():
