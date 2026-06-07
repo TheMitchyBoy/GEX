@@ -33,7 +33,58 @@ from gex_core.trading.paper_broker import (
     mark_to_market_premium,
     pnl_usd,
 )
+from gex_core.trading.execution import map_execution_strike, resolve_backtest_execution_spot, uses_execution_mapping
 from gex_core.trading.signals import compute_gamma_signals
+
+
+@dataclass
+class AccountLedger:
+    starting_capital: float
+    cash: float
+    peak_equity: float
+    skipped_insufficient_capital: int = 0
+    equity_curve: list[dict[str, float | str]] = field(default_factory=list)
+
+    @classmethod
+    def create(cls, starting_capital: float) -> AccountLedger:
+        return cls(
+            starting_capital=starting_capital,
+            cash=starting_capital,
+            peak_equity=starting_capital,
+        )
+
+    def affordable_qty(self, premium: float, desired: float) -> int:
+        unit_cost = premium * 100.0
+        if unit_cost <= 0:
+            return 0
+        return max(0, min(int(desired), int(self.cash // unit_cost)))
+
+    def debit_entry(self, premium: float, qty: float) -> None:
+        self.cash -= premium * 100.0 * qty
+
+    def credit_exit(self, exit_premium: float, qty: float) -> None:
+        self.cash += exit_premium * 100.0 * qty
+
+    def record_equity(self, ts: str, open_positions: list["_OpenPosition"], mark_spot: float) -> None:
+        mtm = 0.0
+        for pos in open_positions:
+            pnl_pct = _position_pnl(pos, mark_spot)
+            mtm += mark_to_market_premium(pos.entry_premium, pnl_pct) * 100.0 * pos.qty
+        equity = self.cash + mtm
+        self.peak_equity = max(self.peak_equity, equity)
+        self.equity_curve.append({"ts": ts, "equity": round(equity, 2), "cash": round(self.cash, 2)})
+
+    def max_drawdown_pct(self) -> float:
+        if not self.equity_curve:
+            return 0.0
+        peak = self.starting_capital
+        max_dd = 0.0
+        for point in self.equity_curve:
+            equity = float(point["equity"])
+            peak = max(peak, equity)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - equity) / peak)
+        return max_dd
 
 
 @dataclass
@@ -48,6 +99,7 @@ class _OpenPosition:
     signal_gamma: float
     gamma_delta: float
     ai_confidence: float
+    signal_strike: float | None = None
     qty: float = 1.0
     exit_profile: ExitProfile = field(default_factory=ExitProfile)
     exit_state: ExitState = field(default_factory=ExitState)
@@ -68,6 +120,9 @@ class _ClosedTrade:
     pnl_usd: float
     exit_reason: str
     bars_held: int
+    signal_strike: float | None = None
+    qty: float = 1.0
+    equity_after: float | None = None
 
 
 @dataclass
@@ -80,7 +135,36 @@ class BacktestState:
     skipped_strike_distance: int = 0
     skipped_filters: int = 0
     blocked_cooldown: int = 0
+    skipped_no_execution_spot: int = 0
     strike_cooldown: dict[tuple[float, str], int] = field(default_factory=dict)
+    account: AccountLedger | None = None
+
+
+def _mark_spot(signal_spot: float) -> float | None:
+    if signal_spot <= 0:
+        return None
+    if uses_execution_mapping():
+        return resolve_backtest_execution_spot(signal_spot=signal_spot)
+    return signal_spot
+
+
+def _resolve_trade_context(
+    *,
+    signal_strike: float,
+    signal_spot: float,
+) -> tuple[float, float, float] | None:
+    """Return (execution_strike, execution_spot, signal_strike) or None if spot unavailable."""
+    exec_spot = _mark_spot(signal_spot)
+    if exec_spot is None or exec_spot <= 0:
+        return None
+    if uses_execution_mapping():
+        exec_strike = map_execution_strike(
+            signal_strike,
+            signal_spot=signal_spot,
+            execution_spot=exec_spot,
+        )
+        return exec_strike, exec_spot, signal_strike
+    return signal_strike, exec_spot, signal_strike
 
 
 def _has_open_duplicate(positions: list[_OpenPosition], *, strike: float, option_type: str) -> bool:
@@ -141,10 +225,15 @@ def _close_position(
     pnl_pct: float,
     exit_reason: str,
     closed: list[_ClosedTrade],
+    state: BacktestState | None = None,
     qty: float | None = None,
 ) -> None:
     trade_qty = pos.qty if qty is None else qty
     exit_premium = mark_to_market_premium(pos.entry_premium, pnl_pct)
+    equity_after = None
+    if state and state.account:
+        state.account.credit_exit(exit_premium, trade_qty)
+        equity_after = state.account.cash
     closed.append(
         _ClosedTrade(
             entry_ts=pos.entry_ts,
@@ -160,6 +249,9 @@ def _close_position(
             pnl_usd=pnl_usd(pos.entry_premium, exit_premium, trade_qty),
             exit_reason=exit_reason,
             bars_held=exit_idx - pos.entry_idx,
+            signal_strike=pos.signal_strike,
+            qty=trade_qty,
+            equity_after=equity_after,
         )
     )
 
@@ -169,11 +261,14 @@ def _check_exits(
     *,
     idx: int,
     ts: str,
-    spot: float,
+    signal_spot: float,
 ) -> None:
+    mark_spot = _mark_spot(signal_spot)
+    if mark_spot is None or mark_spot <= 0:
+        return
     remaining: list[_OpenPosition] = []
     for pos in state.open_positions:
-        pnl_pct = _position_pnl(pos, spot)
+        pnl_pct = _position_pnl(pos, mark_spot)
         bars_held = idx - pos.entry_idx
         exit_reason, exit_pnl = evaluate_exit(
             pnl_pct,
@@ -181,7 +276,7 @@ def _check_exits(
             bars_held=bars_held,
             entry_spot=pos.entry_spot,
             strike=pos.strike,
-            current_spot=spot,
+            current_spot=mark_spot,
             option_type=pos.option_type,
             profile=pos.exit_profile,
         )
@@ -190,18 +285,21 @@ def _check_exits(
                 pos,
                 exit_idx=idx,
                 exit_ts=ts,
-                exit_spot=spot,
+                exit_spot=mark_spot,
                 pnl_pct=exit_pnl,
                 exit_reason=exit_reason,
                 closed=state.closed_trades,
+                state=state,
                 qty=pos.qty,
             )
             if exit_reason == "stop_loss":
-                key = (pos.strike, pos.option_type.lower())
+                key = (pos.signal_strike or pos.strike, pos.option_type.lower())
                 state.strike_cooldown[key] = idx + stop_cooldown_bars()
         else:
             remaining.append(pos)
     state.open_positions = remaining
+    if state.account:
+        state.account.record_equity(ts, state.open_positions, mark_spot)
 
 
 def _maybe_enter(
@@ -242,57 +340,78 @@ def _maybe_enter(
 
     rec = signals["recommended"]
     option_type = str(advice.get("option_type") or rec["option_type"])
-    strike = float(rec["strike"])
-    cooldown_key = (strike, option_type.lower())
+    signal_strike = float(rec["strike"])
+    trade_ctx = _resolve_trade_context(signal_strike=signal_strike, signal_spot=spot)
+    if trade_ctx is None:
+        state.skipped_no_execution_spot += 1
+        return
+    exec_strike, exec_spot, _ = trade_ctx
+    cooldown_key = (signal_strike, option_type.lower())
     if state.strike_cooldown.get(cooldown_key, 0) > idx:
         state.blocked_cooldown += 1
         return
-    if _has_open_duplicate(state.open_positions, strike=strike, option_type=option_type):
+    if _has_open_duplicate(state.open_positions, strike=exec_strike, option_type=option_type):
         state.blocked_duplicate += 1
         return
 
     confidence = float(advice.get("confidence", 0.5))
-    qty = contracts_for_confidence(confidence)
+    desired_qty = contracts_for_confidence(confidence)
+    premium = estimate_entry_premium(exec_spot, exec_strike)
+    qty = desired_qty
+    if state.account:
+        qty = float(state.account.affordable_qty(premium, desired_qty))
+        if qty < 1:
+            state.account.skipped_insufficient_capital += 1
+            return
+        state.account.debit_entry(premium, qty)
+
     regime = str(row.get("regime") or "")
     profile = build_exit_profile(
         ai_confidence=confidence,
         gamma_delta=float(rec["gamma_delta"]),
         regime=regime,
-        entry_spot=spot,
-        strike=strike,
+        entry_spot=exec_spot,
+        strike=exec_strike,
     )
-    premium = estimate_entry_premium(spot, strike)
     state.open_positions.append(
         _OpenPosition(
             entry_idx=idx,
             entry_ts=ts,
             option_type=str(option_type),
-            strike=strike,
-            entry_spot=spot,
+            strike=exec_strike,
+            entry_spot=exec_spot,
             entry_premium=premium,
             signal_type=str(rec["signal_type"]),
             signal_gamma=float(rec["gamma_bn"]),
             gamma_delta=float(rec["gamma_delta"]),
             ai_confidence=confidence,
+            signal_strike=signal_strike if uses_execution_mapping() else None,
             qty=qty,
             exit_profile=profile,
         )
     )
+    if state.account:
+        state.account.record_equity(ts, state.open_positions, exec_spot)
 
 
 def _summarize(
     ticker: str,
     *,
     history_len: int,
+    history: list[dict],
     state: BacktestState,
     stop_loss: float,
     take_profit: float,
 ) -> dict[str, Any]:
     trades = state.closed_trades
+    date_from = str(history[0]["ts"]) if history else None
+    date_to = str(history[-1]["ts"]) if history else None
     if not trades:
-        return {
+        result = {
             "ticker": ticker,
             "snapshots": history_len,
+            "date_from": date_from,
+            "date_to": date_to,
             "total_trades": 0,
             "open_at_end": len(state.open_positions),
             "skipped_entries": state.skipped_entries,
@@ -301,10 +420,20 @@ def _summarize(
             "skipped_strike_distance": state.skipped_strike_distance,
             "skipped_filters": state.skipped_filters,
             "blocked_cooldown": state.blocked_cooldown,
+            "skipped_no_execution_spot": state.skipped_no_execution_spot,
             "message": "No trades triggered in walk-forward window",
             "stop_loss_pct": stop_loss,
             "take_profit_pct": take_profit,
         }
+        if state.account:
+            result["account"] = {
+                "starting_capital": state.account.starting_capital,
+                "ending_capital": round(state.account.cash, 2),
+                "return_pct": 0.0,
+                "max_drawdown_pct": 0.0,
+                "skipped_insufficient_capital": state.account.skipped_insufficient_capital,
+            }
+        return result
 
     wins = sum(1 for t in trades if t.pnl_pct > 0)
     by_signal: dict[str, dict[str, Any]] = {}
@@ -332,6 +461,8 @@ def _summarize(
     return {
         "ticker": ticker,
         "snapshots": history_len,
+        "date_from": date_from,
+        "date_to": date_to,
         "total_trades": len(trades),
         "wins": wins,
         "losses": len(trades) - wins,
@@ -348,8 +479,10 @@ def _summarize(
         "skipped_strike_distance": state.skipped_strike_distance,
         "skipped_filters": state.skipped_filters,
         "blocked_cooldown": state.blocked_cooldown,
+        "skipped_no_execution_spot": state.skipped_no_execution_spot,
         "stop_loss_pct": stop_loss,
         "take_profit_pct": take_profit,
+        "execution_ticker": "SPY" if uses_execution_mapping() else ticker,
         "trades": [
             {
                 "entry_ts": t.entry_ts,
@@ -357,13 +490,33 @@ def _summarize(
                 "signal_type": t.signal_type,
                 "option_type": t.option_type,
                 "strike": t.strike,
+                "signal_strike": t.signal_strike,
+                "qty": t.qty,
                 "pnl_pct": round(t.pnl_pct, 4),
                 "pnl_usd": round(t.pnl_usd, 2),
                 "exit_reason": t.exit_reason,
                 "bars_held": t.bars_held,
+                "equity_after": round(t.equity_after, 2) if t.equity_after is not None else None,
             }
             for t in trades
         ],
+        **(
+            {
+                "account": {
+                    "starting_capital": state.account.starting_capital,
+                    "ending_capital": round(state.account.cash, 2),
+                    "return_pct": round(
+                        (state.account.cash - state.account.starting_capital) / state.account.starting_capital,
+                        4,
+                    ),
+                    "max_drawdown_pct": round(state.account.max_drawdown_pct(), 4),
+                    "skipped_insufficient_capital": state.account.skipped_insufficient_capital,
+                    "equity_curve": state.account.equity_curve,
+                }
+            }
+            if state.account
+            else {}
+        ),
     }
 
 
@@ -378,6 +531,7 @@ def backtest_auto_trader(
     take_profit: float | None = None,
     max_open: int | None = None,
     min_confidence: float | None = None,
+    starting_capital: float | None = None,
     history: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Simulate auto-trader entries/exits over export snapshot history."""
@@ -405,6 +559,9 @@ def backtest_auto_trader(
         }
 
     state = BacktestState()
+    if starting_capital is not None and starting_capital > 0:
+        state.account = AccountLedger.create(float(starting_capital))
+
     for idx in range(1, len(history)):
         row = history[idx]
         prev = history[idx - 1]
@@ -412,7 +569,7 @@ def backtest_auto_trader(
         if spot <= 0:
             continue
 
-        _check_exits(state, idx=idx, ts=str(row["ts"]), spot=spot)
+        _check_exits(state, idx=idx, ts=str(row["ts"]), signal_spot=spot)
         _maybe_enter(
             state,
             idx=idx,
@@ -425,9 +582,10 @@ def backtest_auto_trader(
 
     if state.open_positions:
         last = history[-1]
-        last_spot = safe_float(last.get("spot"), 0.0)
+        last_signal_spot = safe_float(last.get("spot"), 0.0)
         last_idx = len(history) - 1
-        if last_spot > 0:
+        last_spot = _mark_spot(last_signal_spot)
+        if last_spot and last_spot > 0:
             for pos in list(state.open_positions):
                 pnl_pct = _position_pnl(pos, last_spot)
                 _close_position(
@@ -438,13 +596,17 @@ def backtest_auto_trader(
                     pnl_pct=pnl_pct,
                     exit_reason="backtest_end",
                     closed=state.closed_trades,
+                    state=state,
                     qty=pos.qty,
                 )
             state.open_positions.clear()
+            if state.account:
+                state.account.record_equity(str(last["ts"]), state.open_positions, last_spot)
 
     return _summarize(
         ticker,
         history_len=len(history),
+        history=history,
         state=state,
         stop_loss=stop_loss,
         take_profit=take_profit,
@@ -534,6 +696,7 @@ def backtest_auto_trader_bootstrap(
     take_profit: float | None = None,
     max_open: int | None = None,
     min_confidence: float | None = None,
+    starting_capital: float | None = None,
     max_synthetic_snapshots: int = 400_000,
 ) -> dict[str, Any]:
     """Bootstrap export history until at least ``target_trades`` close."""
@@ -563,6 +726,7 @@ def backtest_auto_trader_bootstrap(
             take_profit=take_profit,
             max_open=max_open,
             min_confidence=min_confidence,
+            starting_capital=starting_capital,
         )
         result["bootstrap"] = True
         result["base_snapshots"] = len(base)

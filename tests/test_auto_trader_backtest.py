@@ -115,3 +115,29 @@ def test_backtest_skips_gamma_decline_entries():
     )
     assert result["total_trades"] == 0
     assert result["skipped_gamma_decline"] >= 1
+
+
+def test_backtest_account_starting_capital(monkeypatch):
+    monkeypatch.setenv("GEX_SIGNAL_TICKER", "SPX")
+    monkeypatch.setenv("GEX_EXECUTION_TICKER", "SPY")
+    history = [
+        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
+        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_102000", 5050.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+    ]
+    result = backtest_auto_trader(
+        "SPX",
+        history=history,
+        min_confidence=0.4,
+        stop_loss=0.05,
+        take_profit=0.10,
+        max_open=1,
+        starting_capital=500.0,
+    )
+    account = result.get("account")
+    assert account is not None
+    assert account["starting_capital"] == 500.0
+    assert account["ending_capital"] > 0
+    if result["total_trades"]:
+        assert result["trades"][0]["strike"] < 600
+        assert result["execution_ticker"] == "SPY"

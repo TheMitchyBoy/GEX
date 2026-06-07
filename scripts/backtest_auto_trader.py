@@ -29,6 +29,7 @@ def main() -> None:
     parser.add_argument("--take-profit", type=float, default=None)
     parser.add_argument("--min-confidence", type=float, default=None)
     parser.add_argument("--target-trades", type=int, default=0, help="Bootstrap until N trades (e.g. 1000)")
+    parser.add_argument("--starting-capital", type=float, default=None, help="Simulate account equity (e.g. 500)")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -43,6 +44,7 @@ def main() -> None:
             stop_loss=args.stop_loss,
             take_profit=args.take_profit,
             min_confidence=args.min_confidence,
+            starting_capital=args.starting_capital,
         )
     else:
         result = backtest_auto_trader(
@@ -53,6 +55,7 @@ def main() -> None:
             stop_loss=args.stop_loss,
             take_profit=args.take_profit,
             min_confidence=args.min_confidence,
+            starting_capital=args.starting_capital,
         )
 
     if args.json:
@@ -60,9 +63,19 @@ def main() -> None:
         return
 
     print(f"\n=== Auto-trader backtest: {result.get('ticker', args.ticker.upper())} ===")
+    if result.get("date_from") and result.get("date_to"):
+        print(f"window: {result['date_from']} -> {result['date_to']}")
+    if result.get("execution_ticker"):
+        print(f"execution: {result['execution_ticker']} (gamma signals on {result.get('ticker', args.ticker.upper())})")
     if result.get("message") and not result.get("total_trades"):
         print(result["message"])
         print(f"snapshots: {result.get('snapshots', 0)}")
+        account = result.get("account")
+        if account:
+            print(
+                f"account: ${account['starting_capital']:,.2f} -> ${account['ending_capital']:,.2f} "
+                f"({account['return_pct']:+.1%})"
+            )
         return
 
     print(f"snapshots: {result['snapshots']}")
@@ -82,6 +95,16 @@ def main() -> None:
     print(f"blocked cooldown: {result.get('blocked_cooldown', 0)}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")
 
+    account = result.get("account")
+    if account:
+        print("\nAccount simulation:")
+        print(f"  starting: ${account['starting_capital']:,.2f}")
+        print(f"  ending:   ${account['ending_capital']:,.2f}")
+        print(f"  return:   {account['return_pct']:+.1%}")
+        print(f"  max drawdown: {account['max_drawdown_pct']:.1%}")
+        if account.get("skipped_insufficient_capital"):
+            print(f"  skipped (insufficient capital): {account['skipped_insufficient_capital']}")
+
     print("\nBy signal type:")
     for sig, stats in sorted((result.get("by_signal") or {}).items()):
         print(
@@ -98,10 +121,16 @@ def main() -> None:
     if trades:
         print("\nRecent trades (last 10):")
         for t in trades[-10:]:
+            strike_label = f"{t['strike']:.2f}"
+            if t.get("signal_strike"):
+                strike_label = f"SPY {t['strike']:.2f} (SPX {t['signal_strike']:.0f})"
+            qty = t.get("qty", 1)
+            equity = t.get("equity_after")
+            equity_suffix = f" | bal ${equity:,.2f}" if equity is not None else ""
             print(
                 f"  {t['entry_ts']} -> {t['exit_ts']} | {t['signal_type']} "
-                f"{t['option_type']} {t['strike']:.0f} | {_fmt_pct(t['pnl_pct'])} "
-                f"(${t['pnl_usd']:,.2f}) [{t['exit_reason']}]"
+                f"{t['option_type']} {strike_label} x{qty:g} | {_fmt_pct(t['pnl_pct'])} "
+                f"(${t['pnl_usd']:,.2f}) [{t['exit_reason']}]{equity_suffix}"
             )
 
 

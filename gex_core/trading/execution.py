@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime
 
@@ -128,6 +129,29 @@ def execution_summary(*, signal_strike: float, signal_spot: float, execution_spo
         "execution_spot": float(execution_spot),
         "spot_ratio": float(ratio),
     }
+
+
+def backtest_spot_ratio() -> float:
+    """Default execution/signal spot ratio when live quotes are unavailable (SPY/SPX)."""
+    try:
+        return float(os.environ.get("GEX_BACKTEST_SPOT_RATIO", "0.09989"))
+    except (TypeError, ValueError):
+        return 0.09989
+
+
+def resolve_backtest_execution_spot(*, signal_spot: float) -> float | None:
+    """Historical execution spot from signal spot for walk-forward backtests."""
+    exec_sym = execution_ticker().upper()
+    sig_sym = signal_ticker().upper()
+    if signal_spot <= 0:
+        return None
+    if exec_sym == sig_sym:
+        return float(signal_spot)
+    return round(float(signal_spot) * backtest_spot_ratio(), 4)
+
+
+def uses_execution_mapping() -> bool:
+    return execution_ticker().upper() != signal_ticker().upper()
 
 
 def sync_execution_context(*, signal_spot: float) -> dict[str, float | str | None]:
