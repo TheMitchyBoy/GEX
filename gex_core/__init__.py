@@ -14,7 +14,7 @@ Layers (bottom to top):
 from gex_core.ai_analyst import GammaAnalysis, GammaSignal, analyze_dealer_gamma
 from gex_core.data_quality import DataQualityConfig, DataQualityReport, clean_option_data
 from gex_core.uw_loader import fetch_uw_gex, fetch_uw_greek_exposure, fetch_uw_spot
-from gex_core.decompose import GexDecomposition, decompose_gex, decompose_from_snapshots
+from gex_core.decompose import GexDecomposition, decompose_from_snapshots
 from gex_core.exports import (
     EXPORT_DIR,
     find_exports_for_ticker,
@@ -27,12 +27,7 @@ from gex_core.features import (
     estimate_gamma_flip,
     extract_surface_vector,
 )
-from gex_core.pipeline import (
-    GexAggregates,
-    aggregate_gex,
-    attach_signed_gex,
-    parse_payload,
-)
+from gex_core.pipeline import GexAggregates
 from gex_core.predict import (
     apply_flow_to_prediction,
     load_flow_predictions,
@@ -59,9 +54,7 @@ __all__ = [
     "GexAggregates",
     "GexDecomposition",
     "apply_flow_to_prediction",
-    "aggregate_gex",
     "attach_market_features",
-    "attach_signed_gex",
     "attribute_last_move",
     "calibrate_confidence",
     "classify_regime",
@@ -74,7 +67,6 @@ __all__ = [
     "clean_option_data",
     "compute_features_from_exports",
     "decompose_from_snapshots",
-    "decompose_gex",
     "enrich_snapshot_metrics",
     "estimate_gamma_flip",
     "extract_surface_vector",
@@ -84,7 +76,6 @@ __all__ = [
     "fetch_uw_spot",
     "load_flow_predictions",
     "load_strike_series",
-    "parse_payload",
     "parse_timestamp",
     "predict_next_snapshot",
     "similar_setups",
