@@ -162,14 +162,14 @@ def min_ai_confidence() -> float:
 
 def min_gamma_delta() -> float:
     try:
-        return float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0.05"))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0")))
     except (TypeError, ValueError):
-        return 0.05
+        return 0.0
 
 
 def min_fastest_gamma_delta() -> float:
     try:
-        return float(os.environ.get("GEX_TRADER_MIN_FASTEST_GAMMA_DELTA", "0.10"))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_FASTEST_GAMMA_DELTA", "0.10")))
     except (TypeError, ValueError):
         return 0.10
 
@@ -315,9 +315,9 @@ def use_risk_based_sizing() -> bool:
 
 def min_zero_dte_ratio() -> float:
     try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_ZERO_DTE_RATIO", "0.4")))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_ZERO_DTE_RATIO", "0")))
     except (TypeError, ValueError):
-        return 0.4
+        return 0.0
 
 
 def require_gamma_flip_side() -> bool:
@@ -326,9 +326,9 @@ def require_gamma_flip_side() -> bool:
 
 def max_iv_rank() -> float:
     try:
-        return float(os.environ.get("GEX_TRADER_MAX_IV_RANK", "0.85"))
+        return float(os.environ.get("GEX_TRADER_MAX_IV_RANK", "1.0"))
     except (TypeError, ValueError):
-        return 0.85
+        return 1.0
 
 
 def min_magnet_progress_pct() -> float:
@@ -412,4 +412,4 @@ def prefer_signal_type() -> str:
 
 
 def entry_time_filter_enabled() -> bool:
-    return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")
+    return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "0")

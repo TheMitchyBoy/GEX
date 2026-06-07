@@ -9,6 +9,7 @@ from gex_core.features import safe_float
 from gex_core.market_time import export_ts_entry_window_ok, is_entry_window_active
 from gex_core.trading.config import (
     block_event_days,
+    entry_time_filter_enabled,
     event_day_size_multiplier,
     max_iv_rank,
     max_strike_distance_pct,
@@ -203,7 +204,7 @@ def evaluate_entry_filters(
             "size_multiplier": 0.0,
         }
 
-    if gamma_delta < min_gamma_delta():
+    if min_gamma_delta() > 0 and gamma_delta < min_gamma_delta():
         return {
             "approve": False,
             "reason": f"Gamma delta {gamma_delta:+.3f} below minimum {min_gamma_delta():+.3f}",
@@ -211,18 +212,9 @@ def evaluate_entry_filters(
             "size_multiplier": 0.0,
         }
 
-    if selection_reason == "max_positive_gamma_declined":
-        if signal_type != "fastest_gamma_increase":
-            return {
-                "approve": False,
-                "reason": "Max positive gamma declined — only fastest-increase entries allowed via signal layer",
-                "filter": "selection_reason",
-                "size_multiplier": 0.0,
-            }
-
     market = market or MarketContext(spot=spot)
 
-    if not _entry_time_ok(market):
+    if entry_time_filter_enabled() and not _entry_time_ok(market):
         return {
             "approve": False,
             "reason": "Outside entry time window (open chop / close decay)",
@@ -239,7 +231,7 @@ def evaluate_entry_filters(
             "size_multiplier": 0.0,
         }
 
-    if market.iv_rank is not None and market.iv_rank > max_iv_rank():
+    if max_iv_rank() < 1.0 and market.iv_rank is not None and market.iv_rank > max_iv_rank():
         return {
             "approve": False,
             "reason": f"IV rank {market.iv_rank:.2f} above maximum {max_iv_rank():.2f}",

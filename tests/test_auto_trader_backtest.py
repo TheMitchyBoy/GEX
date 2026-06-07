@@ -101,7 +101,7 @@ def test_backtest_blocks_duplicate_strike_entries():
     assert len({t["strike"] for t in result["trades"]}) == 1
 
 
-def test_backtest_skips_gamma_decline_entries():
+def test_backtest_enters_on_magnet_without_gamma_rise():
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
         _snapshot("2026-06-01_101000", 5000.0, {4990: 0.1, 5000: 0.3, 5010: 1.0}),
@@ -113,8 +113,8 @@ def test_backtest_skips_gamma_decline_entries():
         min_confidence=0.4,
         max_open=1,
     )
-    assert result["total_trades"] == 0
-    assert result["skipped_gamma_decline"] >= 1
+    assert result["total_trades"] >= 1
+    assert result["skipped_gamma_decline"] == 0
 def test_backtest_skips_exits_across_snapshot_gaps():
     history = [
         _snapshot("2026-06-01_093000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),

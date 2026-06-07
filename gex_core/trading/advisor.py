@@ -74,7 +74,10 @@ def _rule_based_advice(
                 "size_multiplier": float(filter_result.get("size_multiplier") or 1.0),
             }
 
-    approve = confidence >= min_ai_confidence() and score > min_gamma_delta() and delta >= min_gamma_delta()
+    min_delta = min_gamma_delta()
+    score_ok = min_delta <= 0 or score > min_delta
+    delta_ok = min_delta <= 0 or delta >= min_delta
+    approve = confidence >= min_ai_confidence() and score_ok and delta_ok
     suggestions = list(perf.get("lessons") or [])[:3]
     if delta > 0.08:
         suggestions.insert(0, "Strong gamma acceleration — momentum entry favored.")

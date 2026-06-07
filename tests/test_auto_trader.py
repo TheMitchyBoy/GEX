@@ -26,7 +26,8 @@ def test_compute_gamma_signals_picks_max_and_fastest():
     assert out["recommended"]["strike"] in {7380.0, 7390.0}
 
 
-def test_compute_gamma_signals_switches_when_max_gamma_declines():
+def test_compute_gamma_signals_switches_when_max_gamma_declines(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0.05")
     cur = pd.Series([0.2, 1.0, 0.8, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
@@ -36,15 +37,16 @@ def test_compute_gamma_signals_switches_when_max_gamma_declines():
     assert out["recommended"]["strike"] == 7385.0
 
 
-def test_compute_gamma_signals_skips_when_all_gamma_declines():
+def test_compute_gamma_signals_keeps_max_magnet_when_gamma_flat_or_declines():
     cur = pd.Series([0.1, 0.8, 0.3, 0.2], index=[7380.0, 7390.0, 7400.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.5, 0.3], index=[7380.0, 7390.0, 7400.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7385.0)
-    assert not out["available"]
-    assert out["skip_reason"] == "gamma_declined"
+    assert out["available"]
+    assert out["recommended"]["signal_type"] == "max_positive_gamma"
 
 
-def test_compute_gamma_signals_rejects_flat_max_gamma():
+def test_compute_gamma_signals_prefers_fastest_when_min_delta_enabled(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0.05")
     cur = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
     prev = pd.Series([0.2, 1.5, 0.25, 0.3], index=[7380.0, 7390.0, 7388.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
@@ -100,7 +102,8 @@ def test_trading_cycle_opens_on_armed_trader(tmp_path, monkeypatch):
     assert len(list_open_trades("SPX")) >= 1
 
 
-def test_rule_based_advice_downweights_poor_history():
+def test_rule_based_advice_downweights_poor_history(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
     signals = {
         "recommended": {
             "signal_type": "max_positive_gamma",
