@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from typing import Any
@@ -12,6 +13,7 @@ from gex_core.trading.config import (
     webull_app_key,
     webull_app_secret,
     webull_endpoint,
+    webull_equity_cache_seconds,
     webull_fill_poll_sec,
     webull_fill_timeout_sec,
     webull_limit_buffer_pct,
@@ -29,6 +31,94 @@ _data_client = None
 
 _FILLED = frozenset({"FILLED", "PARTIAL FILLED", "PARTIAL_FILLED", 4, 5, "4", "5"})
 _TERMINAL_BAD = frozenset({"CANCELLED", "FAILED", "REJECTED", 2, 3, "2", "3"})
+_EQUITY_CACHE: dict[str, tuple[float, float]] = {}
+
+
+def clear_webull_equity_cache() -> None:
+    """Drop cached Webull net-liquidation values (for tests)."""
+    _EQUITY_CACHE.clear()
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _balance_payload(body: dict[str, Any]) -> dict[str, Any]:
+    payload = _unwrap_data(body)
+    if isinstance(payload, list):
+        return payload[0] if payload and isinstance(payload[0], dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def parse_total_account_value(balance: dict[str, Any]) -> float | None:
+    """Extract net account value from a Webull balance payload."""
+    for key in (
+        "total_net_liquidation_value",
+        "totalNetLiquidationValue",
+        "net_liquidation_value",
+        "total_asset",
+        "totalAsset",
+    ):
+        val = _safe_float(balance.get(key))
+        if val is not None:
+            return val
+
+    assets = balance.get("account_currency_assets") or balance.get("accountCurrencyAssets") or []
+    if isinstance(assets, dict):
+        assets = assets.get("items") or assets.get("data") or [assets]
+    for row in assets:
+        if not isinstance(row, dict):
+            continue
+        currency = str(row.get("currency") or "USD").upper()
+        if currency and currency != "USD":
+            continue
+        val = _safe_float(row.get("net_liquidation_value") or row.get("netLiquidationValue"))
+        if val is not None:
+            return val
+    return None
+
+
+def fetch_account_balance(*, account_id: str | None = None) -> dict[str, Any]:
+    """Fetch raw Webull account balance for the configured account."""
+    trade = _ensure_client()
+    aid = (account_id or webull_account_id()).strip()
+    if not aid:
+        raise EnvironmentError("GEX_WEBULL_ACCOUNT_ID is not set")
+    return _response_body(trade.account_v2.get_account_balance(aid))
+
+
+def fetch_total_account_value(*, force_refresh: bool = False) -> float | None:
+    """Return Webull net liquidation value for risk-based position sizing."""
+    aid = webull_account_id().strip()
+    if not aid:
+        return None
+
+    cache_ttl = webull_equity_cache_seconds()
+    now = time.monotonic()
+    cached = _EQUITY_CACHE.get(aid)
+    if not force_refresh and cached and (now - cached[0]) < cache_ttl:
+        return cached[1]
+
+    try:
+        body = fetch_account_balance(account_id=aid)
+        if not _is_ok(body):
+            logger.warning("Webull balance request rejected: %s", body)
+            return cached[1] if cached else None
+        value = parse_total_account_value(_balance_payload(body))
+        if value is not None:
+            _EQUITY_CACHE[aid] = (now, value)
+            return value
+    except Exception as exc:
+        logger.warning("Webull account balance fetch failed: %s", exc)
+    return cached[1] if cached else None
 
 
 def _ensure_client():
