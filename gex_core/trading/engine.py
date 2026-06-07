@@ -53,7 +53,7 @@ from gex_core.trading.paper_broker import (
     mark_to_market_premium,
     pnl_usd,
 )
-from gex_core.trading.signals import compute_gamma_signals
+from gex_core.trading.signals import compute_entry_candidates
 from gex_core.trading.sizing import resolve_contract_qty
 from gex_core.trading.webull_broker import limit_price_for_buy
 
@@ -299,6 +299,14 @@ def _flatten_eod(ticker: str, spot: float) -> list[dict[str, Any]]:
     return closed
 
 
+def _has_open_duplicate(ticker: str, *, strike: float, option_type: str) -> bool:
+    ot = option_type.lower()
+    for pos in list_open_trades(ticker):
+        if float(pos["strike"]) == strike and str(pos.get("option_type", "")).lower() == ot:
+            return True
+    return False
+
+
 def _maybe_enter(
     *,
     ticker: str,
@@ -308,164 +316,183 @@ def _maybe_enter(
     uw_bundle: dict[str, Any] | None,
     market: MarketContext | None = None,
 ) -> dict[str, Any] | None:
-    if len(list_open_trades(ticker)) >= max_open_positions():
+    pack = compute_entry_candidates(exposure, previous, spot=spot)
+    if not pack.get("available"):
         return None
-
-    signals = compute_gamma_signals(exposure, previous, spot=spot)
-    if not signals.get("available"):
-        return None
-
-    advice = advise_entry(ticker=ticker, signals=signals, uw_bundle=uw_bundle, market=market)
-    record_decision(
-        ticker=ticker,
-        action="entry_review",
-        payload={"signals": signals, "advice": advice},
-        ai_verdict="approve" if advice.get("approve") else "reject",
-        ai_notes=advice.get("reason"),
-    )
-
-    if not advice.get("approve"):
-        return {"action": "skipped", "reason": advice.get("reason"), "advice": advice}
-
-    rec = signals["recommended"]
-    option_type = advice.get("option_type") or rec["option_type"]
-    signal_strike = float(rec["strike"])
-    if strike_stop_cooldown_active(ticker, signal_strike, str(option_type)):
-        return {"action": "skipped", "reason": f"Cooldown active after stop at {signal_strike:.0f}", "advice": advice}
 
     broker = get_broker()
-    confidence = float(advice.get("confidence", 0.5))
-    size_mult = float(advice.get("size_multiplier") or 1.0)
     underlying = webull_underlying()
     expire_date = _option_expire_date()
     regime = str((market.regime if market else "") or "")
-
     exec_spot, _ = _resolve_execution_context(signal_spot=spot)
     if _uses_execution_mapping() and (exec_spot is None or exec_spot <= 0):
-        return {"action": "skipped", "reason": "No live SPY spot for SPX sync", "advice": advice}
+        return {"action": "skipped", "reason": "No live SPY spot for SPX sync"}
 
-    exec_strike = (
-        map_execution_strike(float(rec["strike"]), signal_spot=spot, execution_spot=exec_spot)
-        if _uses_execution_mapping()
-        else float(rec["strike"])
-    )
-    exec_map = execution_summary(signal_strike=float(rec["strike"]), signal_spot=spot, execution_spot=exec_spot)
+    last_skip: dict[str, Any] | None = None
+    for rec in pack.get("candidates") or []:
+        if len(list_open_trades(ticker)) >= max_open_positions():
+            return last_skip
 
-    mark_entry_spot = float(exec_spot if _uses_execution_mapping() else spot)
-    expected_move = float(market.expected_move_pct) if market and market.expected_move_pct else None
-    exit_profile = build_exit_profile(
-        ai_confidence=confidence,
-        gamma_delta=float(rec["gamma_delta"]),
-        regime=regime,
-        entry_spot=mark_entry_spot,
-        strike=float(exec_strike),
-        expected_move_pct=expected_move,
-    )
-    profile_meta = {
-        "hold_for_target": exit_profile.hold_for_target,
-        "partial_take_profit": exit_profile.partial_take_profit,
-        "trail_trigger": exit_profile.trail_trigger,
-        "trail_floor": exit_profile.trail_floor,
-        "time_stop_bars": exit_profile.time_stop_bars,
-        "full_take_profit": exit_profile.full_take_profit,
-    }
-
-    premium_est = estimate_entry_premium(mark_entry_spot, exec_strike)
-    qty = resolve_contract_qty(
-        confidence=confidence,
-        premium=premium_est,
-        entry_spot=mark_entry_spot,
-        strike=float(exec_strike),
-        account_equity=get_account_equity(),
-        size_multiplier=size_mult,
-    )
-    if qty < 1:
-        return {"action": "skipped", "reason": "Risk sizing blocked entry (insufficient budget)", "advice": advice}
-
-    if live_trading_allowed():
-        limit_price = limit_price_for_buy(
-            exec_spot,
-            exec_strike,
-            side="buy",
-            underlying=underlying,
-            option_type=str(option_type),
-            expire_date=expire_date,
+        signals = {**pack, "recommended": rec}
+        advice = advise_entry(ticker=ticker, signals=signals, uw_bundle=uw_bundle, market=market)
+        record_decision(
+            ticker=ticker,
+            action="entry_review",
+            payload={"signals": signals, "advice": advice},
+            ai_verdict="approve" if advice.get("approve") else "reject",
+            ai_notes=advice.get("reason"),
         )
-        order = broker.buy_option(
-            underlying=underlying,
+
+        if not advice.get("approve"):
+            last_skip = {"action": "skipped", "reason": advice.get("reason"), "advice": advice}
+            continue
+
+        option_type = advice.get("option_type") or rec["option_type"]
+        signal_strike = float(rec["strike"])
+        if strike_stop_cooldown_active(ticker, signal_strike, str(option_type)):
+            last_skip = {
+                "action": "skipped",
+                "reason": f"Cooldown active after stop at {signal_strike:.0f}",
+                "advice": advice,
+            }
+            continue
+
+        exec_strike = (
+            map_execution_strike(signal_strike, signal_spot=spot, execution_spot=exec_spot)
+            if _uses_execution_mapping()
+            else signal_strike
+        )
+        if _has_open_duplicate(ticker, strike=exec_strike, option_type=str(option_type)):
+            last_skip = {"action": "skipped", "reason": f"Already open at {exec_strike:.2f} {option_type}", "advice": advice}
+            continue
+
+        confidence = float(advice.get("confidence", 0.5))
+        size_mult = float(advice.get("size_multiplier") or 1.0)
+        exec_map = execution_summary(signal_strike=signal_strike, signal_spot=spot, execution_spot=exec_spot)
+        mark_entry_spot = float(exec_spot if _uses_execution_mapping() else spot)
+        expected_move = float(market.expected_move_pct) if market and market.expected_move_pct else None
+        exit_profile = build_exit_profile(
+            ai_confidence=confidence,
+            gamma_delta=float(rec["gamma_delta"]),
+            regime=regime,
+            entry_spot=mark_entry_spot,
+            strike=float(exec_strike),
+            expected_move_pct=expected_move,
+        )
+        profile_meta = {
+            "hold_for_target": exit_profile.hold_for_target,
+            "partial_take_profit": exit_profile.partial_take_profit,
+            "trail_trigger": exit_profile.trail_trigger,
+            "trail_floor": exit_profile.trail_floor,
+            "time_stop_bars": exit_profile.time_stop_bars,
+            "full_take_profit": exit_profile.full_take_profit,
+        }
+
+        premium_est = estimate_entry_premium(mark_entry_spot, exec_strike)
+        qty = resolve_contract_qty(
+            confidence=confidence,
+            premium=premium_est,
+            entry_spot=mark_entry_spot,
+            strike=float(exec_strike),
+            account_equity=get_account_equity(),
+            size_multiplier=size_mult,
+        )
+        if qty < 1:
+            last_skip = {
+                "action": "skipped",
+                "reason": "Risk sizing blocked entry (insufficient budget)",
+                "advice": advice,
+            }
+            continue
+
+        if live_trading_allowed():
+            limit_price = limit_price_for_buy(
+                exec_spot,
+                exec_strike,
+                side="buy",
+                underlying=underlying,
+                option_type=str(option_type),
+                expire_date=expire_date,
+            )
+            order = broker.buy_option(
+                underlying=underlying,
+                option_type=option_type,
+                strike=exec_strike,
+                expire_date=expire_date,
+                quantity=qty,
+                limit_price=limit_price,
+                spot=exec_spot,
+            )
+            if not order.get("ok"):
+                reason = order.get("stage") or "Webull order rejected"
+                last_skip = {"action": "order_failed", "reason": reason, "order": order, "advice": advice}
+                continue
+            filled_qty = int(order.get("filled_qty") or qty)
+            if filled_qty <= 0:
+                last_skip = {"action": "order_failed", "reason": "No fill received", "order": order, "advice": advice}
+                continue
+            qty = filled_qty
+            premium = float(order.get("filled_premium") or order.get("limit_price") or limit_price)
+            meta = {
+                "paper": False,
+                "broker": "webull",
+                "underlying": underlying,
+                "expire_date": expire_date,
+                "webull_client_order_id": order.get("client_order_id"),
+                "execution_map": exec_map,
+                "signals": signals,
+                "order": {"preview": order.get("preview"), "response": order.get("response"), "fill": order.get("fill_detail")},
+                "peak_pnl_pct": 0.0,
+                "partial_taken": False,
+                "regime": regime,
+                "exit_profile": profile_meta,
+            }
+        else:
+            premium = estimate_entry_premium(exec_spot if _uses_execution_mapping() else spot, exec_strike)
+            meta = {
+                "paper": True,
+                "broker": "paper",
+                "underlying": underlying,
+                "expire_date": expire_date,
+                "execution_map": exec_map if _uses_execution_mapping() else None,
+                "signals": signals,
+                "peak_pnl_pct": 0.0,
+                "partial_taken": False,
+                "regime": regime,
+                "exit_profile": profile_meta,
+            }
+
+        trade_id = open_trade(
+            ticker=ticker,
             option_type=option_type,
             strike=exec_strike,
-            expire_date=expire_date,
-            quantity=qty,
-            limit_price=limit_price,
-            spot=exec_spot,
+            entry_spot=exec_spot if _uses_execution_mapping() else spot,
+            entry_premium=premium,
+            signal_type=rec["signal_type"],
+            signal_strike=signal_strike,
+            signal_gamma=float(rec["gamma_bn"]),
+            gamma_delta=float(rec["gamma_delta"]),
+            ai_confidence=float(advice.get("confidence", 0.5)),
+            ai_reason=str(advice.get("reason", "")),
+            meta=meta,
+            qty=float(qty),
         )
-        if not order.get("ok"):
-            reason = order.get("stage") or "Webull order rejected"
-            return {"action": "order_failed", "reason": reason, "order": order, "advice": advice}
-        filled_qty = int(order.get("filled_qty") or qty)
-        if filled_qty <= 0:
-            return {"action": "order_failed", "reason": "No fill received", "order": order, "advice": advice}
-        qty = filled_qty
-        premium = float(order.get("filled_premium") or order.get("limit_price") or limit_price)
-        meta = {
-            "paper": False,
-            "broker": "webull",
-            "underlying": underlying,
-            "expire_date": expire_date,
-            "webull_client_order_id": order.get("client_order_id"),
+        if live_trading_allowed() and meta.get("webull_client_order_id"):
+            patch_trade_meta(trade_id, {"webull_client_order_id": meta["webull_client_order_id"]})
+
+        return {
+            "action": "opened",
+            "trade_id": trade_id,
+            "option_type": option_type,
+            "strike": exec_strike,
+            "signal_strike": signal_strike,
             "execution_map": exec_map,
-            "signals": signals,
-            "order": {"preview": order.get("preview"), "response": order.get("response"), "fill": order.get("fill_detail")},
-            "peak_pnl_pct": 0.0,
-            "partial_taken": False,
-            "regime": regime,
-            "exit_profile": profile_meta,
-        }
-    else:
-        premium = estimate_entry_premium(exec_spot if _uses_execution_mapping() else spot, exec_strike)
-        meta = {
-            "paper": True,
-            "broker": "paper",
-            "underlying": underlying,
-            "expire_date": expire_date,
-            "execution_map": exec_map if _uses_execution_mapping() else None,
-            "signals": signals,
-            "peak_pnl_pct": 0.0,
-            "partial_taken": False,
-            "regime": regime,
-            "exit_profile": profile_meta,
+            "premium": premium,
+            "broker": broker.name,
+            "advice": advice,
         }
 
-    trade_id = open_trade(
-        ticker=ticker,
-        option_type=option_type,
-        strike=exec_strike,
-        entry_spot=exec_spot if _uses_execution_mapping() else spot,
-        entry_premium=premium,
-        signal_type=rec["signal_type"],
-        signal_strike=signal_strike,
-        signal_gamma=float(rec["gamma_bn"]),
-        gamma_delta=float(rec["gamma_delta"]),
-        ai_confidence=float(advice.get("confidence", 0.5)),
-        ai_reason=str(advice.get("reason", "")),
-        meta=meta,
-        qty=float(qty),
-    )
-    if live_trading_allowed() and meta.get("webull_client_order_id"):
-        patch_trade_meta(trade_id, {"webull_client_order_id": meta["webull_client_order_id"]})
-
-    return {
-        "action": "opened",
-        "trade_id": trade_id,
-        "option_type": option_type,
-        "strike": exec_strike,
-        "signal_strike": signal_strike,
-        "execution_map": exec_map,
-        "premium": premium,
-        "broker": broker.name,
-        "advice": advice,
-    }
+    return last_skip
 
 
 def run_trading_cycle(

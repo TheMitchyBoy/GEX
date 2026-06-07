@@ -21,7 +21,6 @@ from gex_core.market_time import (
 from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.config import (
     max_open_positions,
-    min_ai_confidence,
     momentum_bars,
     stop_cooldown_bars,
     stop_loss_pct,
@@ -43,7 +42,7 @@ from gex_core.trading.paper_broker import (
     pnl_usd,
 )
 from gex_core.trading.execution import map_execution_strike, resolve_backtest_execution_spot, uses_execution_mapping
-from gex_core.trading.signals import compute_gamma_signals
+from gex_core.trading.signals import compute_entry_candidates
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
 
 
@@ -472,13 +471,9 @@ def _maybe_enter(
     prev_row: dict,
     spot_history: list[float],
     max_open: int,
-    min_confidence: float,
 ) -> None:
     if not export_ts_is_trading_day(ts):
         state.skipped_weekends += 1
-        return
-
-    if len(state.open_positions) >= max_open:
         return
 
     spot = safe_float(row.get("spot"), 0.0)
@@ -486,9 +481,9 @@ def _maybe_enter(
     exposure = row.get("strike")
     previous = prev_row.get("strike")
 
-    signals = compute_gamma_signals(exposure, previous, spot=spot)
-    if not signals.get("available"):
-        skip = signals.get("skip_reason")
+    pack = compute_entry_candidates(exposure, previous, spot=spot)
+    if not pack.get("available"):
+        skip = pack.get("skip_reason")
         if skip == "gamma_declined":
             state.skipped_gamma_decline += 1
         elif skip == "strike_too_far":
@@ -499,83 +494,88 @@ def _maybe_enter(
     row_with_ts.setdefault("ts", ts)
     market = market_context_from_snapshot(row_with_ts, prev_spot=prev_spot, spot_history=spot_history)
     memory = _memory_from_closed(state.closed_trades)
-    advice = _rule_based_advice(signals, memory, market=market)
-    if not advice.get("approve") or float(advice.get("confidence", 0)) < min_confidence:
-        state.skipped_entries += 1
-        if advice.get("filter"):
-            state.skipped_filters += 1
-        return
 
-    rec = signals["recommended"]
-    option_type = str(advice.get("option_type") or rec["option_type"])
-    signal_strike = float(rec["strike"])
-    trade_ctx = _resolve_trade_context(signal_strike=signal_strike, signal_spot=spot)
-    if trade_ctx is None:
-        state.skipped_no_execution_spot += 1
-        return
-    exec_strike, exec_spot, _ = trade_ctx
-    cooldown_key = (signal_strike, option_type.lower())
-    cooldown_until = state.strike_cooldown.get(cooldown_key)
-    if cooldown_until and ts < cooldown_until:
-        state.blocked_cooldown += 1
-        return
-    if _has_open_duplicate(state.open_positions, strike=exec_strike, option_type=option_type):
-        state.blocked_duplicate += 1
-        return
-
-    confidence = float(advice.get("confidence", 0.5))
-    size_mult = float(advice.get("size_multiplier") or 1.0)
-    premium = estimate_entry_premium(exec_spot, exec_strike)
-    equity = state.account.cash if state.account else None
-    qty = float(
-        resolve_contract_qty(
-            confidence=confidence,
-            premium=premium,
-            entry_spot=exec_spot,
-            strike=exec_strike,
-            account_equity=equity,
-            size_multiplier=size_mult,
-        )
-    )
-    if state.account:
-        qty = float(affordable_qty(premium, state.account.cash, qty))
-        if qty < 1:
-            state.account.skipped_insufficient_capital += 1
+    for rec in pack.get("candidates") or []:
+        if len(state.open_positions) >= max_open:
             return
-        state.account.debit_entry(premium, qty)
-    elif qty < 1:
-        state.skipped_entries += 1
-        return
 
-    regime = str(row.get("regime") or "")
-    expected_move = safe_float(row.get("expected_move_pct"), 0.0) or None
-    profile = build_exit_profile(
-        ai_confidence=confidence,
-        gamma_delta=float(rec["gamma_delta"]),
-        regime=regime,
-        entry_spot=exec_spot,
-        strike=exec_strike,
-        expected_move_pct=expected_move,
-    )
-    state.open_positions.append(
-        _OpenPosition(
-            entry_idx=idx,
-            entry_ts=ts,
-            option_type=str(option_type),
-            strike=exec_strike,
-            entry_spot=exec_spot,
-            entry_premium=premium,
-            signal_type=str(rec["signal_type"]),
-            signal_gamma=float(rec["gamma_bn"]),
-            gamma_delta=float(rec["gamma_delta"]),
-            ai_confidence=confidence,
-            signal_strike=signal_strike if uses_execution_mapping() else None,
-            qty=qty,
-            exit_profile=profile,
+        signals = {**pack, "recommended": rec}
+        advice = _rule_based_advice(signals, memory, market=market)
+        if not advice.get("approve"):
+            state.skipped_entries += 1
+            if advice.get("filter"):
+                state.skipped_filters += 1
+            continue
+
+        option_type = str(advice.get("option_type") or rec["option_type"])
+        signal_strike = float(rec["strike"])
+        trade_ctx = _resolve_trade_context(signal_strike=signal_strike, signal_spot=spot)
+        if trade_ctx is None:
+            state.skipped_no_execution_spot += 1
+            continue
+        exec_strike, exec_spot, _ = trade_ctx
+        cooldown_key = (signal_strike, option_type.lower())
+        cooldown_until = state.strike_cooldown.get(cooldown_key)
+        if cooldown_until and ts < cooldown_until:
+            state.blocked_cooldown += 1
+            continue
+        if _has_open_duplicate(state.open_positions, strike=exec_strike, option_type=option_type):
+            state.blocked_duplicate += 1
+            continue
+
+        confidence = float(advice.get("confidence", 0.5))
+        size_mult = float(advice.get("size_multiplier") or 1.0)
+        premium = estimate_entry_premium(exec_spot, exec_strike)
+        equity = state.account.cash if state.account else None
+        qty = float(
+            resolve_contract_qty(
+                confidence=confidence,
+                premium=premium,
+                entry_spot=exec_spot,
+                strike=exec_strike,
+                account_equity=equity,
+                size_multiplier=size_mult,
+            )
         )
-    )
-    if state.account:
-        state.account.record_equity(ts, state.open_positions, exec_spot)
+        if state.account:
+            qty = float(affordable_qty(premium, state.account.cash, qty))
+            if qty < 1:
+                state.account.skipped_insufficient_capital += 1
+                continue
+            state.account.debit_entry(premium, qty)
+        elif qty < 1:
+            state.skipped_entries += 1
+            continue
+
+        regime = str(row.get("regime") or "")
+        expected_move = safe_float(row.get("expected_move_pct"), 0.0) or None
+        profile = build_exit_profile(
+            ai_confidence=confidence,
+            gamma_delta=float(rec["gamma_delta"]),
+            regime=regime,
+            entry_spot=exec_spot,
+            strike=exec_strike,
+            expected_move_pct=expected_move,
+        )
+        state.open_positions.append(
+            _OpenPosition(
+                entry_idx=idx,
+                entry_ts=ts,
+                option_type=str(option_type),
+                strike=exec_strike,
+                entry_spot=exec_spot,
+                entry_premium=premium,
+                signal_type=str(rec["signal_type"]),
+                signal_gamma=float(rec["gamma_bn"]),
+                gamma_delta=float(rec["gamma_delta"]),
+                ai_confidence=confidence,
+                signal_strike=signal_strike if uses_execution_mapping() else None,
+                qty=qty,
+                exit_profile=profile,
+            )
+        )
+        if state.account:
+            state.account.record_equity(ts, state.open_positions, exec_spot)
 
 
 def _summarize(
@@ -719,7 +719,6 @@ def backtest_auto_trader(
     stop_loss: float | None = None,
     take_profit: float | None = None,
     max_open: int | None = None,
-    min_confidence: float | None = None,
     starting_capital: float | None = None,
     history: list[dict] | None = None,
 ) -> dict[str, Any]:
@@ -728,7 +727,6 @@ def backtest_auto_trader(
     stop_loss = stop_loss if stop_loss is not None else stop_loss_pct()
     take_profit = take_profit if take_profit is not None else take_profit_pct()
     max_open = max_open if max_open is not None else max_open_positions()
-    min_confidence = min_confidence if min_confidence is not None else min_ai_confidence()
 
     if history is None:
         history = _build_history_impl(
@@ -794,7 +792,6 @@ def backtest_auto_trader(
             prev_row=prev,
             spot_history=spot_history,
             max_open=max_open,
-            min_confidence=min_confidence,
         )
 
     if state.open_positions:
@@ -916,7 +913,6 @@ def backtest_auto_trader_bootstrap(
     stop_loss: float | None = None,
     take_profit: float | None = None,
     max_open: int | None = None,
-    min_confidence: float | None = None,
     starting_capital: float | None = None,
     max_synthetic_snapshots: int = 400_000,
 ) -> dict[str, Any]:
@@ -946,7 +942,6 @@ def backtest_auto_trader_bootstrap(
             stop_loss=stop_loss,
             take_profit=take_profit,
             max_open=max_open,
-            min_confidence=min_confidence,
             starting_capital=starting_capital,
         )
         result["bootstrap"] = True

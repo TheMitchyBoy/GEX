@@ -9,7 +9,7 @@ from gex_core.trading.config import trader_bar_minutes, trader_cycle_seconds
 
 def test_trader_cycle_seconds_default(monkeypatch):
     monkeypatch.delenv("GEX_TRADER_CYCLE_SECONDS", raising=False)
-    assert trader_cycle_seconds() == 30
+    assert trader_cycle_seconds() == 15
 
 
 def test_trader_cycle_seconds_zero_disables_fast_loop(monkeypatch):
@@ -21,6 +21,12 @@ def test_trader_bar_minutes_follows_refresh(monkeypatch):
     monkeypatch.setenv("GEX_REFRESH_INTERVAL_MINUTES", "10")
     monkeypatch.delenv("GEX_TRADER_BAR_MINUTES", raising=False)
     assert trader_bar_minutes() == 10.0
+
+
+def test_trader_bar_minutes_default_two_minutes(monkeypatch):
+    monkeypatch.delenv("GEX_REFRESH_INTERVAL_MINUTES", raising=False)
+    monkeypatch.delenv("GEX_TRADER_BAR_MINUTES", raising=False)
+    assert trader_bar_minutes() == 2.0
 
 
 def test_bars_held_since_entry():

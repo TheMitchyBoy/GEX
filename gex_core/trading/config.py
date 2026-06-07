@@ -16,9 +16,9 @@ def auto_trader_enabled() -> bool:
 def trader_cycle_seconds() -> int:
     """How often the auto-trader evaluates exits/entries (0 = only on gamma refresh)."""
     try:
-        return max(0, int(os.environ.get("GEX_TRADER_CYCLE_SECONDS", "30")))
+        return max(0, int(os.environ.get("GEX_TRADER_CYCLE_SECONDS", "15")))
     except (TypeError, ValueError):
-        return 30
+        return 15
 
 
 def trader_bar_minutes() -> float:
@@ -27,9 +27,9 @@ def trader_bar_minutes() -> float:
         explicit = os.environ.get("GEX_TRADER_BAR_MINUTES", "").strip()
         if explicit:
             return max(1.0, float(explicit))
-        return max(1.0, float(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10")))
+        return max(1.0, float(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "2")))
     except (TypeError, ValueError):
-        return 10.0
+        return 2.0
 
 
 def trader_session_only() -> bool:
@@ -91,9 +91,9 @@ def trailing_stop_floor_pct() -> float:
 
 def time_stop_bars() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "6")))
+        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "3")))
     except (TypeError, ValueError):
-        return 6
+        return 3
 
 
 def time_stop_min_pnl_pct() -> float:
@@ -113,9 +113,9 @@ def time_stop_min_magnet_progress() -> float:
 
 def stop_cooldown_bars() -> int:
     try:
-        return max(0, int(os.environ.get("GEX_TRADER_STOP_COOLDOWN_BARS", "12")))
+        return max(0, int(os.environ.get("GEX_TRADER_STOP_COOLDOWN_BARS", "2")))
     except (TypeError, ValueError):
-        return 12
+        return 2
 
 
 def strong_entry_confidence() -> float:
@@ -148,17 +148,9 @@ def high_confidence_contracts() -> int:
 
 def max_open_positions() -> int:
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_MAX_OPEN", "1")))
+        return max(1, int(os.environ.get("GEX_TRADER_MAX_OPEN", "3")))
     except (TypeError, ValueError):
-        return 1
-
-
-def min_ai_confidence() -> float:
-    try:
-        return float(os.environ.get("GEX_TRADER_MIN_AI_CONFIDENCE", "0.65"))
-    except (TypeError, ValueError):
-        return 0.65
-
+        return 3
 
 def min_gamma_delta() -> float:
     try:
@@ -304,9 +296,9 @@ def account_equity_usd() -> float:
 
 def risk_per_trade_pct() -> float:
     try:
-        return max(0.001, float(os.environ.get("GEX_TRADER_RISK_PER_TRADE_PCT", "0.02")))
+        return max(0.001, float(os.environ.get("GEX_TRADER_RISK_PER_TRADE_PCT", "0.01")))
     except (TypeError, ValueError):
-        return 0.02
+        return 0.01
 
 
 def use_risk_based_sizing() -> bool:
@@ -413,3 +405,10 @@ def prefer_signal_type() -> str:
 
 def entry_time_filter_enabled() -> bool:
     return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")
+
+
+def multi_strike_count() -> int:
+    try:
+        return max(1, int(os.environ.get("GEX_TRADER_MULTI_STRIKE", "3")))
+    except (TypeError, ValueError):
+        return 3

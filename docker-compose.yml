@@ -11,7 +11,7 @@ services:
     environment:
       # Pass host UW_API_KEY only when set; do not default to blank (that blocks .env load).
       - UW_API_KEY
-      - GEX_REFRESH_INTERVAL_MINUTES=10
+      - GEX_REFRESH_INTERVAL_MINUTES=2
       - GEX_DISABLE_SCHEDULER=0
     volumes:
       - ./data:/app/data

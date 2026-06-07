@@ -27,7 +27,6 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", help="Print full JSON result")
     parser.add_argument("--stop-loss", type=float, default=None)
     parser.add_argument("--take-profit", type=float, default=None)
-    parser.add_argument("--min-confidence", type=float, default=None)
     parser.add_argument("--target-trades", type=int, default=0, help="Bootstrap until N trades (e.g. 1000)")
     parser.add_argument("--starting-capital", type=float, default=None, help="Simulate account equity (e.g. 500)")
     parser.add_argument("--seed", type=int, default=42)
@@ -43,7 +42,6 @@ def main() -> None:
             dedupe_identical_strikes=args.dedupe,
             stop_loss=args.stop_loss,
             take_profit=args.take_profit,
-            min_confidence=args.min_confidence,
             starting_capital=args.starting_capital,
         )
     else:
@@ -54,7 +52,6 @@ def main() -> None:
             dedupe_identical_strikes=args.dedupe,
             stop_loss=args.stop_loss,
             take_profit=args.take_profit,
-            min_confidence=args.min_confidence,
             starting_capital=args.starting_capital,
         )
 

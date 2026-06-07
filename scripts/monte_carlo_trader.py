@@ -23,7 +23,6 @@ _TRADER_ENV_KEYS = (
     "GEX_TRADER_STRICT_FILTERS",
     "GEX_TRADER_MIN_GAMMA_DELTA",
     "GEX_TRADER_MIN_FASTEST_GAMMA_DELTA",
-    "GEX_TRADER_MIN_AI_CONFIDENCE",
     "GEX_TRADER_STOP_LOSS_PCT",
     "GEX_TRADER_TAKE_PROFIT_PCT",
     "GEX_TRADER_PARTIAL_TP_PCT",
@@ -55,7 +54,6 @@ class TraderConfig:
     env: dict[str, str] = field(default_factory=dict)
     stop_loss: float | None = None
     take_profit: float | None = None
-    min_confidence: float | None = None
     max_open: int | None = None
 
 
@@ -87,7 +85,6 @@ def _baseline_configs() -> list[TraderConfig]:
                 "GEX_TRADER_STOP_COOLDOWN_BARS": "1",
                 "GEX_TRADER_MAX_OPEN": "3",
             },
-            min_confidence=0.45,
         ),
         TraderConfig(
             name="swing_strict",
@@ -99,7 +96,6 @@ def _baseline_configs() -> list[TraderConfig]:
                 "GEX_TRADER_TIME_STOP_BARS": "6",
                 "GEX_TRADER_MAX_OPEN": "1",
             },
-            min_confidence=0.65,
         ),
     ]
 
@@ -110,7 +106,6 @@ def _random_config(rng: random.Random, trial: int) -> TraderConfig:
         "GEX_TRADER_STRICT_FILTERS": strict,
         "GEX_TRADER_MIN_GAMMA_DELTA": f"{rng.uniform(0.01, 0.08):.3f}",
         "GEX_TRADER_MIN_FASTEST_GAMMA_DELTA": f"{rng.uniform(0.02, 0.15):.3f}",
-        "GEX_TRADER_MIN_AI_CONFIDENCE": f"{rng.uniform(0.35, 0.75):.2f}",
         "GEX_TRADER_STOP_LOSS_PCT": f"{rng.uniform(0.03, 0.08):.3f}",
         "GEX_TRADER_TAKE_PROFIT_PCT": f"{rng.uniform(0.08, 0.40):.2f}",
         "GEX_TRADER_PARTIAL_TP_PCT": f"{rng.uniform(0.05, 0.20):.2f}",
@@ -194,7 +189,6 @@ def run_trial(
             starting_capital=starting_capital,
             stop_loss=config.stop_loss,
             take_profit=config.take_profit,
-            min_confidence=config.min_confidence,
             max_open=config.max_open,
         )
     account = result.get("account") or {}
@@ -219,7 +213,6 @@ def run_trial(
             "env": dict(config.env),
             "stop_loss": config.stop_loss,
             "take_profit": config.take_profit,
-            "min_confidence": config.min_confidence,
             "max_open": config.max_open,
         },
         "by_exit_reason": result.get("by_exit_reason"),

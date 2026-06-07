@@ -71,7 +71,7 @@ def test_backtest_excludes_weekend_snapshots(monkeypatch):
         _snapshot("2026-06-06_140933", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.3}),
         _snapshot("2026-06-06_142933", 5050.0, {4990: 0.2, 5000: 0.5, 5010: 2.3}),
     ]
-    result = backtest_auto_trader("SPX", history=history, min_confidence=0.4, stop_loss=0.05, take_profit=0.10)
+    result = backtest_auto_trader("SPX", history=history, stop_loss=0.05, take_profit=0.10)
     assert result["weekend_snapshots_excluded"] == 2
     assert result["snapshots"] == 2
     for trade in result.get("trades") or []:

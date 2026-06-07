@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from gex_core.trading.config import max_strike_distance_pct, min_fastest_gamma_delta
+from gex_core.trading.config import max_strike_distance_pct, min_fastest_gamma_delta, multi_strike_count
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,6 @@ def _refine_trade_strike(cur: pd.Series, magnet_strike: float, spot: float, opti
             candidates.append((dist, strike_f, itm))
 
     if candidates:
-        # Prefer ATM, then slight ITM, then nearest OTM.
         candidates.sort(key=lambda row: (row[0], 0 if abs(row[1] - spot) < spot * 0.0005 else 1, 0 if row[2] else 1))
         return candidates[0][1]
 
@@ -68,109 +67,6 @@ def _refine_trade_strike(cur: pd.Series, magnet_strike: float, spot: float, opti
     if dist_magnet <= max_dist:
         return float(magnet_strike)
     return None
-
-
-def compute_gamma_signals(
-    exposure: pd.Series | None,
-    previous: pd.Series | None,
-    *,
-    spot: float | None,
-) -> dict[str, Any]:
-    """Rank strikes by max positive gamma and fastest gamma increase."""
-    cur = _clean(exposure)
-    prev = _clean(previous)
-    spot_val = float(spot or 0.0)
-
-    if cur.empty:
-        return {"available": False, "reason": "No gamma exposure data"}
-
-    positive = cur[cur > 0]
-    max_pos_strike = float(positive.idxmax()) if not positive.empty else float(cur.idxmax())
-    max_pos_gamma = float(positive.max()) if not positive.empty else float(cur.max())
-
-    delta = cur.subtract(prev.reindex(cur.index), fill_value=0.0) if not prev.empty else cur * 0.0
-    fastest_strike = float(delta.idxmax()) if not delta.empty else max_pos_strike
-    fastest_delta = float(delta.max()) if not delta.empty else 0.0
-    fastest_gamma = float(cur.get(fastest_strike, 0.0))
-    max_pos_delta = float(delta.get(max_pos_strike, 0.0))
-
-    max_option_type = _option_type_for_strike(max_pos_strike, spot_val)
-    max_trade_strike = _refine_trade_strike(cur, max_pos_strike, spot_val, max_option_type)
-    if max_trade_strike is None:
-        return {
-            "available": False,
-            "reason": f"No positive-gamma strike within {max_strike_distance_pct():.1%} of spot",
-            "skip_reason": "strike_too_far",
-            "spot": spot_val,
-        }
-
-    max_pos_signal = GammaSignal(
-        signal_type="max_positive_gamma",
-        strike=max_trade_strike,
-        gamma_bn=max_pos_gamma,
-        gamma_delta=max_pos_delta,
-        score=max_pos_gamma,
-        option_type=max_option_type,
-        rationale=f"Largest positive gamma magnet {max_pos_strike:.0f}, trading {max_trade_strike:.0f}",
-    )
-
-    fast_option_type = _option_type_for_strike(fastest_strike, spot_val)
-    fast_trade_strike = _refine_trade_strike(cur, fastest_strike, spot_val, fast_option_type)
-    accel_score = fastest_delta + max(fastest_gamma, 0.0) * 0.25
-    fastest_signal = GammaSignal(
-        signal_type="fastest_gamma_increase",
-        strike=fast_trade_strike or fastest_strike,
-        gamma_bn=fastest_gamma,
-        gamma_delta=fastest_delta,
-        score=accel_score,
-        option_type=fast_option_type,
-        rationale=f"Fastest 10m gamma increase at {fastest_strike:.0f} (Δ{fastest_delta:+.3f} Bn)",
-    )
-
-    selection_reason = "max_positive_gamma"
-    recommended = max_pos_signal
-    min_fast = min_fastest_gamma_delta()
-
-    if max_pos_delta < 0:
-        if min_fast > 0 and fastest_delta >= min_fast:
-            max_dist = abs(max_pos_strike - spot_val) / spot_val if spot_val > 0 else 1.0
-            fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
-            if fast_trade_strike is not None and fast_dist <= max_strike_distance_pct():
-                recommended = fastest_signal
-                selection_reason = "max_positive_gamma_declined"
-            else:
-                return {
-                    "available": False,
-                    "reason": "Max gamma declined and fastest increase strike is too far from spot",
-                    "skip_reason": "strike_too_far",
-                    "spot": spot_val,
-                    "max_positive_gamma": _signal_dict(max_pos_signal),
-                    "fastest_gamma_increase": _signal_dict(fastest_signal),
-                }
-        else:
-            return {
-                "available": False,
-                "reason": (
-                    f"Largest positive gamma at {max_pos_strike:.0f} declined "
-                    f"(Δ{max_pos_delta:+.3f} Bn) and no strike shows sufficient rising gamma"
-                ),
-                "skip_reason": "gamma_declined",
-                "spot": spot_val,
-                "max_positive_gamma": _signal_dict(max_pos_signal),
-                "fastest_gamma_increase": _signal_dict(fastest_signal),
-                "max_pos_gamma_delta": max_pos_delta,
-            }
-
-    return {
-        "available": True,
-        "spot": spot_val,
-        "selection_reason": selection_reason,
-        "max_positive_gamma": _signal_dict(max_pos_signal),
-        "fastest_gamma_increase": _signal_dict(fastest_signal),
-        "recommended": _signal_dict(recommended),
-        "max_pos_gamma_delta": max_pos_delta,
-        "gamma_delta_by_strike": {float(k): float(v) for k, v in delta.nlargest(8).items()},
-    }
 
 
 def _signal_dict(sig: GammaSignal) -> dict[str, Any]:
@@ -183,3 +79,155 @@ def _signal_dict(sig: GammaSignal) -> dict[str, Any]:
         "option_type": sig.option_type,
         "rationale": sig.rationale,
     }
+
+
+def _candidate_key(rec: dict[str, Any]) -> tuple[float, str]:
+    return (round(float(rec["strike"]), 2), str(rec["option_type"]).lower())
+
+
+def compute_entry_candidates(
+    exposure: pd.Series | None,
+    previous: pd.Series | None,
+    *,
+    spot: float | None,
+) -> dict[str, Any]:
+    """Return up to N near-spot positive-gamma entry candidates per bar."""
+    cur = _clean(exposure)
+    prev = _clean(previous)
+    spot_val = float(spot or 0.0)
+    limit = multi_strike_count()
+
+    if cur.empty:
+        return {"available": False, "reason": "No gamma exposure data"}
+
+    positive = cur[cur > 0]
+    max_pos_strike = float(positive.idxmax()) if not positive.empty else float(cur.idxmax())
+    max_pos_gamma = float(positive.max()) if not positive.empty else float(cur.max())
+    max_pos_delta = 0.0
+
+    delta = cur.subtract(prev.reindex(cur.index), fill_value=0.0) if not prev.empty else cur * 0.0
+    fastest_strike = float(delta.idxmax()) if not delta.empty else max_pos_strike
+    fastest_delta = float(delta.max()) if not delta.empty else 0.0
+    fastest_gamma = float(cur.get(fastest_strike, 0.0))
+    if not positive.empty:
+        max_pos_delta = float(delta.get(max_pos_strike, 0.0))
+
+    max_option_type = _option_type_for_strike(max_pos_strike, spot_val)
+    max_trade_strike = _refine_trade_strike(cur, max_pos_strike, spot_val, max_option_type)
+
+    max_pos_signal = GammaSignal(
+        signal_type="max_positive_gamma",
+        strike=max_trade_strike or max_pos_strike,
+        gamma_bn=max_pos_gamma,
+        gamma_delta=max_pos_delta,
+        score=max_pos_gamma,
+        option_type=max_option_type,
+        rationale=f"Largest positive gamma magnet {max_pos_strike:.0f}",
+    )
+
+    fast_option_type = _option_type_for_strike(fastest_strike, spot_val)
+    fast_trade_strike = _refine_trade_strike(cur, fastest_strike, spot_val, fast_option_type)
+    fastest_signal = GammaSignal(
+        signal_type="fastest_gamma_increase",
+        strike=fast_trade_strike or fastest_strike,
+        gamma_bn=fastest_gamma,
+        gamma_delta=fastest_delta,
+        score=fastest_delta + max(fastest_gamma, 0.0) * 0.25,
+        option_type=fast_option_type,
+        rationale=f"Fastest gamma increase at {fastest_strike:.0f} (Δ{fastest_delta:+.3f} Bn)",
+    )
+
+    seen: set[tuple[float, str]] = set()
+    candidates: list[dict[str, Any]] = []
+
+    for magnet_strike, gamma_bn in positive.sort_values(ascending=False).items():
+        if len(candidates) >= limit:
+            break
+        magnet_f = float(magnet_strike)
+        magnet_delta = float(delta.get(magnet_strike, 0.0))
+        if magnet_delta < 0:
+            continue
+        option_type = _option_type_for_strike(magnet_f, spot_val)
+        trade_strike = _refine_trade_strike(cur, magnet_f, spot_val, option_type)
+        if trade_strike is None:
+            continue
+        sig = GammaSignal(
+            signal_type="max_positive_gamma",
+            strike=trade_strike,
+            gamma_bn=float(gamma_bn),
+            gamma_delta=magnet_delta,
+            score=float(gamma_bn),
+            option_type=option_type,
+            rationale=f"Positive gamma magnet {magnet_f:.0f}, trading {trade_strike:.0f}",
+        )
+        rec = _signal_dict(sig)
+        key = _candidate_key(rec)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(rec)
+
+    min_fast = min_fastest_gamma_delta()
+    if len(candidates) < limit and fastest_delta > 0:
+        fast_rec = _signal_dict(fastest_signal)
+        if fast_trade_strike is not None and _candidate_key(fast_rec) not in seen:
+            fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
+            if fast_dist <= max_strike_distance_pct():
+                seen.add(_candidate_key(fast_rec))
+                candidates.append(fast_rec)
+
+    if not candidates and max_pos_delta < 0:
+        if min_fast > 0 and fastest_delta >= min_fast and fast_trade_strike is not None:
+            fast_dist = abs(fastest_strike - spot_val) / spot_val if spot_val > 0 else 1.0
+            if fast_dist <= max_strike_distance_pct():
+                candidates.append(_signal_dict(fastest_signal))
+        if not candidates:
+            return {
+                "available": False,
+                "reason": (
+                    f"Largest positive gamma at {max_pos_strike:.0f} declined "
+                    f"(Δ{max_pos_delta:+.3f} Bn) and no near-spot magnets are flat or rising"
+                ),
+                "skip_reason": "gamma_declined",
+                "spot": spot_val,
+                "max_positive_gamma": _signal_dict(max_pos_signal),
+                "fastest_gamma_increase": _signal_dict(fastest_signal),
+                "max_pos_gamma_delta": max_pos_delta,
+            }
+
+    if not candidates:
+        return {
+            "available": False,
+            "reason": f"No positive-gamma strike within {max_strike_distance_pct():.1%} of spot",
+            "skip_reason": "strike_too_far",
+            "spot": spot_val,
+            "max_positive_gamma": _signal_dict(max_pos_signal),
+            "fastest_gamma_increase": _signal_dict(fastest_signal),
+        }
+
+    selection_reason = "max_positive_gamma"
+    recommended_dict = candidates[0]
+    if max_pos_delta < 0 and recommended_dict.get("signal_type") == "fastest_gamma_increase":
+        selection_reason = "max_positive_gamma_declined"
+
+    return {
+        "available": True,
+        "spot": spot_val,
+        "selection_reason": selection_reason,
+        "candidates": candidates,
+        "recommended": recommended_dict,
+        "max_positive_gamma": _signal_dict(max_pos_signal),
+        "fastest_gamma_increase": _signal_dict(fastest_signal),
+        "max_pos_gamma_delta": max_pos_delta,
+        "gamma_delta_by_strike": {float(k): float(v) for k, v in delta.nlargest(8).items()},
+    }
+
+
+def compute_gamma_signals(
+    exposure: pd.Series | None,
+    previous: pd.Series | None,
+    *,
+    spot: float | None,
+) -> dict[str, Any]:
+    """Primary gamma signal bundle (first entry candidate)."""
+    return compute_entry_candidates(exposure, previous, spot=spot)

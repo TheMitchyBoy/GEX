@@ -32,7 +32,6 @@ def test_backtest_opens_and_closes_on_take_profit():
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        min_confidence=0.4,
         stop_loss=0.05,
         take_profit=0.10,
         max_open=1,
@@ -42,20 +41,21 @@ def test_backtest_opens_and_closes_on_take_profit():
     assert "by_signal" in result
 
 
-def test_backtest_respects_min_confidence():
+def test_backtest_tries_multiple_strike_candidates(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MULTI_STRIKE", "3")
     history = [
-        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 0.5}),
-        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.0}),
-        _snapshot("2026-06-01_102000", 5050.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0, 5020: 1.8}),
+        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2, 5020: 1.9}),
+        _snapshot("2026-06-01_102000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.3, 5020: 2.0}),
+        _snapshot("2026-06-01_103000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.4, 5020: 2.1}),
     ]
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        min_confidence=0.99,
-        max_open=1,
+        max_open=3,
     )
-    assert result["total_trades"] == 0
-    assert result["skipped_entries"] >= 1
+    assert result["total_trades"] >= 2
+    assert len({t["strike"] for t in result["trades"]}) >= 2
 
 
 def test_backtest_insufficient_history():
@@ -73,7 +73,6 @@ def test_backtest_caps_stop_and_take_profit():
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        min_confidence=0.4,
         stop_loss=0.05,
         take_profit=0.35,
         max_open=1,
@@ -85,15 +84,14 @@ def test_backtest_caps_stop_and_take_profit():
 
 def test_backtest_blocks_duplicate_strike_entries():
     history = [
-        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
-        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
-        _snapshot("2026-06-01_102000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.3}),
-        _snapshot("2026-06-01_103000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.4}),
+        _snapshot("2026-06-01_100000", 5000.0, {5010: 2.0}),
+        _snapshot("2026-06-01_101000", 5005.0, {5010: 2.2}),
+        _snapshot("2026-06-01_102000", 5005.0, {5010: 2.3}),
+        _snapshot("2026-06-01_103000", 5005.0, {5010: 2.4}),
     ]
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        min_confidence=0.4,
         max_open=3,
     )
     assert result["total_trades"] == 1
@@ -110,11 +108,12 @@ def test_backtest_enters_on_flat_gamma_magnet():
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        min_confidence=0.4,
         max_open=1,
     )
     assert result["total_trades"] >= 1
     assert result["skipped_gamma_decline"] == 0
+
+
 def test_backtest_skips_exits_across_snapshot_gaps():
     history = [
         _snapshot("2026-06-01_093000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
@@ -126,7 +125,6 @@ def test_backtest_skips_exits_across_snapshot_gaps():
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        min_confidence=0.4,
         stop_loss=0.05,
         take_profit=0.35,
         max_open=1,
@@ -146,7 +144,6 @@ def test_backtest_account_starting_capital(monkeypatch):
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        min_confidence=0.4,
         stop_loss=0.05,
         take_profit=0.10,
         max_open=1,

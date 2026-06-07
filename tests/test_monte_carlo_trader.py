@@ -52,7 +52,6 @@ def test_run_trial_applies_env(monkeypatch):
     cfg = TraderConfig(
         name="test",
         env={"GEX_TRADER_STRICT_FILTERS": "0", "GEX_TRADER_ENTRY_TIME_FILTER": "0"},
-        min_confidence=0.4,
         stop_loss=0.05,
         take_profit=0.10,
     )

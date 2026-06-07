@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from gex_core.gex_chatbot import _openai_chat, _resolve_openai_config
-from gex_core.trading.config import min_ai_confidence, min_gamma_delta
+from gex_core.trading.config import min_gamma_delta
 from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.journal import get_trade_memory_for_ai
 
@@ -63,21 +63,11 @@ def _rule_based_advice(
 
     if hist.get("count", 0) >= 3 and float(hist.get("avg_pnl_pct", 0)) < -0.03:
         confidence *= 0.75
-        if confidence < min_ai_confidence():
-            return {
-                "approve": False,
-                "confidence": round(confidence, 3),
-                "option_type": rec.get("option_type", "call"),
-                "reason": f"{sig_type} track record weak ({hist.get('avg_pnl_pct', 0):+.1%} avg) — waiting for stronger edge.",
-                "suggestions": list(perf.get("lessons") or [])[:3],
-                "source": "rule_based",
-                "size_multiplier": float(filter_result.get("size_multiplier") or 1.0),
-            }
 
     min_delta = min_gamma_delta()
     score_ok = min_delta <= 0 or score > min_delta
     delta_ok = min_delta <= 0 or delta >= min_delta
-    approve = confidence >= min_ai_confidence() and score_ok and delta_ok
+    approve = score_ok and delta_ok
     suggestions = list(perf.get("lessons") or [])[:3]
     if delta > 0.08:
         suggestions.insert(0, "Strong gamma acceleration — momentum entry favored.")

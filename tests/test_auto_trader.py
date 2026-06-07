@@ -31,9 +31,9 @@ def test_compute_gamma_signals_switches_when_max_gamma_declines():
     prev = pd.Series([0.2, 1.5, 0.4, 0.3], index=[7380.0, 7390.0, 7385.0, 7410.0])
     out = compute_gamma_signals(cur, prev, spot=7387.0)
     assert out["available"]
-    assert out["selection_reason"] == "max_positive_gamma_declined"
-    assert out["recommended"]["signal_type"] == "fastest_gamma_increase"
+    assert out["recommended"]["signal_type"] == "max_positive_gamma"
     assert out["recommended"]["strike"] == 7385.0
+    assert len(out.get("candidates") or []) >= 1
 
 
 def test_compute_gamma_signals_allows_flat_max_gamma():
@@ -80,8 +80,9 @@ def test_trading_cycle_opens_on_armed_trader(tmp_path, monkeypatch):
     db = tmp_path / "journal.db"
     monkeypatch.setenv("GEX_TRADING_DB", str(db))
     monkeypatch.setenv("GEX_AUTO_TRADER", "1")
-    monkeypatch.setenv("GEX_TRADER_MIN_AI_CONFIDENCE", "0.4")
     monkeypatch.setenv("GEX_TRADER_STRICT_FILTERS", "0")
+    monkeypatch.setenv("GEX_TRADER_RISK_SIZING", "0")
+    monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: False)
 
     set_trader_armed(True)
     assert is_trader_armed()
