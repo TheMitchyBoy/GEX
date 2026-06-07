@@ -82,6 +82,8 @@ python web_app.py
 # or: docker compose up web
 ```
 
+Open **http://localhost:5000/** for the gamma auto-trader. **http://localhost:5000/trade** is the Webull quick-trade desk: live SPY 0DTE quotes, entry/exit condition signals, and one-click limit orders (passive / mid / smart / aggressive). Requires `GEX_WEBULL_*` credentials and `GEX_TRADER_PAPER=0` for live execution; orders need `live_confirm: true` in the API body.
+
 **Streamlit:**
 
 ```bash

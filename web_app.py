@@ -815,6 +815,183 @@ def api_trader_suggestions():
     return jsonify({"ticker": ticker, "suggestions": build_suggestions(ticker)})
 
 
+@APP.get("/trade")
+@APP.get("/webull")
+def webull_trade_dashboard():
+    """Webull quick options trade desk with entry/exit price guidance."""
+    from gex_core.trading.config import execution_ticker, signal_ticker
+    from gex_core.trading.webull_quick_trade import dashboard_state
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    state = dashboard_state(signal_ticker_arg=ticker)
+    return render_template(
+        "webull_trade.html",
+        ticker=ticker,
+        signal_ticker=signal_ticker(),
+        execution_ticker=execution_ticker(),
+        initial_state=state,
+    )
+
+
+@APP.get("/api/webull/status")
+def api_webull_status():
+    from gex_core.trading.webull_quick_trade import dashboard_state
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    return jsonify(dashboard_state(signal_ticker_arg=ticker))
+
+
+@APP.get("/api/webull/quote")
+def api_webull_quote():
+    from gex_core.trading.webull_quick_trade import quote_payload
+
+    try:
+        strike = float(request.args.get("strike", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "strike required"}), 400
+    if strike <= 0:
+        return jsonify({"error": "strike must be positive"}), 400
+
+    option_type = (request.args.get("type") or request.args.get("option_type") or "call").lower()
+    underlying = (request.args.get("underlying") or request.args.get("execution") or "SPY").upper()
+    expire_date = request.args.get("expire") or request.args.get("expire_date")
+    entry_premium = request.args.get("entry_premium")
+    peak_premium = request.args.get("peak_premium")
+    spot = request.args.get("spot")
+
+    try:
+        entry_f = float(entry_premium) if entry_premium else None
+    except (TypeError, ValueError):
+        entry_f = None
+    try:
+        peak_f = float(peak_premium) if peak_premium else None
+    except (TypeError, ValueError):
+        peak_f = None
+    try:
+        spot_f = float(spot) if spot else None
+    except (TypeError, ValueError):
+        spot_f = None
+
+    return jsonify(
+        quote_payload(
+            underlying=underlying,
+            option_type=option_type,
+            strike=strike,
+            expire_date=expire_date,
+            entry_premium=entry_f,
+            peak_premium=peak_f,
+            spot=spot_f,
+        )
+    )
+
+
+@APP.post("/api/webull/order/buy")
+def api_webull_order_buy():
+    from gex_core.trading.config import live_trading_allowed, require_live_confirm
+    from gex_core.trading.webull_quick_trade import execute_buy
+
+    if not _admin_action_authorized(request) and os.environ.get("GEX_ADMIN_TOKEN"):
+        return jsonify({"error": "Admin token required for live orders"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    if live_trading_allowed() and require_live_confirm() and not payload.get("live_confirm"):
+        return jsonify(
+            {"error": "Live orders require live_confirm: true in the request body.", "live_mode": True}
+        ), 400
+
+    try:
+        strike = float(payload.get("strike", 0))
+        qty = int(payload.get("quantity") or payload.get("qty") or 1)
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid strike or quantity"}), 400
+
+    limit = payload.get("limit_price")
+    try:
+        limit_f = float(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        limit_f = None
+
+    spot = payload.get("spot")
+    try:
+        spot_f = float(spot) if spot else 0.0
+    except (TypeError, ValueError):
+        spot_f = 0.0
+
+    result = execute_buy(
+        underlying=str(payload.get("underlying") or "SPY").upper(),
+        option_type=str(payload.get("option_type") or "call").lower(),
+        strike=strike,
+        quantity=max(1, qty),
+        limit_price=limit_f,
+        expire_date=payload.get("expire_date"),
+        spot=spot_f,
+        ticker=str(payload.get("ticker") or PRIMARY_TICKER).upper(),
+        price_style=str(payload.get("price_style") or "smart"),
+        journal=bool(payload.get("journal", True)),
+    )
+    status = 200 if result.get("ok") else 400
+    return jsonify(result), status
+
+
+@APP.post("/api/webull/order/sell")
+def api_webull_order_sell():
+    from gex_core.trading.config import live_trading_allowed, require_live_confirm
+    from gex_core.trading.webull_quick_trade import execute_sell
+
+    if not _admin_action_authorized(request) and os.environ.get("GEX_ADMIN_TOKEN"):
+        return jsonify({"error": "Admin token required for live orders"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    if live_trading_allowed() and require_live_confirm() and not payload.get("live_confirm"):
+        return jsonify(
+            {"error": "Live orders require live_confirm: true in the request body.", "live_mode": True}
+        ), 400
+
+    try:
+        strike = float(payload.get("strike", 0))
+        qty = int(payload.get("quantity") or payload.get("qty") or 1)
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid strike or quantity"}), 400
+
+    limit = payload.get("limit_price")
+    entry = payload.get("entry_premium")
+    try:
+        limit_f = float(limit) if limit is not None else None
+        entry_f = float(entry) if entry is not None else None
+    except (TypeError, ValueError):
+        limit_f = None
+        entry_f = None
+
+    trade_id = payload.get("trade_id")
+    try:
+        trade_id_i = int(trade_id) if trade_id is not None else None
+    except (TypeError, ValueError):
+        trade_id_i = None
+
+    spot = payload.get("spot")
+    try:
+        spot_f = float(spot) if spot else 0.0
+    except (TypeError, ValueError):
+        spot_f = 0.0
+
+    result = execute_sell(
+        underlying=str(payload.get("underlying") or "SPY").upper(),
+        option_type=str(payload.get("option_type") or "call").lower(),
+        strike=strike,
+        quantity=max(1, qty),
+        limit_price=limit_f,
+        expire_date=payload.get("expire_date"),
+        entry_premium=entry_f,
+        spot=spot_f,
+        ticker=str(payload.get("ticker") or PRIMARY_TICKER).upper(),
+        trade_id=trade_id_i,
+        price_style=str(payload.get("price_style") or "smart"),
+        journal=bool(payload.get("journal", True)),
+    )
+    status = 200 if result.get("ok") else 400
+    return jsonify(result), status
+
+
 @APP.get("/api/periscope/timeline")
 def api_periscope_timeline():
     """Available dates and intraday slices for the session picker."""

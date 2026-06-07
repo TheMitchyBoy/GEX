@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Webull Quick Trade · {{ execution_ticker }} 0DTE</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      :root {
+        --bg: #05070c; --panel: rgba(12, 17, 28, 0.92); --border: rgba(148, 163, 184, 0.12);
+        --txt: #f1f5f9; --muted: #64748b; --label: #94a3b8;
+        --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --accent: #3b82f6;
+        --radius: 12px;
+      }
+      body { background: var(--bg); color: var(--txt); font-family: Inter, sans-serif; font-size: 0.875rem; min-height: 100vh; }
+      .mono { font-family: "JetBrains Mono", monospace; }
+      .muted { color: var(--muted); }
+      .page-wrap { max-width: 1200px; margin: 0 auto; padding: 1rem; }
+      .uw-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 1rem; overflow: hidden; }
+      .uw-panel-head { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); font-weight: 600; color: var(--label); display: flex; justify-content: space-between; align-items: center; }
+      .uw-panel-body { padding: 1rem; }
+      .chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+      .chip.go { background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.35); }
+      .chip.wait { background: rgba(245,158,11,0.12); color: var(--amber); border: 1px solid rgba(245,158,11,0.35); }
+      .chip.sell { background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.35); }
+      .chip.hold { background: rgba(100,116,139,0.15); color: var(--label); border: 1px solid var(--border); }
+      .kpi { background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.75rem; }
+      .kpi .val { font-size: 1.1rem; font-weight: 600; }
+      .price-btn { font-size: 0.75rem; padding: 0.35rem 0.5rem; }
+      .type-call { color: var(--green); }
+      .type-put { color: var(--red); }
+      .form-control, .form-select { background: #0a0f18; border-color: var(--border); color: var(--txt); }
+      .form-control:focus, .form-select:focus { background: #0a0f18; color: var(--txt); border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }
+      .btn-buy { background: var(--green); border: none; color: #052e16; font-weight: 600; }
+      .btn-sell { background: var(--red); border: none; color: #fff; font-weight: 600; }
+      .btn-outline-accent { border-color: var(--accent); color: #93c5fd; }
+      table { color: var(--txt); font-size: 0.8rem; }
+      .nav-link-custom { color: var(--label); text-decoration: none; }
+      .nav-link-custom:hover { color: var(--accent); }
+      #log { max-height: 140px; overflow-y: auto; font-size: 0.72rem; }
+    </style>
+  </head>
+  <body>
+    <div class="page-wrap">
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <div>
+          <h1 class="h5 mb-1">Webull Quick Trade</h1>
+          <div class="muted small">{{ signal_ticker }} signals → <span class="mono">{{ execution_ticker }}</span> 0DTE</div>
+        </div>
+        <div class="d-flex gap-3 align-items-center">
+          <a class="nav-link-custom small" href="{{ url_for('index') }}">← Gamma dashboard</a>
+          <span id="conn-chip" class="chip hold">connecting</span>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3" id="kpi-row">
+        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">SPY spot</div><div class="val mono" id="kpi-spot">—</div></div></div>
+        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Account</div><div class="val mono" id="kpi-equity">—</div></div></div>
+        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Bid / Ask</div><div class="val mono" id="kpi-nbbo">—</div></div></div>
+        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Spread</div><div class="val mono" id="kpi-spread">—</div></div></div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-lg-5">
+          <div class="uw-panel">
+            <div class="uw-panel-head">Contract</div>
+            <div class="uw-panel-body">
+              <div class="row g-2 mb-2">
+                <div class="col-6">
+                  <label class="small muted">Underlying</label>
+                  <input class="form-control form-control-sm mono" id="underlying" value="{{ execution_ticker }}">
+                </div>
+                <div class="col-6">
+                  <label class="small muted">Expiry (0DTE)</label>
+                  <input class="form-control form-control-sm mono" id="expire" type="date">
+                </div>
+                <div class="col-4">
+                  <label class="small muted">Type</label>
+                  <select class="form-select form-select-sm" id="option-type">
+                    <option value="call">Call</option>
+                    <option value="put">Put</option>
+                  </select>
+                </div>
+                <div class="col-4">
+                  <label class="small muted">Strike</label>
+                  <input class="form-control form-control-sm mono" id="strike" type="number" step="0.5" placeholder="590">
+                </div>
+                <div class="col-4">
+                  <label class="small muted">Qty</label>
+                  <input class="form-control form-control-sm mono" id="qty" type="number" min="1" value="1">
+                </div>
+                <div class="col-12">
+                  <label class="small muted">Entry premium (for exit targets)</label>
+                  <input class="form-control form-control-sm mono" id="entry-premium" type="number" step="0.01" placeholder="auto from fill">
+                </div>
+              </div>
+              <button class="btn btn-sm btn-outline-accent w-100 mb-2" id="btn-refresh-quote">Refresh quote</button>
+              <div class="small muted mb-1">Auto-refresh every <span id="poll-sec">3</span>s</div>
+            </div>
+          </div>
+
+          <div class="uw-panel">
+            <div class="uw-panel-head">Entry — buy at best price</div>
+            <div class="uw-panel-body">
+              <div class="d-flex align-items-center gap-2 mb-2">
+                <span id="entry-signal" class="chip wait">—</span>
+                <span class="small muted" id="entry-summary">Waiting for quote…</span>
+              </div>
+              <div class="d-flex flex-wrap gap-1 mb-2" id="entry-prices"></div>
+              <button class="btn btn-buy w-100" id="btn-buy-smart">Buy SMART limit</button>
+              <div class="form-check mt-2 small">
+                <input class="form-check-input" type="checkbox" id="live-confirm">
+                <label class="form-check-label muted" for="live-confirm">I confirm live Webull order</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-5">
+          <div class="uw-panel">
+            <div class="uw-panel-head">Exit — sell at highest price</div>
+            <div class="uw-panel-body">
+              <div class="d-flex align-items-center gap-2 mb-2">
+                <span id="exit-signal" class="chip hold">—</span>
+                <span class="small muted" id="exit-summary">Set entry premium for targets</span>
+              </div>
+              <div class="d-flex flex-wrap gap-1 mb-2" id="exit-prices"></div>
+              <button class="btn btn-sell w-100" id="btn-sell-smart">Sell SMART limit</button>
+              <div class="small muted mt-2">TP <span id="tp-pct">—</span> · SL <span id="sl-pct">—</span></div>
+            </div>
+          </div>
+
+          <div class="uw-panel">
+            <div class="uw-panel-head">Order log</div>
+            <div class="uw-panel-body mono muted" id="log"></div>
+          </div>
+        </div>
+
+        <div class="col-lg-2">
+          <div class="uw-panel">
+            <div class="uw-panel-head">Positions</div>
+            <div class="uw-panel-body p-0">
+              <div class="table-responsive">
+                <table class="table table-sm table-borderless mb-0">
+                  <tbody id="positions-body"><tr><td class="muted p-2">—</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const INITIAL = {{ initial_state | tojson }};
+      const TICKER = {{ ticker | tojson }};
+      let pollTimer = null;
+      let peakPremium = null;
+
+      function log(msg) {
+        const el = document.getElementById('log');
+        const line = document.createElement('div');
+        line.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+        el.prepend(line);
+      }
+
+      function fmtUsd(v) {
+        if (v == null || isNaN(v)) return '—';
+        return '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
+      }
+
+      function fmtPx(v) {
+        if (v == null || isNaN(v)) return '—';
+        return '$' + Number(v).toFixed(2);
+      }
+
+      function setSignal(elId, cond) {
+        const el = document.getElementById(elId);
+        el.textContent = (cond.action || 'hold').toUpperCase();
+        el.className = 'chip ' + (cond.action || 'hold');
+        const summary = document.getElementById(elId.replace('signal', 'summary'));
+        if (summary) summary.textContent = cond.summary || '';
+      }
+
+      function renderPriceButtons(containerId, prices, side) {
+        const box = document.getElementById(containerId);
+        box.innerHTML = '';
+        if (!prices) return;
+        for (const [style, px] of Object.entries(prices)) {
+          const b = document.createElement('button');
+          b.className = 'btn btn-outline-secondary btn-sm price-btn mono';
+          b.textContent = style + ' ' + fmtPx(px);
+          b.onclick = () => {
+            if (side === 'buy') placeOrder('buy', style, px);
+            else placeOrder('sell', style, px);
+          };
+          box.appendChild(b);
+        }
+      }
+
+      async function refreshStatus() {
+        const r = await fetch('/api/webull/status?ticker=' + encodeURIComponent(TICKER));
+        const s = await r.json();
+        document.getElementById('kpi-spot').textContent = s.execution_spot ? Number(s.execution_spot).toFixed(2) : '—';
+        document.getElementById('kpi-equity').textContent = fmtUsd(s.account_equity);
+        document.getElementById('tp-pct').textContent = ((s.take_profit_pct || 0) * 100).toFixed(0) + '%';
+        document.getElementById('sl-pct').textContent = ((s.stop_loss_pct || 0) * 100).toFixed(0) + '%';
+        const chip = document.getElementById('conn-chip');
+        if (!s.webull_configured) {
+          chip.textContent = 'paper / no webull';
+          chip.className = 'chip wait';
+        } else if (s.live_trading_allowed) {
+          chip.textContent = 'live ready';
+          chip.className = 'chip go';
+        } else {
+          chip.textContent = 'paper mode';
+          chip.className = 'chip hold';
+        }
+        renderPositions(s.journal_positions, s.broker_positions);
+        if (s.default_expire && !document.getElementById('expire').value) {
+          document.getElementById('expire').value = s.default_expire;
+        }
+        return s;
+      }
+
+      function renderPositions(journal, broker) {
+        const body = document.getElementById('positions-body');
+        body.innerHTML = '';
+        const rows = (journal || []).map(p => ({
+          label: (p.option_type || '') + ' ' + (p.strike || '') + ' x' + (p.qty || 1),
+          entry: p.entry_premium,
+          id: p.id,
+          strike: p.strike,
+          type: p.option_type,
+          qty: p.qty,
+        }));
+        if (!rows.length) {
+          body.innerHTML = '<tr><td class="muted p-2 small">No open journal positions</td></tr>';
+          return;
+        }
+        rows.forEach(r => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td class="p-2"><a href="#" class="text-decoration-none ' + (r.type === 'call' ? 'type-call' : 'type-put') + '">' + r.label + '</a><br><span class="muted small">@ ' + fmtPx(r.entry) + '</span></td>';
+          tr.querySelector('a').onclick = (e) => {
+            e.preventDefault();
+            document.getElementById('strike').value = r.strike;
+            document.getElementById('option-type').value = r.type;
+            document.getElementById('entry-premium').value = r.entry;
+            tr.dataset.tradeId = r.id;
+            refreshQuote();
+          };
+          body.appendChild(tr);
+        });
+      }
+
+      async function refreshQuote() {
+        const strike = document.getElementById('strike').value;
+        if (!strike) return;
+        const params = new URLSearchParams({
+          strike,
+          type: document.getElementById('option-type').value,
+          underlying: document.getElementById('underlying').value,
+          expire: document.getElementById('expire').value,
+        });
+        const entry = document.getElementById('entry-premium').value;
+        if (entry) params.set('entry_premium', entry);
+        if (peakPremium) params.set('peak_premium', peakPremium);
+        const r = await fetch('/api/webull/quote?' + params);
+        const q = await r.json();
+        if (q.error) { log('Quote error: ' + q.error); return; }
+        const qq = q.quote || {};
+        document.getElementById('kpi-nbbo').textContent = fmtPx(qq.bid) + ' / ' + fmtPx(qq.ask);
+        document.getElementById('kpi-spread').textContent = qq.spread_pct != null ? (qq.spread_pct * 100).toFixed(1) + '%' : '—';
+        if (qq.mid) {
+          peakPremium = peakPremium == null ? qq.mid : Math.max(peakPremium, qq.mid);
+        }
+        setSignal('entry-signal', q.entry_conditions || {});
+        setSignal('exit-signal', q.exit_conditions || {});
+        renderPriceButtons('entry-prices', q.prices?.entry, 'buy');
+        renderPriceButtons('exit-prices', q.prices?.exit, 'sell');
+      }
+
+      async function placeOrder(side, style, limitPrice) {
+        const liveConfirm = document.getElementById('live-confirm').checked;
+        const body = {
+          underlying: document.getElementById('underlying').value,
+          option_type: document.getElementById('option-type').value,
+          strike: parseFloat(document.getElementById('strike').value),
+          quantity: parseInt(document.getElementById('qty').value, 10) || 1,
+          expire_date: document.getElementById('expire').value,
+          price_style: style,
+          live_confirm: liveConfirm,
+          ticker: TICKER,
+        };
+        if (limitPrice != null && !isNaN(limitPrice)) body.limit_price = limitPrice;
+        const entry = document.getElementById('entry-premium').value;
+        if (entry) body.entry_premium = parseFloat(entry);
+        const url = side === 'buy' ? '/api/webull/order/buy' : '/api/webull/order/sell';
+        log(side.toUpperCase() + ' ' + style + ' @ ' + fmtPx(limitPrice) + '…');
+        const r = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+        const res = await r.json();
+        if (res.ok) {
+          log(side + ' OK stage=' + (res.stage || '') + ' fill=' + fmtPx(res.filled_premium || res.limit_used));
+          if (side === 'buy' && res.filled_premium) {
+            document.getElementById('entry-premium').value = res.filled_premium;
+            peakPremium = res.filled_premium;
+          }
+          refreshStatus();
+          refreshQuote();
+        } else {
+          log('Order failed: ' + (res.error || res.stage || JSON.stringify(res)));
+        }
+      }
+
+      document.getElementById('btn-refresh-quote').onclick = refreshQuote;
+      document.getElementById('btn-buy-smart').onclick = () => placeOrder('buy', 'smart', undefined);
+      document.getElementById('btn-sell-smart').onclick = () => placeOrder('sell', 'smart', undefined);
+
+      (async function init() {
+        if (INITIAL.default_expire) document.getElementById('expire').value = INITIAL.default_expire;
+        await refreshStatus();
+        pollTimer = setInterval(() => { refreshQuote().catch(() => {}); }, 3000);
+        document.getElementById('strike').addEventListener('change', refreshQuote);
+      })();
+    </script>
+  </body>
+</html>

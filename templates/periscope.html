@@ -481,6 +481,7 @@
             {% if auto_trader.live_mode %}<span class="chip live-pulse" style="border-color:rgba(239,68,68,0.5);color:var(--red);">Webull Live</span>{% else %}<span class="chip">Paper</span>{% endif %}
             {% if auto_trader.enabled %}<span class="chip">Every {{ auto_trader.cycle_seconds or 30 }}s</span>{% endif %}
             {% if auto_trader.execution_ticker and auto_trader.execution_ticker != auto_trader.signal_ticker %}<span class="chip">{{ auto_trader.signal_ticker }} γ → {{ auto_trader.execution_ticker }}</span>{% endif %}
+            <a href="{{ url_for('webull_trade_dashboard') }}" class="chip text-decoration-none" style="color:#93c5fd;">Quick Trade →</a>
             <span class="last-updated" id="lastUpdated"></span>
           </div>
         </div>
