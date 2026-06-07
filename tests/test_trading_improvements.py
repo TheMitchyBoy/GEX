@@ -7,6 +7,7 @@ import pytest
 
 from gex_core.market_time import export_ts_entry_window_ok, is_eod_flatten_time
 from gex_core.trading.exits import ExitProfile, ExitState, evaluate_exit, resolve_full_take_profit
+from gex_core.trading.config import require_flow_alignment
 from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.sizing import resolve_contract_qty
 
@@ -23,6 +24,11 @@ def enable_strict_filters(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_PREFER_SIGNAL", "")
     monkeypatch.setenv("GEX_TRADER_MIN_FLOW_AGGRESSIVENESS", "0")
     monkeypatch.setenv("GEX_TRADER_MIN_FLOW_BUY_RATIO", "0")
+
+
+def test_require_flow_alignment_default_off(monkeypatch):
+    monkeypatch.delenv("GEX_TRADER_REQUIRE_FLOW_ALIGN", raising=False)
+    assert not require_flow_alignment()
 
 
 def test_risk_based_sizing_caps_contracts(monkeypatch):

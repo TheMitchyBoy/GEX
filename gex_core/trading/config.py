@@ -208,7 +208,7 @@ def block_event_days() -> bool:
 
 
 def require_flow_alignment() -> bool:
-    return _flag("GEX_TRADER_REQUIRE_FLOW_ALIGN", "1")
+    return _flag("GEX_TRADER_REQUIRE_FLOW_ALIGN", "0")
 
 
 def strict_entry_filters() -> bool:

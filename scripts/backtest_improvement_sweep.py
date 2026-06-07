@@ -16,8 +16,8 @@ from gex_core.exports import EXPORT_DIR
 from gex_core.history import _build_history_impl
 from gex_core.trading.backtest import backtest_auto_trader
 
-# Baseline matches current production defaults (all new toggles off).
-BASELINE_ENV: dict[str, str] = {
+# Production defaults (matches config.py fallbacks on main).
+PRODUCTION_BASELINE: dict[str, str] = {
     "GEX_TRADER_STRICT_FILTERS": "1",
     "GEX_TRADER_REQUIRE_MOMENTUM": "1",
     "GEX_TRADER_REQUIRE_FLIP_SIDE": "1",
@@ -34,40 +34,71 @@ BASELINE_ENV: dict[str, str] = {
     "GEX_TRADER_MIN_ENTRY_CONFIDENCE": "0",
     "GEX_TRADER_STRONG_CONFIDENCE": "0.80",
     "GEX_TRADER_MAX_OPEN": "2",
+    "GEX_TRADER_MAX_ENTRIES_PER_CYCLE": "1",
+    "GEX_TRADER_MULTI_STRIKE": "2",
     "GEX_TRADER_ENTRY_TIME_FILTER": "1",
     "GEX_TRADER_ENTRY_AFTER_OPEN_MIN": "15",
     "GEX_TRADER_ENTRY_BEFORE_CLOSE_MIN": "30",
+    "GEX_TRADER_TIME_STOP_BARS": "6",
+    "GEX_TRADER_TIME_STOP_MIN_PROGRESS": "0.20",
+    "GEX_TRADER_TAKE_PROFIT_PCT": "0.35",
+    "GEX_TRADER_MAGNET_PARTIAL_PROGRESS": "0.80",
 }
 
 SCENARIOS: list[tuple[str, dict[str, str]]] = [
-    ("baseline (current)", {}),
-    ("1. fix magnet exit scale (SPX→SPY)", {"GEX_TRADER_FIX_MAGNET_EXIT_SCALE": "1"}),
+    ("★ production baseline", {}),
+    # --- Original sweep ---
+    ("1. flow align ON (legacy strict)", {"GEX_TRADER_REQUIRE_FLOW_ALIGN": "1"}),
     ("2. entry min magnet progress 15%", {"GEX_TRADER_MIN_MAGNET_PROGRESS": "0.15"}),
     ("3. min magnet distance 0.3%", {"GEX_TRADER_MIN_MAGNET_DISTANCE_PCT": "0.003"}),
-    ("4. dynamic time_stop by distance", {"GEX_TRADER_DYNAMIC_TIME_STOP": "1"}),
-    ("5. confidence floor 0.85", {"GEX_TRADER_MIN_ENTRY_CONFIDENCE": "0.85", "GEX_TRADER_STRONG_CONFIDENCE": "0.70"}),
-    ("6. equity from mark (fix ROI)", {"GEX_TRADER_EQUITY_FROM_MARK": "1"}),
-    ("7. max_open=1 (dedupe exposure)", {"GEX_TRADER_MAX_OPEN": "1", "GEX_TRADER_MAX_ENTRIES_PER_CYCLE": "1"}),
-    ("8. regime strict (block short γ)", {"GEX_TRADER_REGIME_STRICT": "1"}),
-    ("9. magnet partial exit @80%", {"GEX_TRADER_MAGNET_PARTIAL_EXIT": "1"}),
+    ("4. confidence floor 0.85", {"GEX_TRADER_MIN_ENTRY_CONFIDENCE": "0.85", "GEX_TRADER_STRONG_CONFIDENCE": "0.70"}),
+    ("5. max_open=1", {"GEX_TRADER_MAX_OPEN": "1", "GEX_TRADER_MAX_ENTRIES_PER_CYCLE": "1"}),
+    ("6. regime strict (block short γ)", {"GEX_TRADER_REGIME_STRICT": "1"}),
+    ("7. wider entry window (30/45 min)", {"GEX_TRADER_ENTRY_AFTER_OPEN_MIN": "30", "GEX_TRADER_ENTRY_BEFORE_CLOSE_MIN": "45"}),
+    # --- Exit / time-stop tuning ---
+    ("8. time_stop min progress 35%", {"GEX_TRADER_TIME_STOP_MIN_PROGRESS": "0.35"}),
+    ("9. time_stop bars 10", {"GEX_TRADER_TIME_STOP_BARS": "10"}),
+    ("10. time_stop bars 4 (tighter)", {"GEX_TRADER_TIME_STOP_BARS": "4"}),
+    ("11. magnet partial exit @80%", {"GEX_TRADER_MAGNET_PARTIAL_EXIT": "1"}),
+    ("12. magnet partial exit @75%", {"GEX_TRADER_MAGNET_PARTIAL_EXIT": "1", "GEX_TRADER_MAGNET_PARTIAL_PROGRESS": "0.75"}),
+    ("13. take_profit 15%", {"GEX_TRADER_TAKE_PROFIT_PCT": "0.15"}),
+    ("14. take_profit 20%", {"GEX_TRADER_TAKE_PROFIT_PCT": "0.20"}),
+    ("15. partial TP 12% (non-hold setups)", {"GEX_TRADER_PARTIAL_TP_PCT": "0.12"}),
+    # --- Entry / exposure ---
+    ("16. multi_strike=1", {"GEX_TRADER_MULTI_STRIKE": "1"}),
+    ("17. flow OFF + multi_strike=1", {"GEX_TRADER_REQUIRE_FLOW_ALIGN": "0", "GEX_TRADER_MULTI_STRIKE": "1"}),
+    # --- Combos (positive levers only) ---
     (
-        "10. wider entry window (30/45 min)",
-        {"GEX_TRADER_ENTRY_AFTER_OPEN_MIN": "30", "GEX_TRADER_ENTRY_BEFORE_CLOSE_MIN": "45"},
+        "18. flow OFF + time_stop progress 35%",
+        {"GEX_TRADER_REQUIRE_FLOW_ALIGN": "0", "GEX_TRADER_TIME_STOP_MIN_PROGRESS": "0.35"},
     ),
     (
-        "★ best combo (1+2+5+7)",
+        "19. flow OFF + magnet partial @75%",
+        {"GEX_TRADER_REQUIRE_FLOW_ALIGN": "0", "GEX_TRADER_MAGNET_PARTIAL_EXIT": "1", "GEX_TRADER_MAGNET_PARTIAL_PROGRESS": "0.75"},
+    ),
+    (
+        "20. flow OFF + multi_strike=1 + magnet partial @75%",
         {
-            "GEX_TRADER_FIX_MAGNET_EXIT_SCALE": "1",
-            "GEX_TRADER_MIN_MAGNET_PROGRESS": "0.15",
-            "GEX_TRADER_MIN_ENTRY_CONFIDENCE": "0.85",
-            "GEX_TRADER_STRONG_CONFIDENCE": "0.70",
-            "GEX_TRADER_MAX_OPEN": "1",
-            "GEX_TRADER_MAX_ENTRIES_PER_CYCLE": "1",
+            "GEX_TRADER_REQUIRE_FLOW_ALIGN": "0",
+            "GEX_TRADER_MULTI_STRIKE": "1",
+            "GEX_TRADER_MAGNET_PARTIAL_EXIT": "1",
+            "GEX_TRADER_MAGNET_PARTIAL_PROGRESS": "0.75",
+        },
+    ),
+    (
+        "21. flow OFF + time_stop 35% + magnet partial @75%",
+        {
+            "GEX_TRADER_REQUIRE_FLOW_ALIGN": "0",
+            "GEX_TRADER_TIME_STOP_MIN_PROGRESS": "0.35",
+            "GEX_TRADER_MAGNET_PARTIAL_EXIT": "1",
+            "GEX_TRADER_MAGNET_PARTIAL_PROGRESS": "0.75",
         },
     ),
 ]
 
-_TRACKED_KEYS = sorted({k for env in [BASELINE_ENV, *[o for _, o in SCENARIOS]] for k in env} | set(BASELINE_ENV))
+_TRACKED_KEYS = sorted(
+    {k for env in [PRODUCTION_BASELINE, *[o for _, o in SCENARIOS]] for k in env} | set(PRODUCTION_BASELINE)
+)
 
 
 @contextmanager
@@ -76,7 +107,7 @@ def trader_env(overrides: dict[str, str]):
     try:
         for k in _TRACKED_KEYS:
             os.environ.pop(k, None)
-        for k, v in BASELINE_ENV.items():
+        for k, v in PRODUCTION_BASELINE.items():
             os.environ[k] = v
         for k, v in overrides.items():
             os.environ[k] = v
@@ -107,6 +138,9 @@ def _run_case(name: str, overrides: dict[str, str], history: list[dict], capital
         "magnet_partial": int(by_exit.get("magnet_partial") or 0),
         "time_stop": int(by_exit.get("time_stop") or 0),
         "stop_loss": int(by_exit.get("stop_loss") or 0),
+        "take_profit": int(by_exit.get("take_profit") or 0),
+        "eod_flatten": int(by_exit.get("eod_flatten") or 0),
+        "trailing_stop": int(by_exit.get("trailing_stop") or 0),
         "date_from": result.get("date_from"),
         "date_to": result.get("date_to"),
     }
@@ -118,6 +152,7 @@ def main() -> int:
     parser.add_argument("--lookback-days", type=int, default=14)
     parser.add_argument("--starting-capital", type=float, default=500)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--output", help="Write JSON results to this path")
     args = parser.parse_args()
 
     history = _build_history_impl(
@@ -136,29 +171,46 @@ def main() -> int:
     for row in rows:
         row["pnl_vs_baseline"] = round(row["pnl_usd"] - baseline_pnl, 2)
 
+    payload = {"snapshots": len(history), "lookback_days": args.lookback_days, "results": rows}
+
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
     if args.json:
-        print(json.dumps({"snapshots": len(history), "results": rows}, indent=2))
+        print(json.dumps(payload, indent=2))
         return 0
 
-    print("=" * 100)
-    print(f"IMPROVEMENT SWEEP — {args.ticker} {args.lookback_days}d | {len(history)} snapshots | ${args.starting_capital:.0f} start")
-    print(f"Window: {rows[0]['date_from']} -> {rows[0]['date_to']}")
-    print("=" * 100)
+    print("=" * 115)
     print(
-        f"{'Scenario':<42} {'Trades':>6} {'Win%':>6} {'PnL':>9} {'ΔPnL':>8} "
-        f"{'MagTouch':>8} {'TimeStop':>8} {'SkipFilt':>8}"
+        f"IMPROVEMENT SWEEP — {args.ticker} {args.lookback_days}d | {len(history)} snapshots | "
+        f"${args.starting_capital:.0f} start"
     )
-    print("-" * 100)
+    print(f"Window: {rows[0]['date_from']} -> {rows[0]['date_to']}")
+    print("=" * 115)
+    print(
+        f"{'Scenario':<44} {'Trd':>4} {'Win%':>6} {'PnL':>9} {'ΔPnL':>8} {'ROI':>6} "
+        f"{'MagT':>5} {'MagP':>5} {'TStop':>5} {'TP':>4} {'EOD':>4}"
+    )
+    print("-" * 115)
     for row in rows:
         print(
-            f"{row['name']:<42} {row['trades']:>6} {row['win_rate']*100:>5.1f}% "
-            f"${row['pnl_usd']:>8.2f} {row['pnl_vs_baseline']:>+8.2f} "
-            f"{row['magnet_touch']:>8} {row['time_stop']:>8} {row['skipped_filters']:>8}"
+            f"{row['name']:<44} {row['trades']:>4} {row['win_rate']*100:>5.1f}% "
+            f"${row['pnl_usd']:>8.2f} {row['pnl_vs_baseline']:>+8.2f} {row['return_pct']*100:>5.1f}% "
+            f"{row['magnet_touch']:>5} {row['magnet_partial']:>5} {row['time_stop']:>5} "
+            f"{row['take_profit']:>4} {row['eod_flatten']:>4}"
         )
 
-    best = max(rows[1:], key=lambda r: r["pnl_usd"])
+    ranked = sorted(rows[1:], key=lambda r: r["pnl_usd"], reverse=True)
     print()
-    print(f"Best single change vs baseline: {best['name']} (PnL ${best['pnl_usd']:.2f}, Δ{best['pnl_vs_baseline']:+.2f})")
+    print("Top 5 vs production baseline:")
+    for row in ranked[:5]:
+        print(
+            f"  {row['name']}: ${row['pnl_usd']:.2f} (Δ{row['pnl_vs_baseline']:+.2f}), "
+            f"{row['trades']} trades, {row['win_rate']*100:.1f}% win"
+        )
+    print()
+    worst = min(rows[1:], key=lambda r: r["pnl_usd"])
+    print(f"Worst: {worst['name']} — ${worst['pnl_usd']:.2f} (Δ{worst['pnl_vs_baseline']:+.2f})")
     return 0
 
 
