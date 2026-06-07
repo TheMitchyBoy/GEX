@@ -26,7 +26,6 @@ from gex_core.trading.config import (
     max_open_positions,
     min_entry_confidence,
     momentum_bars,
-    stop_cooldown_bars,
     stop_loss_pct,
     take_profit_pct,
     trader_bar_minutes,
@@ -46,7 +45,7 @@ from gex_core.trading.paper_broker import (
     pnl_usd,
 )
 from gex_core.trading.execution import map_execution_strike, resolve_backtest_execution_spot, uses_execution_mapping
-from gex_core.trading.signals import compute_entry_candidates
+from gex_core.trading.signals import compute_entry_candidates, max_positive_gamma_strike
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
 
 
@@ -114,6 +113,7 @@ class _OpenPosition:
     ai_confidence: float
     signal_strike: float | None = None
     magnet_strike: float | None = None
+    entry_positive_gamma_strike: float | None = None
     qty: float = 1.0
     exit_profile: ExitProfile = field(default_factory=ExitProfile)
     exit_state: ExitState = field(default_factory=ExitState)
@@ -442,6 +442,7 @@ def _check_exits(
             state.account.record_equity(ts, state.open_positions, mark_spot)
         return
 
+    current_positive_gamma_strike = max_positive_gamma_strike(row.get("strike"))
     remaining: list[_OpenPosition] = []
     for pos in state.open_positions:
         pnl_pct = _position_pnl(pos, mark_spot)
@@ -455,7 +456,8 @@ def _check_exits(
             current_spot=mark_spot,
             option_type=pos.option_type,
             profile=pos.exit_profile,
-            magnet_strike=pos.magnet_strike,
+            entry_positive_gamma_strike=pos.entry_positive_gamma_strike,
+            current_positive_gamma_strike=current_positive_gamma_strike,
         )
         if exit_reason:
             sell_qty = pos.qty
@@ -475,16 +477,6 @@ def _check_exits(
                 bars_held=bars_held,
                 sell_qty=sell_qty,
             )
-            if reason == "stop_loss":
-                key = (pos.signal_strike or pos.strike, pos.option_type.lower())
-                cooldown_bars = stop_cooldown_bars()
-                cooldown_minutes = cooldown_bars * bar_minutes
-                from datetime import timedelta
-
-                from gex_core.exports import parse_timestamp
-
-                expire = parse_timestamp(ts) + timedelta(minutes=cooldown_minutes)
-                state.strike_cooldown[key] = expire.strftime("%Y-%m-%d_%H%M%S")
             if pos.qty > 0:
                 remaining.append(pos)
         else:
@@ -619,6 +611,7 @@ def _maybe_enter(
                 ai_confidence=confidence,
                 signal_strike=signal_strike if uses_execution_mapping() else None,
                 magnet_strike=magnet_strike,
+                entry_positive_gamma_strike=magnet_strike_raw,
                 qty=qty,
                 exit_profile=profile,
             )

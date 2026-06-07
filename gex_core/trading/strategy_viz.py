@@ -12,15 +12,8 @@ from plotly.utils import PlotlyJSONEncoder
 
 from gex_core.features import safe_float
 from gex_core.trading.advisor import _rule_based_advice
-from gex_core.trading.config import (
-    max_strike_distance_pct,
-    partial_take_profit_pct,
-    stop_loss_pct,
-    take_profit_pct,
-    trailing_stop_floor_pct,
-    trailing_stop_trigger_pct,
-)
-from gex_core.trading.exits import build_exit_profile, effective_stop_loss
+from gex_core.trading.config import max_strike_distance_pct, take_profit_pct
+from gex_core.trading.exits import build_exit_profile
 from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.journal import get_performance_summary, list_open_trades, list_recent_trades
 from gex_core.trading.paper_broker import estimate_option_pnl_pct
@@ -94,12 +87,10 @@ def build_strategy_state(
                 current_spot=spot_val,
                 strike=float(pos["strike"]),
             )
-        stop = effective_stop_loss(entry_spot=float(pos["entry_spot"]), strike=float(pos["strike"]))
         marked_positions.append(
             {
                 **pos,
                 "pnl_pct": pnl,
-                "stop_pct": -stop,
                 "target_pct": take_profit_pct(),
             }
         )
@@ -124,18 +115,13 @@ def build_strategy_state(
         "performance": memory["performance"],
         "recent_trades": list_recent_trades(limit=15, ticker=ticker),
         "rules": {
-            "stop_loss_pct": stop_loss_pct(),
             "take_profit_pct": take_profit_pct(),
-            "partial_take_profit_pct": partial_take_profit_pct(),
-            "trail_trigger_pct": trailing_stop_trigger_pct(),
-            "trail_floor_pct": trailing_stop_floor_pct(),
+            "gamma_strike_change_exit": True,
             "max_strike_distance_pct": max_strike_distance_pct(),
         },
         "exit_profile": {
-            "hold_for_target": profile.hold_for_target if profile else False,
-            "partial_take_profit": profile.partial_take_profit if profile else partial_take_profit_pct(),
-            "trail_trigger": profile.trail_trigger if profile else trailing_stop_trigger_pct(),
-            "trail_floor": profile.trail_floor if profile else trailing_stop_floor_pct(),
+            "hold_for_target": True,
+            "full_take_profit": profile.full_take_profit if profile else take_profit_pct(),
         }
         if profile
         else None,

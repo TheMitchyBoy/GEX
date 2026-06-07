@@ -70,9 +70,9 @@ def far_otm_distance_pct() -> float:
 
 def take_profit_pct() -> float:
     try:
-        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.60")))
+        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.30")))
     except (TypeError, ValueError):
-        return 0.60
+        return 0.30
 
 
 def partial_take_profit_pct() -> float:

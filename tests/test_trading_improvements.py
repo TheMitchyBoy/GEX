@@ -116,9 +116,8 @@ def test_flow_and_gamma_delta_pass(monkeypatch):
     assert result["approve"]
 
 
-def test_magnet_touch_exit_triggers(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
-    profile = ExitProfile(full_take_profit=0.60)
+def test_gamma_strike_change_exit_triggers():
+    profile = ExitProfile(full_take_profit=0.30)
     state = ExitState()
     reason, pnl = evaluate_exit(
         0.08,
@@ -129,8 +128,11 @@ def test_magnet_touch_exit_triggers(monkeypatch):
         current_spot=5010.0,
         option_type="call",
         profile=profile,
+        entry_positive_gamma_strike=5000.0,
+        current_positive_gamma_strike=5010.0,
     )
-    assert reason == "magnet_touch"
+    assert reason == "gamma_strike_change"
+    assert pnl == 0.08
 
 
 def test_dynamic_take_profit_scales_down(monkeypatch):

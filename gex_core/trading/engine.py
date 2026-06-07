@@ -28,7 +28,6 @@ from gex_core.trading.config import (
     min_entry_confidence,
     paper_trading_only,
     signal_ticker,
-    stop_loss_pct,
     take_profit_pct,
     trader_bar_minutes,
     trader_cycle_seconds,
@@ -57,7 +56,7 @@ from gex_core.trading.paper_broker import (
     mark_to_market_premium,
     pnl_usd,
 )
-from gex_core.trading.signals import compute_entry_candidates
+from gex_core.trading.signals import compute_entry_candidates, max_positive_gamma_strike
 from gex_core.trading.sizing import resolve_contract_qty
 from gex_core.trading.webull_broker import limit_price_for_buy
 
@@ -76,7 +75,6 @@ def trader_status(ticker: str = "SPX") -> dict[str, Any]:
         "signal_ticker": signal_ticker(),
         "execution_ticker": execution_ticker(),
         "webull_underlying": webull_underlying(),
-        "stop_loss_pct": stop_loss_pct(),
         "take_profit_pct": take_profit_pct(),
         "max_open_positions": max_open_positions(),
         "cycle_seconds": trader_cycle_seconds(),
@@ -216,7 +214,12 @@ def _apply_exit(
     return {"trade_id": pos["id"], "exit_reason": exit_reason, "pnl_pct": exit_pnl}
 
 
-def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
+def _check_exits(
+    ticker: str,
+    spot: float,
+    *,
+    exposure: pd.Series | None = None,
+) -> list[dict[str, Any]]:
     broker = get_broker()
     exits: list[dict[str, Any]] = []
     bar_minutes = trader_bar_minutes()
@@ -224,6 +227,7 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
     if _uses_execution_mapping() and (exec_spot is None or exec_spot <= 0):
         return exits
     mark_spot = exec_spot if _uses_execution_mapping() else spot
+    current_positive_gamma_strike = max_positive_gamma_strike(exposure)
     for pos in list_open_trades(ticker):
         pnl_pct = broker.position_pnl_pct(pos, spot=mark_spot)
         if pnl_pct is None:
@@ -233,7 +237,10 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
         exit_state = _exit_state_from_meta(meta)
         bars_held = bars_held_since_entry(str(pos.get("entry_ts") or ""), bar_minutes=bar_minutes)
         profile = _exit_profile_from_meta(meta, pos)
-        magnet_strike = safe_float(pos.get("signal_strike"), 0.0) or None
+        entry_positive_gamma_strike = safe_float(
+            meta.get("entry_positive_gamma_strike") or pos.get("signal_strike"),
+            0.0,
+        ) or None
         exit_reason, exit_pnl = evaluate_exit(
             pnl_pct,
             state=exit_state,
@@ -243,7 +250,8 @@ def _check_exits(ticker: str, spot: float) -> list[dict[str, Any]]:
             current_spot=float(mark_spot),
             option_type=str(pos["option_type"]),
             profile=profile,
-            magnet_strike=magnet_strike,
+            entry_positive_gamma_strike=entry_positive_gamma_strike,
+            current_positive_gamma_strike=current_positive_gamma_strike,
         )
 
         meta_update = {
@@ -474,6 +482,7 @@ def _maybe_enter(
                 "partial_taken": False,
                 "regime": regime,
                 "exit_profile": profile_meta,
+                "entry_positive_gamma_strike": magnet_strike_raw,
             }
         else:
             premium = estimate_entry_premium(exec_spot if _uses_execution_mapping() else spot, exec_strike)
@@ -488,6 +497,7 @@ def _maybe_enter(
                 "partial_taken": False,
                 "regime": regime,
                 "exit_profile": profile_meta,
+                "entry_positive_gamma_strike": magnet_strike_raw,
             }
 
         trade_id = open_trade(
@@ -572,7 +582,7 @@ def run_trading_cycle(
         "entry": None,
     }
     result["eod_exits"] = _flatten_eod(ticker, float(spot))
-    result["exits"] = _check_exits(ticker, float(spot))
+    result["exits"] = _check_exits(ticker, float(spot), exposure=exposure)
     result["entry"] = _maybe_enter(
         ticker=ticker,
         spot=float(spot),

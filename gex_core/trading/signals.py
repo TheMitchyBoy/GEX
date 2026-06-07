@@ -31,6 +31,17 @@ class GammaSignal:
     magnet_strike: float | None = None
 
 
+def max_positive_gamma_strike(exposure: pd.Series | None) -> float | None:
+    """Strike with the largest positive gamma (signal scale), or None."""
+    cur = _clean(exposure)
+    if cur.empty:
+        return None
+    positive = cur[cur > 0]
+    if positive.empty:
+        return None
+    return float(positive.idxmax())
+
+
 def _clean(series: pd.Series | None) -> pd.Series:
     if series is None or series.empty:
         return pd.Series(dtype=float)
