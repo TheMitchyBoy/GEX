@@ -39,6 +39,9 @@
       .nav-link-custom { color: var(--label); text-decoration: none; }
       .nav-link-custom:hover { color: var(--accent); }
       #log { max-height: 140px; overflow-y: auto; font-size: 0.72rem; }
+      .btn-sell.urgent { animation: pulse-sell 1.2s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(239,68,68,0.45); }
+      @keyframes pulse-sell { 0%, 100% { opacity: 1; } 50% { opacity: 0.82; } }
+      .pos-section { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 0.4rem 0.75rem 0.15rem; }
     </style>
   </head>
   <body>
@@ -55,10 +58,26 @@
       </div>
 
       <div class="row g-3 mb-3" id="kpi-row">
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">SPY spot</div><div class="val mono" id="kpi-spot">—</div></div></div>
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Account</div><div class="val mono" id="kpi-equity">—</div></div></div>
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Bid / Ask</div><div class="val mono" id="kpi-nbbo">—</div></div></div>
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Spread</div><div class="val mono" id="kpi-spread">—</div></div></div>
+        <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">SPY spot</div><div class="val mono" id="kpi-spot">—</div></div></div>
+        <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">Account</div><div class="val mono" id="kpi-equity">—</div></div></div>
+        <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">Bid / Ask</div><div class="val mono" id="kpi-nbbo">—</div></div></div>
+        <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">Spread</div><div class="val mono" id="kpi-spread">—</div></div></div>
+        <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">Contract</div><div class="val mono small" id="kpi-symbol" style="font-size:0.72rem;">—</div></div></div>
+        <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">Mark PnL</div><div class="val mono" id="kpi-pnl">—</div></div></div>
+      </div>
+
+      <div class="uw-panel mb-3">
+        <div class="uw-panel-head">
+          <span>Gamma signal</span>
+          <button class="btn btn-sm btn-outline-accent" id="btn-load-signal">Load recommended</button>
+        </div>
+        <div class="uw-panel-body small">
+          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+            <span id="strategy-chip" class="chip hold">—</span>
+            <span class="muted" id="strategy-summary">Fetch strategy to pre-fill contract…</span>
+          </div>
+          <div class="mono muted" id="strategy-detail"></div>
+        </div>
       </div>
 
       <div class="row g-3">
@@ -113,6 +132,10 @@
                 <input class="form-check-input" type="checkbox" id="live-confirm">
                 <label class="form-check-label muted" for="live-confirm">I confirm live Webull order</label>
               </div>
+              <div class="mt-2">
+                <label class="small muted">Admin token (if required)</label>
+                <input class="form-control form-control-sm mono" id="admin-token" type="password" placeholder="X-Admin-Token" autocomplete="off">
+              </div>
             </div>
           </div>
         </div>
@@ -155,8 +178,13 @@
     <script>
       const INITIAL = {{ initial_state | tojson }};
       const TICKER = {{ ticker | tojson }};
+      const ADMIN_TOKEN_KEY = 'gex_admin_token';
       let pollTimer = null;
       let peakPremium = null;
+      let executionSpot = null;
+      let selectedTradeId = null;
+      let lastStrategyTrade = null;
+      let pollMs = 3000;
 
       function log(msg) {
         const el = document.getElementById('log');
@@ -181,6 +209,55 @@
         el.className = 'chip ' + (cond.action || 'hold');
         const summary = document.getElementById(elId.replace('signal', 'summary'));
         if (summary) summary.textContent = cond.summary || '';
+        if (elId === 'exit-signal') {
+          const sellBtn = document.getElementById('btn-sell-smart');
+          if (sellBtn) sellBtn.classList.toggle('urgent', (cond.action || '') === 'sell');
+        }
+      }
+
+      function orderHeaders() {
+        const headers = {'Content-Type': 'application/json'};
+        const token = document.getElementById('admin-token').value.trim();
+        if (token) headers['X-Admin-Token'] = token;
+        return headers;
+      }
+
+      function applyRecommendedTrade(trade) {
+        if (!trade || !trade.available) return false;
+        document.getElementById('underlying').value = trade.execution_ticker || document.getElementById('underlying').value;
+        document.getElementById('strike').value = trade.execution_strike;
+        document.getElementById('option-type').value = trade.option_type || 'call';
+        if (trade.expire_date) document.getElementById('expire').value = trade.expire_date;
+        selectedTradeId = null;
+        lastStrategyTrade = trade;
+        const chip = document.getElementById('strategy-chip');
+        chip.textContent = trade.strategy_ready ? 'READY' : 'WAIT';
+        chip.className = 'chip ' + (trade.strategy_ready ? 'go' : 'wait');
+        document.getElementById('strategy-summary').textContent = trade.rationale || 'Signal loaded';
+        const detail = [
+          trade.signal_ticker + ' ' + (trade.signal_strike || '') + ' → ' + trade.execution_ticker + ' ' + (trade.execution_strike || ''),
+          trade.symbol || '',
+        ].filter(Boolean).join(' · ');
+        document.getElementById('strategy-detail').textContent = detail;
+        return true;
+      }
+
+      async function loadRecommendedSignal() {
+        const r = await fetch('/api/webull/signal?ticker=' + encodeURIComponent(TICKER));
+        const data = await r.json();
+        const trade = data.recommended_trade || {};
+        if (!trade.available) {
+          document.getElementById('strategy-chip').textContent = 'NONE';
+          document.getElementById('strategy-chip').className = 'chip wait';
+          document.getElementById('strategy-summary').textContent = trade.reason || 'No signal';
+          document.getElementById('strategy-detail').textContent = '';
+          log('Signal: ' + (trade.reason || 'unavailable'));
+          return;
+        }
+        if (applyRecommendedTrade(trade)) {
+          log('Loaded signal ' + trade.option_type + ' ' + trade.execution_strike);
+          await refreshQuote();
+        }
       }
 
       function renderPriceButtons(containerId, prices, side) {
@@ -202,7 +279,8 @@
       async function refreshStatus() {
         const r = await fetch('/api/webull/status?ticker=' + encodeURIComponent(TICKER));
         const s = await r.json();
-        document.getElementById('kpi-spot').textContent = s.execution_spot ? Number(s.execution_spot).toFixed(2) : '—';
+        executionSpot = s.execution_spot || null;
+        document.getElementById('kpi-spot').textContent = executionSpot ? Number(executionSpot).toFixed(2) : '—';
         document.getElementById('kpi-equity').textContent = fmtUsd(s.account_equity);
         document.getElementById('tp-pct').textContent = ((s.take_profit_pct || 0) * 100).toFixed(0) + '%';
         document.getElementById('sl-pct').textContent = ((s.stop_loss_pct || 0) * 100).toFixed(0) + '%';
@@ -227,7 +305,8 @@
       function renderPositions(journal, broker) {
         const body = document.getElementById('positions-body');
         body.innerHTML = '';
-        const rows = (journal || []).map(p => ({
+        const journalRows = (journal || []).map(p => ({
+          source: 'journal',
           label: (p.option_type || '') + ' ' + (p.strike || '') + ' x' + (p.qty || 1),
           entry: p.entry_premium,
           id: p.id,
@@ -235,23 +314,43 @@
           type: p.option_type,
           qty: p.qty,
         }));
-        if (!rows.length) {
-          body.innerHTML = '<tr><td class="muted p-2 small">No open journal positions</td></tr>';
+        const brokerRows = (broker || []).map(p => ({
+          source: 'broker',
+          label: (p.option_type || '') + ' ' + (p.strike || '') + ' x' + (p.qty || 1),
+          entry: p.cost ? (p.cost / Math.max(1, p.qty) / 100) : null,
+          id: null,
+          strike: p.strike,
+          type: p.option_type,
+          qty: p.qty,
+          pnl: p.unrealized_pnl,
+        }));
+        if (!journalRows.length && !brokerRows.length) {
+          body.innerHTML = '<tr><td class="muted p-2 small">No open positions</td></tr>';
           return;
         }
-        rows.forEach(r => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td class="p-2"><a href="#" class="text-decoration-none ' + (r.type === 'call' ? 'type-call' : 'type-put') + '">' + r.label + '</a><br><span class="muted small">@ ' + fmtPx(r.entry) + '</span></td>';
-          tr.querySelector('a').onclick = (e) => {
-            e.preventDefault();
-            document.getElementById('strike').value = r.strike;
-            document.getElementById('option-type').value = r.type;
-            document.getElementById('entry-premium').value = r.entry;
-            tr.dataset.tradeId = r.id;
-            refreshQuote();
-          };
-          body.appendChild(tr);
-        });
+        function appendSection(title, rows) {
+          if (!rows.length) return;
+          const hdr = document.createElement('tr');
+          hdr.innerHTML = '<td class="pos-section">' + title + '</td>';
+          body.appendChild(hdr);
+          rows.forEach(r => {
+            const tr = document.createElement('tr');
+            const pnlTxt = r.pnl != null ? ' · PnL ' + fmtUsd(r.pnl) : '';
+            tr.innerHTML = '<td class="p-2"><a href="#" class="text-decoration-none ' + (r.type === 'call' ? 'type-call' : 'type-put') + '">' + r.label + '</a><br><span class="muted small">@ ' + fmtPx(r.entry) + pnlTxt + '</span></td>';
+            tr.querySelector('a').onclick = (e) => {
+              e.preventDefault();
+              document.getElementById('strike').value = r.strike;
+              document.getElementById('option-type').value = r.type || 'call';
+              document.getElementById('qty').value = r.qty || 1;
+              if (r.entry) document.getElementById('entry-premium').value = r.entry;
+              selectedTradeId = r.id || null;
+              refreshQuote();
+            };
+            body.appendChild(tr);
+          });
+        }
+        appendSection('Journal', journalRows);
+        appendSection('Webull', brokerRows);
       }
 
       async function refreshQuote() {
@@ -262,6 +361,7 @@
           type: document.getElementById('option-type').value,
           underlying: document.getElementById('underlying').value,
           expire: document.getElementById('expire').value,
+          ticker: TICKER,
         });
         const entry = document.getElementById('entry-premium').value;
         if (entry) params.set('entry_premium', entry);
@@ -272,6 +372,19 @@
         const qq = q.quote || {};
         document.getElementById('kpi-nbbo').textContent = fmtPx(qq.bid) + ' / ' + fmtPx(qq.ask);
         document.getElementById('kpi-spread').textContent = qq.spread_pct != null ? (qq.spread_pct * 100).toFixed(1) + '%' : '—';
+        document.getElementById('kpi-symbol').textContent = q.option_symbol || qq.symbol || '—';
+        const pnlEl = document.getElementById('kpi-pnl');
+        if (q.unrealized_pnl_pct != null) {
+          const pct = q.unrealized_pnl_pct * 100;
+          pnlEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+          pnlEl.style.color = pct >= 0 ? 'var(--green)' : 'var(--red)';
+        } else {
+          pnlEl.textContent = '—';
+          pnlEl.style.color = '';
+        }
+        const nextPoll = (q.exit_conditions?.action === 'sell' || document.getElementById('entry-premium').value) ? 1500 : 3000;
+        if (nextPoll !== pollMs) { pollMs = nextPoll; schedulePoll(); }
+        document.getElementById('poll-sec').textContent = (pollMs / 1000).toFixed(1);
         if (qq.mid) {
           peakPremium = peakPremium == null ? qq.mid : Math.max(peakPremium, qq.mid);
         }
@@ -293,19 +406,24 @@
           live_confirm: liveConfirm,
           ticker: TICKER,
         };
+        if (executionSpot) body.spot = executionSpot;
         if (limitPrice != null && !isNaN(limitPrice)) body.limit_price = limitPrice;
         const entry = document.getElementById('entry-premium').value;
         if (entry) body.entry_premium = parseFloat(entry);
+        if (side === 'sell' && selectedTradeId) body.trade_id = selectedTradeId;
         const url = side === 'buy' ? '/api/webull/order/buy' : '/api/webull/order/sell';
         log(side.toUpperCase() + ' ' + style + ' @ ' + fmtPx(limitPrice) + '…');
-        const r = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+        const r = await fetch(url, { method: 'POST', headers: orderHeaders(), body: JSON.stringify(body) });
         const res = await r.json();
         if (res.ok) {
-          log(side + ' OK stage=' + (res.stage || '') + ' fill=' + fmtPx(res.filled_premium || res.limit_used));
+          const fillQty = res.filled_qty != null ? (' qty=' + res.filled_qty) : '';
+          log(side + ' OK stage=' + (res.stage || '') + ' fill=' + fmtPx(res.filled_premium || res.limit_used) + fillQty);
           if (side === 'buy' && res.filled_premium) {
             document.getElementById('entry-premium').value = res.filled_premium;
             peakPremium = res.filled_premium;
+            if (res.journal_trade_id) selectedTradeId = res.journal_trade_id;
           }
+          if (side === 'sell') selectedTradeId = null;
           refreshStatus();
           refreshQuote();
         } else {
@@ -313,15 +431,35 @@
         }
       }
 
+      function schedulePoll() {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(() => { refreshQuote().catch(() => {}); }, pollMs);
+      }
+
       document.getElementById('btn-refresh-quote').onclick = refreshQuote;
       document.getElementById('btn-buy-smart').onclick = () => placeOrder('buy', 'smart', undefined);
       document.getElementById('btn-sell-smart').onclick = () => placeOrder('sell', 'smart', undefined);
+      document.getElementById('btn-load-signal').onclick = () => loadRecommendedSignal().catch(e => log('Signal error: ' + e));
+
+      document.getElementById('admin-token').addEventListener('change', e => {
+        const v = e.target.value.trim();
+        if (v) sessionStorage.setItem(ADMIN_TOKEN_KEY, v);
+        else sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+      });
 
       (async function init() {
+        const savedToken = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+        if (savedToken) document.getElementById('admin-token').value = savedToken;
         if (INITIAL.default_expire) document.getElementById('expire').value = INITIAL.default_expire;
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('strike')) document.getElementById('strike').value = urlParams.get('strike');
+        if (urlParams.get('type')) document.getElementById('option-type').value = urlParams.get('type');
+        if (urlParams.get('load_signal') === '1') await loadRecommendedSignal().catch(() => {});
         await refreshStatus();
-        pollTimer = setInterval(() => { refreshQuote().catch(() => {}); }, 3000);
+        schedulePoll();
         document.getElementById('strike').addEventListener('change', refreshQuote);
+        if (document.getElementById('strike').value) await refreshQuote();
+        else if (!urlParams.get('load_signal')) await loadRecommendedSignal().catch(() => {});
       })();
     </script>
   </body>

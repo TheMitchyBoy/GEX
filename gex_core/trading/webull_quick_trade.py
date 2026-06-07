@@ -333,6 +333,131 @@ def fetch_broker_option_positions() -> list[dict[str, Any]]:
         return []
 
 
+def build_recommended_trade(*, strategy_state: dict[str, Any]) -> dict[str, Any]:
+    """Map gamma strategy recommendation to an execution contract for the trade desk."""
+    signals = strategy_state.get("signals") or {}
+    filters = strategy_state.get("filters") or {}
+    advice = strategy_state.get("advice") or {}
+    rec = signals.get("recommended") or {}
+    signal_spot = float(strategy_state.get("spot") or 0.0)
+
+    if not signals.get("available"):
+        return {
+            "available": False,
+            "reason": signals.get("reason") or signals.get("skip_reason") or "No gamma signal",
+            "filters": filters,
+            "advice": advice,
+        }
+    if not rec.get("strike") or signal_spot <= 0:
+        return {
+            "available": False,
+            "reason": "Recommended strike or spot unavailable",
+            "filters": filters,
+            "advice": advice,
+            "recommended": rec,
+        }
+
+    signal_strike = float(rec["strike"])
+    option_type = str(rec.get("option_type") or "call").lower()
+    mapped = map_signal_strike_to_execution(signal_strike, signal_spot=signal_spot)
+    if mapped.get("error"):
+        return {
+            "available": False,
+            "reason": mapped["error"],
+            "recommended": rec,
+            "filters": filters,
+            "advice": advice,
+        }
+
+    exec_strike = float(mapped["execution_strike"])
+    expire_date = market_today()
+    und = execution_ticker().upper()
+    filters_ok = bool(filters.get("approve"))
+    advice_ok = bool(advice.get("approve"))
+    return {
+        "available": True,
+        "signal_ticker": signal_ticker().upper(),
+        "execution_ticker": und,
+        "signal_strike": signal_strike,
+        "execution_strike": exec_strike,
+        "option_type": option_type,
+        "magnet_strike": rec.get("magnet_strike"),
+        "signal_type": rec.get("signal_type"),
+        "rationale": rec.get("rationale"),
+        "gamma_delta": rec.get("gamma_delta"),
+        "symbol": build_webull_option_symbol(
+            underlying=und,
+            expire_date=expire_date,
+            option_type=option_type,
+            strike=exec_strike,
+        ),
+        "expire_date": expire_date,
+        "signal_spot": signal_spot,
+        "execution_spot": mapped.get("execution_spot"),
+        "spot_ratio": mapped.get("spot_ratio"),
+        "filters": filters,
+        "advice": advice,
+        "strategy_ready": filters_ok and advice_ok,
+        "recommended": rec,
+    }
+
+
+def combined_entry_guidance(
+    quote_entry: dict[str, Any],
+    *,
+    strategy_trade: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Blend spread-quality entry with gamma filter/advice state."""
+    out = dict(quote_entry)
+    if not strategy_trade or not strategy_trade.get("available"):
+        out["strategy"] = None
+        return out
+
+    filters = strategy_trade.get("filters") or {}
+    advice = strategy_trade.get("advice") or {}
+    filters_ok = bool(filters.get("approve"))
+    advice_ok = bool(advice.get("approve"))
+    strategy_ready = bool(strategy_trade.get("strategy_ready"))
+
+    reasons: list[str] = [quote_entry.get("summary") or ""]
+    if strategy_ready:
+        reasons.append(f"Strategy: {advice.get('reason') or filters.get('reason') or 'filters pass'}")
+    elif filters_ok:
+        reasons.append(f"Filters pass; advisor: {advice.get('reason') or 'wait'}")
+    else:
+        reasons.append(f"Strategy blocked: {filters.get('reason') or advice.get('reason') or 'filters fail'}")
+
+    score = float(quote_entry.get("score") or 0.0)
+    if strategy_ready:
+        score = min(1.0, score + 0.2)
+    elif not filters_ok:
+        score = max(0.0, score - 0.25)
+
+    action = quote_entry.get("action") or "wait"
+    if strategy_ready and action == "go":
+        action = "go"
+    elif not filters_ok and action == "go":
+        action = "wait"
+    elif strategy_ready and action == "wait" and score >= 0.65:
+        action = "go"
+
+    out.update(
+        {
+            "action": action,
+            "score": round(min(1.0, max(0.0, score)), 2),
+            "summary": "; ".join(r for r in reasons if r),
+            "strategy": {
+                "ready": strategy_ready,
+                "filters_ok": filters_ok,
+                "advice_ok": advice_ok,
+                "rationale": strategy_trade.get("rationale"),
+                "signal_type": strategy_trade.get("signal_type"),
+            },
+        }
+    )
+    return out
+
+
 def quote_payload(
     *,
     underlying: str,
@@ -342,6 +467,7 @@ def quote_payload(
     entry_premium: float | None = None,
     peak_premium: float | None = None,
     spot: float | None = None,
+    strategy_trade: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     underlying = underlying.upper()
     expire_date = expire_date or market_today()
@@ -352,13 +478,28 @@ def quote_payload(
         expire_date=expire_date,
     )
     analysis = analyze_quote(quote)
+    entry = entry_conditions(analysis)
+    if strategy_trade:
+        entry = combined_entry_guidance(entry, strategy_trade=strategy_trade)
+    option_symbol = build_webull_option_symbol(
+        underlying=underlying,
+        expire_date=expire_date,
+        option_type=option_type,
+        strike=strike,
+    )
+    mark = analysis.mid or analysis.bid or analysis.last
+    unrealized_pnl_pct = None
+    if entry_premium and entry_premium > 0 and mark and mark > 0:
+        unrealized_pnl_pct = round((mark - entry_premium) / entry_premium, 4)
     return {
         "underlying": underlying,
         "option_type": option_type.lower(),
         "strike": strike,
         "expire_date": expire_date,
+        "option_symbol": option_symbol,
+        "unrealized_pnl_pct": unrealized_pnl_pct,
         "quote": analysis.to_dict(),
-        "entry_conditions": entry_conditions(analysis),
+        "entry_conditions": entry,
         "exit_conditions": exit_conditions(
             analysis,
             entry_premium=entry_premium,

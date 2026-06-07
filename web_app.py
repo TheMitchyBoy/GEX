@@ -841,6 +841,46 @@ def api_webull_status():
     return jsonify(dashboard_state(signal_ticker_arg=ticker))
 
 
+def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
+    """Gamma strategy state + execution-mapped contract for the trade desk."""
+    from gex_core.trading.strategy_viz import build_strategy_state
+    from gex_core.trading.webull_quick_trade import build_recommended_trade
+
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        selected_ts=request.args.get("ts"),
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    history = ctx.get("history") or []
+    prev_spot = None
+    sel_ts = ctx.get("selected_ts")
+    if history and sel_ts:
+        for i, row in enumerate(history):
+            if row.get("ts") == sel_ts and i > 0:
+                prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
+                break
+    state = build_strategy_state(
+        ticker=ticker,
+        spot=ctx.get("spot"),
+        exposure=ctx.get("exposure_series"),
+        previous_exposure=ctx.get("previous_exposure"),
+        snapshot=ctx.get("selected"),
+        prev_spot=prev_spot,
+    )
+    trade = build_recommended_trade(strategy_state=state)
+    return {"strategy_state": state, "recommended_trade": trade}
+
+
+@APP.get("/api/webull/signal")
+def api_webull_signal():
+    """Recommended gamma signal mapped to execution contract (SPX → SPY)."""
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    return jsonify(_webull_strategy_trade_payload(ticker))
+
+
 @APP.get("/api/webull/quote")
 def api_webull_quote():
     from gex_core.trading.webull_quick_trade import quote_payload
@@ -872,6 +912,14 @@ def api_webull_quote():
     except (TypeError, ValueError):
         spot_f = None
 
+    strategy_trade = None
+    if request.args.get("strategy", "1") not in {"0", "false", "no"}:
+        ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+        try:
+            strategy_trade = _webull_strategy_trade_payload(ticker).get("recommended_trade")
+        except Exception:
+            strategy_trade = None
+
     return jsonify(
         quote_payload(
             underlying=underlying,
@@ -881,6 +929,7 @@ def api_webull_quote():
             entry_premium=entry_f,
             peak_premium=peak_f,
             spot=spot_f,
+            strategy_trade=strategy_trade,
         )
     )
 
