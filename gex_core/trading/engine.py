@@ -39,6 +39,7 @@ from gex_core.trading.filters import MarketContext, market_context_from_snapshot
 from gex_core.trading.journal import (
     close_trade,
     get_account_equity,
+    get_account_equity_source,
     get_performance_summary,
     is_trader_armed,
     list_open_trades,
@@ -80,6 +81,7 @@ def trader_status(ticker: str = "SPX") -> dict[str, Any]:
         "bar_minutes": trader_bar_minutes(),
         "session_only": trader_session_only(),
         "account_equity": get_account_equity(),
+        "account_equity_source": get_account_equity_source(),
         "starting_equity": account_equity_usd(),
         "open_positions": list_open_trades(ticker),
         "performance": perf,

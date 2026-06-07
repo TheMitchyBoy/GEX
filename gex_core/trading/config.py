@@ -307,13 +307,25 @@ def account_equity_usd() -> float:
 
 def risk_per_trade_pct() -> float:
     try:
-        return max(0.001, float(os.environ.get("GEX_TRADER_RISK_PER_TRADE_PCT", "0.01")))
+        return max(0.001, float(os.environ.get("GEX_TRADER_RISK_PER_TRADE_PCT", "0.50")))
     except (TypeError, ValueError):
         return 0.01
 
 
 def use_risk_based_sizing() -> bool:
     return _flag("GEX_TRADER_RISK_SIZING", "1")
+
+
+def use_webull_account_equity() -> bool:
+    """When live on Webull, size risk from broker net liquidation value."""
+    return _flag("GEX_TRADER_USE_WEBULL_EQUITY", "1")
+
+
+def webull_equity_cache_seconds() -> float:
+    try:
+        return max(5.0, float(os.environ.get("GEX_WEBULL_EQUITY_CACHE_SEC", "60")))
+    except (TypeError, ValueError):
+        return 60.0
 
 
 def min_zero_dte_ratio() -> float:

@@ -270,10 +270,41 @@ def strike_stop_cooldown_active(
 
 
 def get_account_equity() -> float:
-    from gex_core.trading.config import account_equity_usd
+    from gex_core.trading.config import account_equity_usd, live_trading_allowed, use_webull_account_equity
+
+    if live_trading_allowed() and use_webull_account_equity():
+        from gex_core.trading.webull_broker import fetch_total_account_value
+
+        live_equity = fetch_total_account_value()
+        if live_equity is not None:
+            return live_equity
 
     perf = get_performance_summary()
     return account_equity_usd() + float(perf.get("total_pnl_usd") or 0.0)
+
+
+def get_account_equity_source() -> str:
+    from gex_core.trading.config import (
+        live_trading_allowed,
+        paper_trading_only,
+        use_webull_account_equity,
+        webull_configured,
+    )
+
+    if live_trading_allowed() and use_webull_account_equity() and webull_configured():
+        from gex_core.trading.webull_broker import fetch_total_account_value
+
+        if fetch_total_account_value() is not None:
+            return "webull_live"
+        return "configured_fallback"
+
+    if not paper_trading_only():
+        return "configured"
+
+    perf = get_performance_summary()
+    if float(perf.get("total_pnl_usd") or 0.0) != 0.0:
+        return "paper_journal"
+    return "configured"
 
 
 def get_performance_summary(ticker: str | None = None) -> dict[str, Any]:
