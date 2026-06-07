@@ -11,20 +11,11 @@ def test_spot_progress_toward_call_strike():
     assert progress == 0.5
 
 
-def test_strong_setup_holds_for_full_target():
-    profile = build_exit_profile(
-        ai_confidence=0.85,
-        gamma_delta=0.12,
-        regime="LONG gamma",
-        entry_spot=5000.0,
-        strike=5010.0,
-    )
-    assert profile.hold_for_target
-    assert profile.partial_take_profit is None
-
+def test_take_profit_at_thirty_percent():
+    profile = ExitProfile(full_take_profit=0.30)
     state = ExitState()
     reason, pnl = evaluate_exit(
-        0.20,
+        0.31,
         state=state,
         bars_held=3,
         entry_spot=5000.0,
@@ -32,34 +23,18 @@ def test_strong_setup_holds_for_full_target():
         current_spot=5020.0,
         option_type="call",
         profile=profile,
-        magnet_strike=5050.0,
-        magnet_primary=False,
-    )
-    assert reason is None
-
-    reason, pnl = evaluate_exit(
-        0.61,
-        state=state,
-        bars_held=8,
-        entry_spot=5000.0,
-        strike=5010.0,
-        current_spot=5035.0,
-        option_type="call",
-        profile=profile,
-        magnet_strike=5050.0,
-        magnet_primary=False,
+        entry_positive_gamma_strike=5010.0,
+        current_positive_gamma_strike=5010.0,
     )
     assert reason == "take_profit"
-    assert pnl == 0.60
+    assert pnl == 0.30
 
 
-def test_max_hold_exits_at_bar_limit(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MAX_HOLD_MINUTES", "30")
-    monkeypatch.setenv("GEX_TRADER_BAR_MINUTES", "2")
-    profile = ExitProfile(hold_for_target=True, full_take_profit=0.60, time_stop_bars=15)
+def test_holds_below_take_profit_when_gamma_strike_unchanged():
+    profile = ExitProfile(full_take_profit=0.30)
     state = ExitState()
-    reason, pnl = evaluate_exit(
-        0.12,
+    reason, _ = evaluate_exit(
+        0.20,
         state=state,
         bars_held=15,
         entry_spot=5000.0,
@@ -67,42 +42,56 @@ def test_max_hold_exits_at_bar_limit(monkeypatch):
         current_spot=5020.0,
         option_type="call",
         profile=profile,
+        entry_positive_gamma_strike=5010.0,
+        current_positive_gamma_strike=5010.0,
     )
-    assert reason == "max_hold"
-    assert pnl == 0.12
+    assert reason is None
 
 
-def test_magnet_touch_requires_min_pnl(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
-    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_MIN_PNL_PCT", "0.08")
-    profile = ExitProfile(hold_for_target=True, full_take_profit=0.35)
+def test_no_stop_loss_on_large_drawdown():
+    profile = ExitProfile(full_take_profit=0.30)
     state = ExitState()
     reason, _ = evaluate_exit(
-        0.03,
+        -0.25,
         state=state,
         bars_held=3,
         entry_spot=5000.0,
         strike=5010.0,
-        current_spot=5050.0,
+        current_spot=4975.0,
         option_type="call",
         profile=profile,
-        magnet_strike=5050.0,
-        magnet_primary=True,
+        entry_positive_gamma_strike=5010.0,
+        current_positive_gamma_strike=5010.0,
     )
     assert reason is None
 
 
-def test_time_stop_skipped_when_moving_toward_magnet():
-    profile = ExitProfile(time_stop_bars=10)
+def test_gamma_strike_change_triggers_exit():
+    profile = ExitProfile(full_take_profit=0.30)
     state = ExitState()
-    reason, _ = evaluate_exit(
-        0.01,
+    reason, pnl = evaluate_exit(
+        0.05,
         state=state,
-        bars_held=6,
+        bars_held=3,
         entry_spot=5000.0,
-        strike=5050.0,
-        current_spot=5025.0,
+        strike=5010.0,
+        current_spot=5020.0,
         option_type="call",
         profile=profile,
+        entry_positive_gamma_strike=5010.0,
+        current_positive_gamma_strike=5020.0,
     )
-    assert reason is None
+    assert reason == "gamma_strike_change"
+    assert pnl == 0.05
+
+
+def test_build_exit_profile_uses_take_profit_default(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_TAKE_PROFIT_PCT", "0.30")
+    profile = build_exit_profile(
+        ai_confidence=0.85,
+        gamma_delta=0.12,
+        regime="LONG gamma",
+        entry_spot=5000.0,
+        strike=5010.0,
+    )
+    assert profile.full_take_profit == 0.30

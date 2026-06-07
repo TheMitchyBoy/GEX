@@ -73,8 +73,7 @@ def test_backtest_insufficient_history():
     assert "Not enough history" in result.get("message", "")
 
 
-def test_backtest_caps_stop_and_take_profit(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_STOP_LOSS_PCT", "0.05")
+def test_backtest_holds_through_drawdown_without_stop_loss(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_TAKE_PROFIT_PCT", "0.35")
     history = [
         _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
@@ -84,13 +83,13 @@ def test_backtest_caps_stop_and_take_profit(monkeypatch):
     result = backtest_auto_trader(
         "SPX",
         history=history,
-        stop_loss=0.05,
         take_profit=0.35,
         max_open=1,
     )
     stop_trades = [t for t in result["trades"] if t["exit_reason"] == "stop_loss"]
-    assert stop_trades
-    assert stop_trades[0]["pnl_pct"] == -0.05
+    assert not stop_trades
+    assert result["total_trades"] >= 1
+    assert result["trades"][0]["exit_reason"] in {"backtest_end", "gamma_strike_change", "take_profit", "eod_flatten"}
 
 
 def test_backtest_blocks_duplicate_strike_entries():
@@ -141,7 +140,7 @@ def test_backtest_skips_exits_across_snapshot_gaps():
         max_open=1,
     )
     assert result["total_trades"] == 1
-    assert result["trades"][0]["exit_reason"] in {"session_gap", "time_stop", "backtest_end"}
+    assert result["trades"][0]["exit_reason"] in {"session_gap", "backtest_end"}
 
 
 def test_backtest_account_cash_matches_trade_pnl(monkeypatch):

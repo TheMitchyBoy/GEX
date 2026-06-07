@@ -53,10 +53,9 @@ def test_flip_filter_blocks_call_below_gamma_flip(monkeypatch):
     assert result["filter"] == "gamma_flip"
 
 
-def test_magnet_primary_exit_at_breakeven(monkeypatch):
+def test_gamma_strike_change_exits_when_magnet_moves(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
-    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
-    profile = ExitProfile(hold_for_target=True, full_take_profit=0.60)
+    profile = ExitProfile(full_take_profit=0.30)
     state = ExitState()
     reason, _ = evaluate_exit(
         0.02,
@@ -67,7 +66,8 @@ def test_magnet_primary_exit_at_breakeven(monkeypatch):
         current_spot=5050.0,
         option_type="call",
         profile=profile,
-        magnet_strike=5050.0,
+        entry_positive_gamma_strike=5010.0,
+        current_positive_gamma_strike=5010.0,
     )
     assert reason is None
 
@@ -80,7 +80,8 @@ def test_magnet_primary_exit_at_breakeven(monkeypatch):
         current_spot=5050.0,
         option_type="call",
         profile=profile,
-        magnet_strike=5050.0,
+        entry_positive_gamma_strike=5010.0,
+        current_positive_gamma_strike=5050.0,
     )
-    assert reason == "magnet_touch"
+    assert reason == "gamma_strike_change"
     assert pnl == 0.10
