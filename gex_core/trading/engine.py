@@ -21,6 +21,7 @@ from gex_core.trading.config import (
     auto_trader_enabled,
     eod_flatten_enabled,
     execution_ticker,
+    fix_magnet_exit_scale,
     live_trading_allowed,
     max_entries_per_cycle,
     max_open_positions,
@@ -358,11 +359,11 @@ def _maybe_enter(
 
         option_type = advice.get("option_type") or rec["option_type"]
         trade_strike = float(rec["strike"])
-        magnet_strike = float(rec.get("magnet_strike") or trade_strike)
-        if strike_stop_cooldown_active(ticker, magnet_strike, str(option_type)):
+        magnet_strike_raw = float(rec.get("magnet_strike") or trade_strike)
+        if strike_stop_cooldown_active(ticker, magnet_strike_raw, str(option_type)):
             last_skip = {
                 "action": "skipped",
-                "reason": f"Cooldown active after stop at {magnet_strike:.0f}",
+                "reason": f"Cooldown active after stop at {magnet_strike_raw:.0f}",
                 "advice": advice,
             }
             continue
@@ -372,6 +373,14 @@ def _maybe_enter(
             if _uses_execution_mapping()
             else trade_strike
         )
+        if fix_magnet_exit_scale() and _uses_execution_mapping():
+            magnet_strike = map_execution_strike(
+                magnet_strike_raw,
+                signal_spot=spot,
+                execution_spot=exec_spot,
+            )
+        else:
+            magnet_strike = magnet_strike_raw
         if _has_open_duplicate(ticker, strike=exec_strike, option_type=str(option_type)):
             last_skip = {"action": "skipped", "reason": f"Already open at {exec_strike:.2f} {option_type}", "advice": advice}
             continue
@@ -396,6 +405,7 @@ def _maybe_enter(
             entry_spot=mark_entry_spot,
             strike=float(exec_strike),
             expected_move_pct=expected_move,
+            magnet_strike=magnet_strike,
         )
         profile_meta = {
             "hold_for_target": exit_profile.hold_for_target,
