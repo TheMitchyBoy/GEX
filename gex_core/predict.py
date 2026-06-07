@@ -37,6 +37,44 @@ logger = logging.getLogger(__name__)
 
 # Resolve relative to repo root so gunicorn/docker cwd does not break loading.
 MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
+_MODEL_CACHE: dict[str, tuple[tuple[int, int], object]] = {}
+
+
+def clear_model_cache() -> None:
+    """Drop cached joblib/Keras artifacts (for tests or after retraining)."""
+    _MODEL_CACHE.clear()
+
+
+def _file_cache_stamp(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
+def _cached_artifact(path: Path, loader):
+    """Memoize a model artifact keyed by path + mtime/size."""
+    key = str(path.resolve())
+    stamp = _file_cache_stamp(path)
+    if stamp is not None:
+        cached = _MODEL_CACHE.get(key)
+        if cached and cached[0] == stamp:
+            return cached[1]
+    obj = loader(path)
+    if stamp is not None:
+        _MODEL_CACHE[key] = (stamp, obj)
+    return obj
+
+
+def _load_joblib_cached(path: Path):
+    return _cached_artifact(path, joblib.load)
+
+
+def _load_keras_cached(path: Path):
+    import tensorflow as tf
+
+    return _cached_artifact(path, lambda p: tf.keras.models.load_model(str(p)))
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("GEX_PREDICTION_LOOKBACK_DAYS", "90"))
 # Minimum snapshots needed for the KNN forecast at all. If the regime window is
 # too sparse we expand the pool rather than refusing to forecast (decouples the
@@ -527,7 +565,7 @@ def _predict_from_trained_models(
     xgb_path = MODELS_DIR / f"{ticker}_gex_delta_model.joblib"
     if xgb_path.exists():
         try:
-            bundle = joblib.load(xgb_path)
+            bundle = _load_joblib_cached(xgb_path)
             feat_cols = bundle["features"]
             row = _build_model_row(current, history, feat_cols)
             if row is not None:
@@ -542,7 +580,7 @@ def _predict_from_trained_models(
     if meta_path.exists() and lstm_path.exists() and len(history) >= 2:
         try:
             import tensorflow as tf
-            meta_bundle = joblib.load(meta_path)
+            meta_bundle = _load_joblib_cached(meta_path)
             meta = meta_bundle["meta"]
             scaler = meta_bundle["scaler"]
             seq_len = meta["seq_len"]
@@ -564,7 +602,7 @@ def _predict_from_trained_models(
                 seq_df = np.array([[row.get(c, 0.0) for c in feature_cols] for row in seq_rows])
                 flat = scaler.transform(seq_df.reshape(-1, len(feature_cols)))
                 X = flat.reshape(1, seq_len, len(feature_cols))
-                model = tf.keras.models.load_model(str(lstm_path))
+                model = _load_keras_cached(lstm_path)
                 pred = float(model.predict(X, verbose=0)[0][0])
                 result["delta_gex"] = pred if "delta_gex" not in result else 0.5 * result["delta_gex"] + 0.5 * pred
                 result["confidence"] = max(result.get("confidence", 0.5), 0.55)

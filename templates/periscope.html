@@ -446,7 +446,7 @@
       {% if bootstrap_status == 'failed' %}
       <div class="alert alert-danger py-2 small mb-3">Couldn't refresh live data. {{ refresh_message or 'Check UW_API_KEY.' }}</div>
       {% elif bootstrap_status == 'stale' %}
-      <div class="alert alert-warning py-2 small mb-3">Showing last saved snapshot.</div>
+      <div class="alert alert-warning py-2 small mb-3">Showing last saved snapshot.{% if refresh_message %} {{ refresh_message }}{% endif %}</div>
       {% elif not uw_configured %}
       <div class="alert alert-secondary py-2 small mb-3">Set UW_API_KEY for live 10-minute exposure updates.</div>
       {% endif %}

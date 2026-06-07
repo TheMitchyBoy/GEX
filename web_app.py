@@ -302,39 +302,60 @@ def _spx_redirect(**extra):
     return redirect(url_for("index", **args))
 
 
+def _admin_token_from_request(req) -> str:
+    provided = req.headers.get("X-Admin-Token") or req.args.get("admin_token") or ""
+    form = getattr(req, "form", None)
+    if not provided and form:
+        provided = form.get("admin_token") or ""
+    if not provided and getattr(req, "is_json", False):
+        get_json = getattr(req, "get_json", None)
+        body = (get_json(silent=True) if callable(get_json) else None) or {}
+        provided = body.get("admin_token") or ""
+    return provided or ""
+
+
+def _admin_action_authorized(req) -> bool:
+    """Authorize state-changing admin actions via ``GEX_ADMIN_TOKEN``.
+
+  When the token is unset, HTTP-triggered refreshes and dispatches are disabled.
+    """
+    token = os.environ.get("GEX_ADMIN_TOKEN")
+    if not token:
+        return False
+    provided = _admin_token_from_request(req)
+    return bool(provided) and secrets.compare_digest(provided, token)
+
+
+def _run_ticker_refresh(ticker: str) -> tuple[bool, str | None]:
+    """Refresh CSV exports and live UW cache for a ticker."""
+    ticker = ticker.upper()
+    clear_periscope_api_cache()
+    refreshed_csv = False
+    refreshed_live = False
+    if uw_api_configured():
+        try:
+            refreshed_csv = refresh_ticker(ticker, force=True)
+        except Exception:
+            logger.exception("Force CSV refresh failed for %s", ticker)
+        try:
+            refreshed_live = refresh_uw_data(ticker, force=True) is not None
+        except Exception:
+            logger.exception("Force UW refresh failed for %s", ticker)
+    ok = refreshed_csv or refreshed_live
+    reason = None if ok else _uw_failure_reason(ticker)
+    return ok, reason
+
+
 def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
     """Periscope-style market maker exposure view (replaces the legacy command center)."""
     ticker = ticker.upper()
     exposure = request.args.get("exposure", "gamma").lower()
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
-    force_refresh = request.args.get("force_refresh", "").lower() in {"1", "true", "yes"}
     bootstrap_status = request.args.get("bootstrap")
     refresh_message = None
 
-    if force_refresh:
-        clear_periscope_api_cache()
-        refreshed_csv = False
-        refreshed_live = False
-        if uw_api_configured():
-            try:
-                refreshed_csv = refresh_ticker(ticker, force=True)
-            except Exception:
-                logger.exception("Force CSV refresh failed for %s", ticker)
-            try:
-                refreshed_live = refresh_uw_data(ticker, force=True) is not None
-            except Exception:
-                logger.exception("Force UW refresh failed for %s", ticker)
-        if refreshed_csv or refreshed_live:
-            bootstrap_status = "ok"
-        else:
-            bootstrap_status = "failed"
-            reason = _uw_failure_reason(ticker)
-            refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
-
     has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key()))
-    if bootstrap_status == "failed" and has_exports:
-        bootstrap_status = "stale"
 
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
@@ -346,6 +367,21 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         api_key=uw_api_key(),
     )
     timeline = ctx.get("timeline") or {}
+
+    if bootstrap_status == "failed" and has_exports:
+        bootstrap_status = "stale"
+    elif (
+        bootstrap_status is None
+        and _uw_live_enabled()
+        and uw_api_configured()
+        and uw_entry is None
+        and has_exports
+        and timeline.get("is_latest", False)
+    ):
+        reason = _uw_failure_reason(ticker)
+        if reason != "not_configured":
+            bootstrap_status = "stale"
+            refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
 
     selected = ctx.get("selected") or {}
     gex_series = ctx.get("exposure_series")
@@ -509,11 +545,34 @@ def ticker_page(ticker):
     return _render_periscope_dashboard(ticker)
 
 
+@APP.post("/ticker/<ticker>/refresh")
+def refresh_ticker_data(ticker):
+    ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        return _spx_redirect()
+    if not _admin_action_authorized(request):
+        abort(403)
+    ok, reason = _run_ticker_refresh(ticker)
+    has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key()))
+    if ok:
+        status = "ok"
+    elif has_exports:
+        status = "stale"
+    else:
+        status = "failed"
+    extra = {}
+    if status == "failed" and reason:
+        extra["reason"] = reason
+    return redirect(url_for("ticker_page", ticker=ticker, bootstrap=status, **extra))
+
+
 @APP.post("/ticker/<ticker>/bootstrap")
 def bootstrap_ticker_history(ticker):
     ticker = ticker.upper()
     if not is_supported_ticker(ticker):
         return _spx_redirect()
+    if not _admin_action_authorized(request):
+        abort(403)
     try:
         ok = refresh_ticker(ticker, force=True)
     except Exception:
@@ -522,6 +581,28 @@ def bootstrap_ticker_history(ticker):
 
     status = "ok" if ok else "failed"
     return redirect(url_for("ticker_page", ticker=ticker, bootstrap=status))
+
+
+@APP.post("/ticker/<ticker>/dispatch-alerts")
+def dispatch_ticker_alerts(ticker):
+    ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        return jsonify({"ok": False, "message": "Unsupported ticker"}), 404
+    if not _admin_action_authorized(request):
+        abort(403)
+    history = _dashboard_history(ticker)
+    if not history:
+        return jsonify({"ok": False, "message": "No history", "dispatched": False}), 404
+    selected = _select_snapshot(history, None)
+    prediction_history = _prediction_history(ticker)
+    prediction = predict_next_snapshot(
+        prediction_history,
+        lookback_days=prediction_lookback_days(ticker),
+    )
+    alerts = generate_alerts(history, selected, prediction)
+    status = maybe_dispatch_alerts(ticker, alerts, manual=True)
+    code = 200 if status.get("ok") else 502
+    return jsonify(status), code
 
 
 @APP.get("/api/spx-price")
@@ -977,17 +1058,8 @@ _scheduler_lock_path = Path(os.environ.get("GEX_SCHEDULER_LOCK", "data/.gex_sche
 
 
 def _manual_dispatch_authorized(req) -> bool:
-    """Authorize a manual webhook dispatch request via the admin token.
-
-    Dispatch is disabled by default: without ``GEX_ADMIN_TOKEN`` set, no HTTP
-    caller can trigger the webhook. When configured, the token must be supplied
-    via the ``admin_token`` query arg or ``X-Admin-Token`` header.
-    """
-    token = os.environ.get("GEX_ADMIN_TOKEN")
-    if not token:
-        return False
-    provided = req.args.get("admin_token") or req.headers.get("X-Admin-Token") or ""
-    return bool(provided) and secrets.compare_digest(provided, token)
+    """Backward-compatible alias for :func:`_admin_action_authorized`."""
+    return _admin_action_authorized(req)
 
 
 def _previous_spot_from_context(ctx: dict) -> float | None:
