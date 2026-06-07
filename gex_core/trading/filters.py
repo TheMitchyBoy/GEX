@@ -6,16 +6,24 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from gex_core.features import safe_float
+from gex_core.market_time import MARKET_TZ, parse_export_ts_utc
 from gex_core.trading.config import (
+    entry_time_filter_enabled,
+    entry_window_after_open_min,
+    entry_window_before_close_min,
     min_flow_aggressiveness,
     min_flow_buy_ratio,
     min_gamma_delta,
+    min_magnet_distance_pct,
+    min_magnet_progress_pct,
     momentum_bars,
+    regime_strict,
     require_flow_alignment,
     require_gamma_flip_side,
     require_spot_momentum,
     strict_entry_filters,
 )
+from gex_core.trading.exits import spot_progress_toward_strike
 
 
 @dataclass(frozen=True)
@@ -121,6 +129,25 @@ def _gamma_flip_aligned(option_type: str, ctx: MarketContext) -> bool:
     return spot < flip
 
 
+def _entry_time_ok(ctx: MarketContext) -> bool:
+    if not entry_time_filter_enabled() or not ctx.export_ts:
+        return True
+    try:
+        local = parse_export_ts_utc(ctx.export_ts).astimezone(MARKET_TZ)
+    except (TypeError, ValueError):
+        return True
+    minutes = local.hour * 60 + local.minute
+    open_min = 9 * 60 + 30 + entry_window_after_open_min()
+    close_min = 16 * 60 - entry_window_before_close_min()
+    return open_min <= minutes <= close_min
+
+
+def _regime_ok(ctx: MarketContext) -> bool:
+    if not regime_strict():
+        return True
+    return "SHORT" not in (ctx.regime or "").upper()
+
+
 def evaluate_entry_filters(
     signals: dict[str, Any],
     *,
@@ -137,6 +164,7 @@ def evaluate_entry_filters(
     strike = float(rec.get("strike", 0))
     spot = safe_float(signals.get("spot") or (market.spot if market else 0.0), 0.0)
     gamma_delta = float(rec.get("gamma_delta", 0))
+    magnet_strike = float(rec.get("magnet_strike") or 0)
 
     if spot <= 0 or strike <= 0:
         return {"approve": False, "reason": "Missing spot or strike", "filter": "invalid", "size_multiplier": 0.0}
@@ -157,6 +185,50 @@ def evaluate_entry_filters(
             "approve": False,
             "reason": f"Trade direction {option_type} conflicts with max-gamma direction {master}",
             "filter": "direction_lock",
+            "size_multiplier": 0.0,
+        }
+
+    min_dist = min_magnet_distance_pct()
+    if min_dist > 0 and magnet_strike > 0:
+        dist = abs(magnet_strike - spot) / spot
+        if dist < min_dist:
+            return {
+                "approve": False,
+                "reason": f"Magnet too close to spot ({dist:.2%} < {min_dist:.2%})",
+                "filter": "magnet_distance",
+                "size_multiplier": 0.0,
+            }
+
+    min_prog = min_magnet_progress_pct()
+    if min_prog > 0 and magnet_strike > 0:
+        anchor = float(market.prev_spot or spot)
+        progress = spot_progress_toward_strike(
+            entry_spot=anchor,
+            current_spot=spot,
+            strike=magnet_strike,
+            option_type=option_type,
+        )
+        if progress < min_prog:
+            return {
+                "approve": False,
+                "reason": f"Spot progress toward magnet {progress:.0%} below {min_prog:.0%}",
+                "filter": "magnet_progress",
+                "size_multiplier": 0.0,
+            }
+
+    if not _regime_ok(market):
+        return {
+            "approve": False,
+            "reason": "Short-gamma regime — entries blocked",
+            "filter": "regime",
+            "size_multiplier": 0.0,
+        }
+
+    if not _entry_time_ok(market):
+        return {
+            "approve": False,
+            "reason": "Outside allowed entry time window",
+            "filter": "entry_time",
             "size_multiplier": 0.0,
         }
 

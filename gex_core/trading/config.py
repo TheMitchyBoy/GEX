@@ -444,6 +444,43 @@ def magnet_anchored_strikes() -> bool:
     return _flag("GEX_TRADER_MAGNET_ANCHORED_STRIKES", "0")
 
 
+def fix_magnet_exit_scale() -> bool:
+    """Map SPX magnet strikes to execution spot scale for exit progress checks."""
+    return _flag("GEX_TRADER_FIX_MAGNET_EXIT_SCALE", "0")
+
+
+def min_magnet_distance_pct() -> float:
+    try:
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_MAGNET_DISTANCE_PCT", "0")))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def dynamic_time_stop() -> bool:
+    return _flag("GEX_TRADER_DYNAMIC_TIME_STOP", "0")
+
+
+def equity_from_mark() -> bool:
+    """Compute account return from marked equity curve instead of cash only."""
+    return _flag("GEX_TRADER_EQUITY_FROM_MARK", "0")
+
+
+def regime_strict() -> bool:
+    """Block entries in short-gamma regime."""
+    return _flag("GEX_TRADER_REGIME_STRICT", "0")
+
+
+def magnet_partial_exit_enabled() -> bool:
+    return _flag("GEX_TRADER_MAGNET_PARTIAL_EXIT", "0")
+
+
+def magnet_partial_progress_pct() -> float:
+    try:
+        return max(0.5, float(os.environ.get("GEX_TRADER_MAGNET_PARTIAL_PROGRESS", "0.80")))
+    except (TypeError, ValueError):
+        return 0.80
+
+
 def entry_time_filter_enabled() -> bool:
     return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")
 
