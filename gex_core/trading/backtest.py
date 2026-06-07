@@ -45,6 +45,11 @@ from gex_core.trading.paper_broker import (
     mark_to_market_premium,
     pnl_usd,
 )
+from gex_core.uw_option_quotes import (
+    UwOptionMarkProvider,
+    create_uw_mark_provider_if_enabled,
+    option_pnl_pct_from_mids,
+)
 from gex_core.trading.execution import map_execution_strike, resolve_backtest_execution_spot, uses_execution_mapping
 from gex_core.trading.signals import compute_entry_candidates
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
@@ -78,10 +83,17 @@ class AccountLedger:
     def credit_exit(self, exit_premium: float, qty: float) -> None:
         self.cash += exit_premium * 100.0 * qty
 
-    def record_equity(self, ts: str, open_positions: list["_OpenPosition"], mark_spot: float) -> None:
+    def record_equity(
+        self,
+        ts: str,
+        open_positions: list["_OpenPosition"],
+        mark_spot: float,
+        *,
+        uw_marks: UwOptionMarkProvider | None = None,
+    ) -> None:
         mtm = 0.0
         for pos in open_positions:
-            pnl_pct = _position_pnl(pos, mark_spot)
+            pnl_pct = _position_pnl(pos, mark_spot, ts=ts, uw_marks=uw_marks)
             mtm += mark_to_market_premium(pos.entry_premium, pnl_pct) * 100.0 * pos.qty
         equity = self.cash + mtm
         self.peak_equity = max(self.peak_equity, equity)
@@ -154,6 +166,8 @@ class BacktestState:
     skipped_low_confidence: int = 0
     strike_cooldown: dict[tuple[float, str], str] = field(default_factory=dict)
     account: AccountLedger | None = None
+    uw_marks: UwOptionMarkProvider | None = None
+    uw_mark_fallbacks: int = 0
 
 
 def _mark_spot(signal_spot: float) -> float | None:
@@ -258,13 +272,47 @@ def _memory_from_closed(closed: list[_ClosedTrade]) -> dict[str, Any]:
     }
 
 
-def _position_pnl(pos: _OpenPosition, spot: float) -> float:
+def _position_pnl(
+    pos: _OpenPosition,
+    spot: float,
+    *,
+    ts: str | None = None,
+    uw_marks: UwOptionMarkProvider | None = None,
+    state: BacktestState | None = None,
+) -> float:
+    if uw_marks and ts:
+        current_mid = uw_marks.mid_at(ts=ts, strike=pos.strike, option_type=pos.option_type)
+        if current_mid is not None and pos.entry_premium > 0:
+            return option_pnl_pct_from_mids(entry_mid=pos.entry_premium, current_mid=current_mid)
+        if state is not None:
+            state.uw_mark_fallbacks += 1
+            uw_marks.fallbacks += 1
     return estimate_option_pnl_pct(
         pos.option_type,
         entry_spot=pos.entry_spot,
         current_spot=spot,
         strike=pos.strike,
     )
+
+
+def _resolve_entry_premium(
+    *,
+    ts: str,
+    exec_spot: float,
+    exec_strike: float,
+    option_type: str,
+    uw_marks: UwOptionMarkProvider | None,
+    state: BacktestState | None,
+) -> float:
+    premium = estimate_entry_premium(exec_spot, exec_strike)
+    if uw_marks:
+        uw_premium = uw_marks.mid_at(ts=ts, strike=exec_strike, option_type=option_type)
+        if uw_premium is not None and uw_premium > 0:
+            return uw_premium
+        if state is not None:
+            state.uw_mark_fallbacks += 1
+            uw_marks.fallbacks += 1
+    return premium
 
 
 def _apply_backtest_exit(
@@ -337,7 +385,7 @@ def _flatten_backtest_eod(
     bar_minutes: float,
 ) -> None:
     for pos in list(state.open_positions):
-        pnl_pct = _position_pnl(pos, mark_spot)
+        pnl_pct = _position_pnl(pos, mark_spot, ts=ts, uw_marks=state.uw_marks, state=state)
         bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
         _apply_backtest_exit(
             state,
@@ -415,7 +463,13 @@ def _check_exits(
             prev_mark = _mark_spot(prev_signal_spot)
             if prev_mark and prev_mark > 0 and state.open_positions:
                 for pos in list(state.open_positions):
-                    pnl_pct = _position_pnl(pos, prev_mark)
+                    pnl_pct = _position_pnl(
+                        pos,
+                        prev_mark,
+                        ts=prev_ts,
+                        uw_marks=state.uw_marks,
+                        state=state,
+                    )
                     bars_held = bars_between_timestamps(pos.entry_ts, prev_ts, bar_minutes=bar_minutes)
                     exit_reason = "session_gap"
                     exit_pnl = pnl_pct
@@ -439,12 +493,12 @@ def _check_exits(
     if export_ts_eod_flatten(ts) and state.open_positions:
         _flatten_backtest_eod(state, idx=idx, ts=ts, mark_spot=mark_spot, bar_minutes=bar_minutes)
         if state.account:
-            state.account.record_equity(ts, state.open_positions, mark_spot)
+            state.account.record_equity(ts, state.open_positions, mark_spot, uw_marks=state.uw_marks)
         return
 
     remaining: list[_OpenPosition] = []
     for pos in state.open_positions:
-        pnl_pct = _position_pnl(pos, mark_spot)
+        pnl_pct = _position_pnl(pos, mark_spot, ts=ts, uw_marks=state.uw_marks, state=state)
         bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
         exit_reason, exit_pnl = evaluate_exit(
             pnl_pct,
@@ -491,7 +545,7 @@ def _check_exits(
             remaining.append(pos)
     state.open_positions = remaining
     if state.account:
-        state.account.record_equity(ts, state.open_positions, mark_spot)
+        state.account.record_equity(ts, state.open_positions, mark_spot, uw_marks=state.uw_marks)
 
 
 def _maybe_enter(
@@ -572,7 +626,14 @@ def _maybe_enter(
             state.skipped_low_confidence += 1
             continue
         size_mult = float(advice.get("size_multiplier") or 1.0)
-        premium = estimate_entry_premium(exec_spot, exec_strike)
+        premium = _resolve_entry_premium(
+            ts=ts,
+            exec_spot=exec_spot,
+            exec_strike=exec_strike,
+            option_type=option_type,
+            uw_marks=state.uw_marks,
+            state=state,
+        )
         equity = state.account.cash if state.account else None
         qty = float(
             resolve_contract_qty(
@@ -624,7 +685,7 @@ def _maybe_enter(
             )
         )
         if state.account:
-            state.account.record_equity(ts, state.open_positions, exec_spot)
+            state.account.record_equity(ts, state.open_positions, exec_spot, uw_marks=state.uw_marks)
         opened_this_cycle += 1
 
 
@@ -748,6 +809,17 @@ def _summarize(
         "stop_loss_pct": stop_loss,
         "take_profit_pct": take_profit,
         "execution_ticker": "SPY" if uses_execution_mapping() else ticker,
+        **(
+            {
+                "uw_option_marks": {
+                    "enabled": True,
+                    "fallbacks": state.uw_mark_fallbacks,
+                    **state.uw_marks.stats(),
+                }
+            }
+            if state.uw_marks
+            else {}
+        ),
         "trades": [
             {
                 "entry_ts": t.entry_ts,
@@ -828,6 +900,7 @@ def backtest_auto_trader(
         }
 
     state = BacktestState()
+    state.uw_marks = create_uw_mark_provider_if_enabled()
     if starting_capital is not None and starting_capital > 0:
         state.account = AccountLedger.create(float(starting_capital))
 
@@ -876,7 +949,13 @@ def backtest_auto_trader(
         if last_spot and last_spot > 0:
             bar_minutes = _snapshot_bar_minutes(last)
             for pos in list(state.open_positions):
-                pnl_pct = _position_pnl(pos, last_spot)
+                pnl_pct = _position_pnl(
+                    pos,
+                    last_spot,
+                    ts=str(last["ts"]),
+                    uw_marks=state.uw_marks,
+                    state=state,
+                )
                 bars_held = bars_between_timestamps(pos.entry_ts, str(last["ts"]), bar_minutes=bar_minutes)
                 _close_position(
                     pos,
@@ -892,7 +971,12 @@ def backtest_auto_trader(
                 )
             state.open_positions.clear()
             if state.account:
-                state.account.record_equity(str(last["ts"]), state.open_positions, last_spot)
+                state.account.record_equity(
+                    str(last["ts"]),
+                    state.open_positions,
+                    last_spot,
+                    uw_marks=state.uw_marks,
+                )
 
     return _summarize(
         ticker,

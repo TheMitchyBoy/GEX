@@ -490,6 +490,15 @@ def equity_from_mark() -> bool:
     return _flag("GEX_TRADER_EQUITY_FROM_MARK", "0")
 
 
+def uw_option_marks_enabled() -> bool:
+    """Use UW intraday option marks in walk-forward backtests (SPY 0DTE)."""
+    return _flag("GEX_TRADER_UW_OPTION_MARKS", "0")
+
+
+def uw_option_marks_disk_cache() -> bool:
+    return _flag("GEX_TRADER_UW_OPTION_MARKS_CACHE", "1")
+
+
 def regime_strict() -> bool:
     """Block entries in short-gamma regime."""
     return _flag("GEX_TRADER_REGIME_STRICT", "0")
