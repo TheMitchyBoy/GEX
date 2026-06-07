@@ -19,6 +19,7 @@ from gex_core.trading.config import (
     stop_loss_pct,
     strong_entry_confidence,
     strong_gamma_delta,
+    max_hold_bars,
     take_profit_pct,
     time_stop_bars,
     time_stop_min_magnet_progress,
@@ -81,13 +82,14 @@ def build_exit_profile(
     strong = ai_confidence >= strong_entry_confidence() and gamma_delta >= strong_gamma_delta()
     short_gamma = "SHORT" in (regime or "").upper()
 
+    hold_bars = max_hold_bars()
     if max_gamma_only() or strong or near_magnet:
         profile = ExitProfile(
             hold_for_target=True,
             partial_take_profit=None,
             trail_trigger=0.15,
             trail_floor=0.08,
-            time_stop_bars=12,
+            time_stop_bars=hold_bars,
             full_take_profit=take_profit_pct(),
         )
     elif short_gamma:
@@ -96,7 +98,7 @@ def build_exit_profile(
             partial_take_profit=partial_take_profit_pct(),
             trail_trigger=0.12,
             trail_floor=0.06,
-            time_stop_bars=8,
+            time_stop_bars=hold_bars,
             full_take_profit=take_profit_pct(),
         )
     else:
@@ -105,11 +107,12 @@ def build_exit_profile(
             partial_take_profit=partial_take_profit_pct(),
             trail_trigger=trailing_stop_trigger_pct(),
             trail_floor=trailing_stop_floor_pct(),
-            time_stop_bars=time_stop_bars(),
+            time_stop_bars=hold_bars,
             full_take_profit=take_profit_pct(),
         )
 
     bars = _dynamic_time_stop_bars(entry_spot, magnet_strike, profile.time_stop_bars)
+    bars = min(bars, hold_bars)
     if bars != profile.time_stop_bars:
         profile = ExitProfile(
             hold_for_target=profile.hold_for_target,
@@ -243,8 +246,15 @@ def evaluate_exit(
         state.partial_taken = True
         return "take_profit_partial", min(pnl_pct, profile.partial_take_profit)
 
-    if state.peak_pnl_pct >= profile.trail_trigger and pnl_pct <= profile.trail_floor:
+    if (
+        not profile.hold_for_target
+        and state.peak_pnl_pct >= profile.trail_trigger
+        and pnl_pct <= profile.trail_floor
+    ):
         return "trailing_stop", max(pnl_pct, profile.trail_floor)
+
+    if bars_held >= max_hold_bars():
+        return "max_hold", pnl_pct
 
     if bars_held >= profile.time_stop_bars and pnl_pct < time_stop_min_pnl_pct():
         progress = spot_progress_toward_strike(

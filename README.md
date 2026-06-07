@@ -278,14 +278,15 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 
 | Priority | Exit | Env | Default | Condition |
 |----------|------|-----|---------|-----------|
-| 1 | Stop loss | `GEX_TRADER_STOP_LOSS_PCT` | `5%` | PnL ≤ −stop; far-OTM uses `GEX_TRADER_FAR_OTM_STOP_PCT` (`3%`) beyond `FAR_OTM_DISTANCE_PCT` |
-| 2 | Magnet touch | `GEX_TRADER_MAGNET_TOUCH_EXIT` | on | Spot at magnet **and** PnL ≥ `GEX_TRADER_MAGNET_TOUCH_MIN_PNL_PCT` (default `4%`) |
-| 3 | Take profit | `GEX_TRADER_TAKE_PROFIT_PCT` | `35%` | Full target; scaled by `GEX_TRADER_DYNAMIC_TP` + `expected_move_pct` when set |
+| 1 | Stop loss | `GEX_TRADER_STOP_LOSS_PCT` | `20%` | PnL ≤ −stop; far-OTM uses `GEX_TRADER_FAR_OTM_STOP_PCT` (`3%`) beyond `FAR_OTM_DISTANCE_PCT` |
+| 2 | Magnet touch | `GEX_TRADER_MAGNET_TOUCH_EXIT` | off | Opt-in; spot at magnet with min PnL (let `TAKE_PROFIT` run by default) |
+| 3 | Take profit | `GEX_TRADER_TAKE_PROFIT_PCT` | `60%` | Full target; optional `GEX_TRADER_DYNAMIC_TP` scales down from IV |
 | 4 | Magnet partial | `GEX_TRADER_MAGNET_PARTIAL_EXIT` | off | Exit fraction at `GEX_TRADER_MAGNET_PARTIAL_PROGRESS` (default 80%) toward magnet |
 | 5 | Partial TP | `GEX_TRADER_PARTIAL_TP_PCT` | `8%` | Only when `hold_for_target=False` (non-strong profiles) |
 | 6 | Trailing stop | `GEX_TRADER_TRAIL_TRIGGER_PCT` / `TRAIL_FLOOR_PCT` | `10%` / `5%` | After peak PnL hits trigger, exit at floor |
-| 7 | Time stop | `GEX_TRADER_TIME_STOP_BARS` | `10` bars | If held ≥ N bars, PnL < `TIME_STOP_MIN_PNL_PCT` (default `0` = losers only), and magnet progress < `TIME_STOP_MIN_PROGRESS` (`35%`) |
-| 8 | EOD flatten | `GEX_TRADER_EOD_FLATTEN` | on | Close all at `EOD_FLATTEN_HOUR:MIN` (default 15:45 ET) |
+| 7 | Max hold | `GEX_TRADER_MAX_HOLD_MINUTES` | `30` min | Flat exit at max hold (≈15 bars at 2-min snapshots) if TP/SL not hit |
+| 8 | Time stop | `GEX_TRADER_TIME_STOP_BARS` | max-hold bars | Stale losers: PnL < `TIME_STOP_MIN_PNL_PCT` and low magnet progress |
+| 9 | EOD flatten | `GEX_TRADER_EOD_FLATTEN` | on | Close all at `EOD_FLATTEN_HOUR:MIN` (default 15:45 ET) |
 
 **Exit profiles** (`build_exit_profile`): strong confidence + gamma, max-gamma-only, or near-magnet setups set `hold_for_target=True` (skip early partial TP, longer time stop, wider trail). `GEX_TRADER_DYNAMIC_TIME_STOP=1` extends time-stop bars when magnet is far from entry spot. `GEX_TRADER_FIX_MAGNET_EXIT_SCALE=1` maps SPX magnet levels to SPY scale for progress checks.
 

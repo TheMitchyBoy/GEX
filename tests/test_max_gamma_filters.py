@@ -53,7 +53,8 @@ def test_flip_filter_blocks_call_below_gamma_flip(monkeypatch):
 
 def test_magnet_primary_exit_at_breakeven(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
-    profile = ExitProfile(hold_for_target=True, full_take_profit=0.35)
+    monkeypatch.setenv("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
+    profile = ExitProfile(hold_for_target=True, full_take_profit=0.60)
     state = ExitState()
     reason, _ = evaluate_exit(
         0.02,

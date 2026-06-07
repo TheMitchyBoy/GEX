@@ -44,9 +44,9 @@ def paper_trading_only() -> bool:
 
 def stop_loss_pct() -> float:
     try:
-        return max(0.01, float(os.environ.get("GEX_TRADER_STOP_LOSS_PCT", "0.05")))
+        return max(0.01, float(os.environ.get("GEX_TRADER_STOP_LOSS_PCT", "0.20")))
     except (TypeError, ValueError):
-        return 0.05
+        return 0.20
 
 
 def far_otm_stop_loss_pct() -> float:
@@ -65,9 +65,9 @@ def far_otm_distance_pct() -> float:
 
 def take_profit_pct() -> float:
     try:
-        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.35")))
+        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.60")))
     except (TypeError, ValueError):
-        return 0.35
+        return 0.60
 
 
 def partial_take_profit_pct() -> float:
@@ -91,11 +91,27 @@ def trailing_stop_floor_pct() -> float:
         return 0.05
 
 
-def time_stop_bars() -> int:
+def max_hold_minutes() -> float:
+    """Hard max hold before flat exit (converted to bars via trader_bar_minutes)."""
     try:
-        return max(1, int(os.environ.get("GEX_TRADER_TIME_STOP_BARS", "10")))
+        return max(1.0, float(os.environ.get("GEX_TRADER_MAX_HOLD_MINUTES", "30")))
     except (TypeError, ValueError):
-        return 10
+        return 30.0
+
+
+def max_hold_bars() -> int:
+    return max(1, int(round(max_hold_minutes() / trader_bar_minutes())))
+
+
+def time_stop_bars() -> int:
+    """Stale-trade stop bars; defaults to max-hold bar count."""
+    try:
+        raw = os.environ.get("GEX_TRADER_TIME_STOP_BARS", "").strip()
+        if raw:
+            return max(1, int(raw))
+        return max_hold_bars()
+    except (TypeError, ValueError):
+        return max_hold_bars()
 
 
 def time_stop_min_pnl_pct() -> float:
@@ -402,7 +418,7 @@ def eod_flatten_minute() -> int:
 
 
 def magnet_touch_exit_enabled() -> bool:
-    return _flag("GEX_TRADER_MAGNET_TOUCH_EXIT", "1")
+    return _flag("GEX_TRADER_MAGNET_TOUCH_EXIT", "0")
 
 
 def magnet_touch_min_pnl_pct() -> float:
@@ -414,7 +430,7 @@ def magnet_touch_min_pnl_pct() -> float:
 
 
 def dynamic_take_profit_enabled() -> bool:
-    return _flag("GEX_TRADER_DYNAMIC_TP", "1")
+    return _flag("GEX_TRADER_DYNAMIC_TP", "0")
 
 
 def min_flow_buy_ratio() -> float:
@@ -466,7 +482,7 @@ def min_magnet_distance_pct() -> float:
 
 
 def dynamic_time_stop() -> bool:
-    return _flag("GEX_TRADER_DYNAMIC_TIME_STOP", "1")
+    return _flag("GEX_TRADER_DYNAMIC_TIME_STOP", "0")
 
 
 def equity_from_mark() -> bool:
