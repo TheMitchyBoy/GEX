@@ -224,7 +224,7 @@ Implemented in `gex_core.trading.signals.compute_entry_candidates()`. A snapshot
 
 ### 3. Entry filters
 
-`gex_core.trading.filters.evaluate_entry_filters()` runs inside the rule-based advisor (`advisor.py`) and the live AI advisor path. **`GEX_TRADER_CLEAR_FILTERS=1` (default)** disables all entry gates at once; set `GEX_TRADER_CLEAR_FILTERS=0` to restore strict mode, or `GEX_TRADER_STRICT_FILTERS=0` to bypass only the advisor filter block.
+`gex_core.trading.filters.evaluate_entry_filters()` runs inside the rule-based advisor (`advisor.py`) and the live AI advisor path. **`GEX_TRADER_CLEAR_FILTERS=0` (default)** keeps entry gates and advisor confidence floor active; set `GEX_TRADER_CLEAR_FILTERS=1` to bypass all gates, or `GEX_TRADER_STRICT_FILTERS=0` to bypass only the advisor filter block.
 
 **Evaluation order** (first failure wins; `filter` key is set on reject):
 
@@ -296,7 +296,9 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 
 | Variable | Default | Layer |
 |----------|---------|-------|
-| `GEX_TRADER_CLEAR_FILTERS` | `1` | Clears all entry filters (default on) |
+| `GEX_TRADER_CLEAR_FILTERS` | `0` | Set `1` to clear all entry filters |
+| `GEX_TRADER_MIN_ENTRY_CONFIDENCE` | `0.55` | Minimum advisor confidence to open (0 when clear filters on) |
+| `GEX_ADVISOR_CONTEXT_MAX_CHARS` | `24000` | UW + signal context cap for entry advisor LLM |
 | `GEX_TRADER_STRICT_FILTERS` | `1` when clear off | Entry master switch |
 | `GEX_TRADER_MAX_GAMMA_ONLY` | `1` | Signal |
 | `GEX_TRADER_REQUIRE_MOMENTUM` | `1` | Entry |
