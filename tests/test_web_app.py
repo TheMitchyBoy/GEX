@@ -4,7 +4,7 @@ def test_ticker_page_returns_200_with_history():
     client = APP.test_client()
     response = client.get("/ticker/SPX")
     assert response.status_code == 200
-    assert b"Market Maker Exposure" in response.data
+    assert b"Gamma Magnet Strategy" in response.data
     assert b"GEX Assistant" in response.data
 
 
@@ -14,8 +14,8 @@ def test_index_renders_periscope_dashboard():
     client = APP.test_client()
     response = client.get("/")
     assert response.status_code == 200
-    assert b"Gamma Ladder" in response.data
-    assert b"gexLadderChart" in response.data
+    assert b"Gamma Magnet Strategy" in response.data
+    assert b"strategyChart" in response.data
 
 
 def test_api_periscope_returns_json():

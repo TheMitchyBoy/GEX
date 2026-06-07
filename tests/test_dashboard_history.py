@@ -48,6 +48,17 @@ def test_fetch_index_spot_series_subsamples(tmp_path, monkeypatch):
     assert all(row["spot"] > 0 for row in series)
 
 
+def test_prune_stale_index_skips_when_export_dir_empty(tmp_path, monkeypatch):
+    db = tmp_path / "index.db"
+    monkeypatch.setenv("GEX_INDEX_DB", str(db))
+    upsert_snapshot("SPX", "2026-06-05_120000", spot=5000.0, total_gex=1.0, path=db)
+    from gex_core.storage import prune_stale_index_entries, list_indexed_timestamps
+
+    pruned = prune_stale_index_entries("SPX", tmp_path, db)
+    assert pruned == 0
+    assert list_indexed_timestamps("SPX", db) == ["2026-06-05_120000"]
+
+
 def test_build_index_timeline_history_returns_rows():
     rows = build_index_timeline_history("SPX", days=90, interval_minutes=10, max_points=100)
     assert rows

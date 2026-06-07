@@ -279,16 +279,37 @@ def _check_exits(
     signal_spot: float,
     row: dict,
     prev_ts: str | None = None,
+    prev_signal_spot: float | None = None,
 ) -> None:
     mark_spot = _mark_spot(signal_spot)
     if mark_spot is None or mark_spot <= 0:
         return
     bar_minutes = _snapshot_bar_minutes(row)
-    if prev_ts:
+    if prev_ts and prev_signal_spot is not None:
         gap = minutes_between_timestamps(prev_ts, ts)
         if gap is not None and gap > _max_exit_gap_minutes(bar_minutes):
-            if state.account:
-                state.account.record_equity(ts, state.open_positions, mark_spot)
+            prev_mark = _mark_spot(prev_signal_spot)
+            if prev_mark and prev_mark > 0 and state.open_positions:
+                for pos in list(state.open_positions):
+                    pnl_pct = _position_pnl(pos, prev_mark)
+                    bars_held = bars_between_timestamps(pos.entry_ts, prev_ts, bar_minutes=bar_minutes)
+                    exit_reason = "session_gap"
+                    exit_pnl = pnl_pct
+                    if bars_held >= pos.exit_profile.time_stop_bars:
+                        exit_reason = "time_stop"
+                    _close_position(
+                        pos,
+                        exit_idx=idx,
+                        exit_ts=prev_ts,
+                        exit_spot=prev_mark,
+                        pnl_pct=exit_pnl,
+                        exit_reason=exit_reason,
+                        closed=state.closed_trades,
+                        state=state,
+                        qty=pos.qty,
+                        bars_held=bars_held,
+                    )
+                state.open_positions = []
             return
     remaining: list[_OpenPosition] = []
     for pos in state.open_positions:
@@ -608,6 +629,7 @@ def backtest_auto_trader(
             signal_spot=spot,
             row=row,
             prev_ts=str(prev["ts"]),
+            prev_signal_spot=safe_float(prev.get("spot"), 0.0) or None,
         )
         _maybe_enter(
             state,

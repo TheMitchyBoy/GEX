@@ -220,6 +220,8 @@ def prune_stale_index_entries(
     export_dir = export_dir or EXPORT_DIR
     ticker = ticker.upper()
     on_disk = set(scan_export_timestamps(ticker, export_dir))
+    if not on_disk:
+        return 0
     indexed = list_indexed_timestamps(ticker, path)
     stale = [ts for ts in indexed if ts not in on_disk]
     if not stale:
