@@ -32,6 +32,7 @@ from gex_core.storage import (
     list_indexed_timestamps_before_date,
     list_indexed_timestamps_for_date,
 )
+from gex_core.refresh import refresh_interval_minutes
 from gex_core.tickers import PRIMARY_TICKER
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ _DEFAULT_INTERVAL = int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"))
 _CACHE_TTL = int(
     os.environ.get(
         "GEX_PERISCOPE_API_CACHE_TTL_SECONDS",
-        str(max(30, int(os.environ.get("GEX_REFRESH_INTERVAL_MINUTES", "10")) * 60)),
+        str(max(30, int(refresh_interval_minutes() * 60))),
     )
 )
 
