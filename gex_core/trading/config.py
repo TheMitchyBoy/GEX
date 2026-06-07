@@ -127,6 +127,14 @@ def strong_entry_confidence() -> float:
         return 0.80
 
 
+def min_entry_confidence() -> float:
+    """Minimum AI advisor confidence required to open a new position (0 = no floor)."""
+    try:
+        return max(0.0, min(1.0, float(os.environ.get("GEX_TRADER_MIN_ENTRY_CONFIDENCE", "0.0"))))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def strong_gamma_delta() -> float:
     try:
         return float(os.environ.get("GEX_TRADER_STRONG_GAMMA_DELTA", "0.08"))

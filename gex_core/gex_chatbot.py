@@ -39,6 +39,8 @@ _CHAT_SYSTEM = (
     "- When trader_backtest is present, it is a walk-forward simulation using the CURRENT "
     "live auto-trader parameters (risk %, stops, filters). Cite those numbers when asked "
     "about backtests or strategy performance.\n"
+    "- When confidence_monte_carlo is present, it swept min-entry and strong-confidence "
+    "advisor thresholds on history. Recommend the best_roi row for ROI optimization.\n"
 )
 
 _MAX_SESSIONS = int(os.environ.get("GEX_CHAT_MAX_SESSIONS", "200"))
@@ -111,7 +113,8 @@ def build_welcome_message(
         f"I have Unusual Whales {exposure} exposure for this snapshot "
         f"(spot {spot_str}, {regime}, net GEX {total_gex:+.2f} Bn$/%, flip {flip_str}).\n\n"
         "Ask me about regime, key levels, predictions, charm/vanna, or trade setups. "
-        "Ask me to **backtest** the strategy to simulate current auto-trader settings on history."
+        "Ask me to **backtest** the strategy to simulate current auto-trader settings on history. "
+        "Ask me to **optimize confidence** for a Monte Carlo sweep over advisor thresholds."
     )
 
 
@@ -124,11 +127,12 @@ def _build_system_message(
     uw_bundle: dict[str, Any] | None,
     base_analysis,
     trader_backtest: dict[str, Any] | None = None,
+    confidence_monte_carlo: dict[str, Any] | None = None,
 ) -> str:
     parts = [_CHAT_SYSTEM, f"Current ticker: {ticker}, exposure type: {exposure}, spot: {spot:,.0f}."]
     if uw_bundle:
         parts.append(f"Unusual Whales data bundle:\n{bundle_to_prompt_json(uw_bundle)}")
-    elif not trader_backtest:
+    elif not trader_backtest and not confidence_monte_carlo:
         parts.append(
             f"Summary (limited data): regime={base_analysis.regime}, "
             f"net GEX={total_gex_bn:+.2f} Bn$/%, bias={base_analysis.bias}, "
@@ -137,6 +141,11 @@ def _build_system_message(
         )
     if trader_backtest:
         parts.append(f"Trader walk-forward backtest (current parameters):\n{bundle_to_prompt_json(trader_backtest)}")
+    if confidence_monte_carlo:
+        parts.append(
+            f"Advisor confidence Monte Carlo (ROI optimization):\n"
+            f"{bundle_to_prompt_json(confidence_monte_carlo)}"
+        )
     return "\n\n".join(parts)
 
 
@@ -286,10 +295,18 @@ def chat_reply(
         )
 
     trader_backtest = None
+    confidence_monte_carlo = None
     try:
-        from gex_core.trading.backtest_agent import run_agent_backtest, user_wants_backtest
+        from gex_core.trading.backtest_agent import (
+            run_agent_backtest,
+            run_agent_confidence_monte_carlo,
+            user_wants_backtest,
+            user_wants_confidence_monte_carlo,
+        )
 
-        if user_wants_backtest(user_message):
+        if user_wants_confidence_monte_carlo(user_message):
+            confidence_monte_carlo = run_agent_confidence_monte_carlo(ticker)
+        elif user_wants_backtest(user_message):
             trader_backtest = run_agent_backtest(ticker)
     except Exception:
         logger.exception("Agent backtest failed for %s", ticker)
@@ -302,6 +319,7 @@ def chat_reply(
         uw_bundle=uw_bundle,
         base_analysis=base,
         trader_backtest=trader_backtest,
+        confidence_monte_carlo=confidence_monte_carlo,
     )
 
     prior = session.messages[-_MAX_MESSAGES:]
@@ -316,7 +334,12 @@ def chat_reply(
         if hermes_err:
             llm_errors.append(hermes_err)
     if reply is None:
-        if trader_backtest is not None:
+        if confidence_monte_carlo is not None:
+            from gex_core.trading.backtest_agent import format_confidence_monte_carlo_reply
+
+            reply = format_confidence_monte_carlo_reply(confidence_monte_carlo) + _fallback_notice(llm_errors)
+            llm_source = "rule_based"
+        elif trader_backtest is not None:
             from gex_core.trading.backtest_agent import format_backtest_reply
 
             reply = format_backtest_reply(trader_backtest) + _fallback_notice(llm_errors)
@@ -340,5 +363,6 @@ def chat_reply(
         "openai_configured": _resolve_openai_config() is not None,
         "uw_data_fed": uw_bundle is not None,
         "trader_backtest": trader_backtest,
+        "confidence_monte_carlo": confidence_monte_carlo,
         "messages": list(session.messages),
     }

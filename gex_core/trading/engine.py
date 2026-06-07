@@ -24,6 +24,7 @@ from gex_core.trading.config import (
     live_trading_allowed,
     max_entries_per_cycle,
     max_open_positions,
+    min_entry_confidence,
     paper_trading_only,
     signal_ticker,
     stop_loss_pct,
@@ -373,6 +374,14 @@ def _maybe_enter(
             continue
 
         confidence = float(advice.get("confidence", 0.5))
+        floor = min_entry_confidence()
+        if confidence < floor:
+            last_skip = {
+                "action": "skipped",
+                "reason": f"Confidence {confidence:.2f} below minimum {floor:.2f}",
+                "advice": advice,
+            }
+            continue
         size_mult = float(advice.get("size_multiplier") or 1.0)
         exec_map = execution_summary(signal_strike=signal_strike, signal_spot=spot, execution_spot=exec_spot)
         mark_entry_spot = float(exec_spot if _uses_execution_mapping() else spot)

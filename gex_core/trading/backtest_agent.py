@@ -18,6 +18,7 @@ from gex_core.trading.config import (
     max_entries_per_cycle,
     max_open_positions,
     max_strike_distance_pct,
+    min_entry_confidence,
     min_flow_buy_ratio,
     min_gamma_delta,
     multi_strike_count,
@@ -28,6 +29,7 @@ from gex_core.trading.config import (
     signal_ticker,
     stop_loss_pct,
     strict_entry_filters,
+    strong_entry_confidence,
     take_profit_pct,
     trader_bar_minutes,
     trader_session_only,
@@ -79,6 +81,8 @@ def current_trader_parameters() -> dict[str, Any]:
         "risk_sizing": use_risk_based_sizing(),
         "risk_per_trade_pct": risk_per_trade_pct(),
         "account_equity_usd": account_equity_usd(),
+        "min_entry_confidence": min_entry_confidence(),
+        "strong_entry_confidence": strong_entry_confidence(),
     }
 
 
@@ -112,6 +116,7 @@ def summarize_backtest_for_ai(result: dict[str, Any], *, include_trades: int = 5
             "strike_distance": result.get("skipped_strike_distance"),
             "cooldown": result.get("blocked_cooldown"),
             "duplicate": result.get("blocked_duplicate"),
+            "low_confidence": result.get("skipped_low_confidence"),
         },
         "recent_trades": tail,
         "execution_ticker": result.get("execution_ticker"),
@@ -166,6 +171,103 @@ def user_wants_backtest(message: str) -> bool:
         "run simulation",
     )
     return any(token in msg for token in triggers)
+
+
+def user_wants_confidence_monte_carlo(message: str) -> bool:
+    msg = (message or "").lower()
+    triggers = (
+        "monte carlo confidence",
+        "confidence monte carlo",
+        "optimize confidence",
+        "optimise confidence",
+        "best confidence level",
+        "best confidence threshold",
+        "sweep confidence",
+        "confidence sweep",
+        "confidence optimization",
+        "confidence optimisation",
+        "optimize advisor confidence",
+        "optimise advisor confidence",
+        "best roi confidence",
+        "confidence levels for roi",
+    )
+    return any(token in msg for token in triggers)
+
+
+def run_agent_confidence_monte_carlo(
+    ticker: str = "SPX",
+    *,
+    lookback_days: int | None = None,
+    max_snapshots: int | None = None,
+    starting_capital: float | None = None,
+    min_conf_start: float = 0.35,
+    min_conf_stop: float = 0.90,
+    min_conf_step: float = 0.05,
+    strong_levels: list[float] | None = None,
+    compact: bool = True,
+) -> dict[str, Any]:
+    """Monte Carlo grid over advisor confidence thresholds using current trader settings."""
+    from gex_core.trading.monte_carlo_confidence import (
+        run_confidence_monte_carlo,
+        summarize_confidence_monte_carlo,
+    )
+
+    ticker = ticker.upper()
+    lookback = lookback_days if lookback_days is not None else _default_lookback_days()
+    max_snaps = max_snapshots if max_snapshots is not None else _default_max_snapshots()
+    capital = starting_capital if starting_capital is not None else account_equity_usd()
+
+    summary = run_confidence_monte_carlo(
+        ticker=ticker,
+        lookback_days=lookback,
+        max_snapshots=max_snaps,
+        starting_capital=capital,
+        min_conf_start=min_conf_start,
+        min_conf_stop=min_conf_stop,
+        min_conf_step=min_conf_step,
+        strong_levels=strong_levels,
+    )
+    if compact:
+        return summarize_confidence_monte_carlo(summary)
+    return summary
+
+
+def format_confidence_monte_carlo_reply(summary: dict[str, Any]) -> str:
+    """Human-readable confidence Monte Carlo blurb for rule-based chat fallback."""
+    if summary.get("message") and not summary.get("trials_with_trades"):
+        return (
+            f"Confidence Monte Carlo ({summary.get('ticker', 'SPX')}): "
+            f"{summary['message']} ({summary.get('snapshots', 0)} snapshots)."
+        )
+
+    best = summary.get("best_roi") or summary.get("best_profitable") or summary.get("best")
+    prod = summary.get("production")
+    trials = summary.get("trials_run", "?")
+    profitable = summary.get("trials_profitable", "?")
+
+    if not best:
+        return f"Confidence Monte Carlo: ran {trials} trials but no trades were triggered."
+
+    ret = best.get("return_pct")
+    ret_txt = f"{ret:+.1%}" if isinstance(ret, (int, float)) else "n/a"
+    win = best.get("win_rate")
+    win_txt = f"{win:.0%}" if isinstance(win, (int, float)) else "n/a"
+
+    lines = [
+        f"Confidence Monte Carlo on {summary.get('snapshots', '?')} snapshots "
+        f"({trials} trials, {profitable} profitable):",
+        f"Best ROI — min_conf {best.get('min_entry_confidence', '?'):.2f}, "
+        f"strong_conf {best.get('strong_confidence', '?'):.2f}: "
+        f"{best.get('total_trades', 0)} trades, win rate {win_txt}, return {ret_txt}.",
+    ]
+    if prod:
+        prod_ret = prod.get("return_pct")
+        if isinstance(prod_ret, (int, float)):
+            lines.append(
+                f"Current production settings (min {prod.get('min_entry_confidence', 0):.2f}, "
+                f"strong {prod.get('strong_confidence', 0):.2f}): return {prod_ret:+.1%}."
+            )
+    return " ".join(lines)
 
 
 def format_backtest_reply(summary: dict[str, Any]) -> str:

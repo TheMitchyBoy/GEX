@@ -22,6 +22,7 @@ from gex_core.trading.advisor import _rule_based_advice
 from gex_core.trading.config import (
     max_entries_per_cycle,
     max_open_positions,
+    min_entry_confidence,
     momentum_bars,
     stop_cooldown_bars,
     stop_loss_pct,
@@ -147,6 +148,7 @@ class BacktestState:
     blocked_cooldown: int = 0
     skipped_no_execution_spot: int = 0
     skipped_weekends: int = 0
+    skipped_low_confidence: int = 0
     strike_cooldown: dict[tuple[float, str], str] = field(default_factory=dict)
     account: AccountLedger | None = None
 
@@ -552,6 +554,9 @@ def _maybe_enter(
             continue
 
         confidence = float(advice.get("confidence", 0.5))
+        if confidence < min_entry_confidence():
+            state.skipped_low_confidence += 1
+            continue
         size_mult = float(advice.get("size_multiplier") or 1.0)
         premium = estimate_entry_premium(exec_spot, exec_strike)
         equity = state.account.cash if state.account else None
@@ -636,6 +641,7 @@ def _summarize(
             "blocked_cooldown": state.blocked_cooldown,
             "skipped_no_execution_spot": state.skipped_no_execution_spot,
             "skipped_weekends": state.skipped_weekends,
+            "skipped_low_confidence": state.skipped_low_confidence,
             "weekend_snapshots_excluded": weekend_snapshots_excluded,
             "message": "No trades triggered in walk-forward window",
             "stop_loss_pct": stop_loss,
@@ -697,6 +703,7 @@ def _summarize(
         "blocked_cooldown": state.blocked_cooldown,
         "skipped_no_execution_spot": state.skipped_no_execution_spot,
         "skipped_weekends": state.skipped_weekends,
+        "skipped_low_confidence": state.skipped_low_confidence,
         "weekend_snapshots_excluded": weekend_snapshots_excluded,
         "stop_loss_pct": stop_loss,
         "take_profit_pct": take_profit,
