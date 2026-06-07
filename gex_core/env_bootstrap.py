@@ -40,6 +40,9 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
 
 def bootstrap_env(paths: tuple[Path, ...] | None = None) -> list[str]:
     """Sync process secrets to disk, then load env files into ``os.environ``."""
+    from gex_core.data_root import configure_data_paths
+
+    configure_data_paths()
     targets = paths or _DEFAULT_ENV_FILES
     for path in targets:
         sync_env_files_from_process(path)
