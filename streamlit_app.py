@@ -20,20 +20,10 @@ from gex_core.features import compute_features_from_exports, enrich_snapshot_met
 from gex_core.history import build_history as build_history_from_exports
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
 from gex_core.predict import apply_flow_to_prediction, load_flow_predictions, predict_next_snapshot, similar_setups
-from gex_core.tickers import PRIMARY_TICKER
+from gex_core.tickers import PRIMARY_TICKER, find_available_tickers
 
 IMG_DIR = Path(__file__).resolve().parent / "img"
 FLOW_FEED_PATH = Path(os.environ.get("GEX_FLOW_FEED", "data/flow_sample.jsonl"))
-
-
-def find_available_tickers(export_dir: Path):
-    export_dir.mkdir(parents=True, exist_ok=True)
-    tickers = set()
-    for f in export_dir.glob("*.csv"):
-        parts = f.name.split("_")
-        if parts and parts[0].upper() == PRIMARY_TICKER:
-            tickers.add(PRIMARY_TICKER)
-    return [PRIMARY_TICKER] if PRIMARY_TICKER in tickers else []
 
 
 def latest_file_for(pattern: str, directory: Path):

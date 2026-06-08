@@ -63,13 +63,13 @@ def test_manual_dispatch_requires_token(monkeypatch):
             self.headers = headers or {}
 
     monkeypatch.delenv("GEX_ADMIN_TOKEN", raising=False)
-    assert web_app._manual_dispatch_authorized(_Req(args={"admin_token": "x"})) is False
+    assert web_app._admin_action_authorized(_Req(args={"admin_token": "x"})) is False
 
     monkeypatch.setenv("GEX_ADMIN_TOKEN", "s3cret")
-    assert web_app._manual_dispatch_authorized(_Req()) is False
-    assert web_app._manual_dispatch_authorized(_Req(args={"admin_token": "wrong"})) is False
-    assert web_app._manual_dispatch_authorized(_Req(args={"admin_token": "s3cret"})) is True
-    assert web_app._manual_dispatch_authorized(_Req(headers={"X-Admin-Token": "s3cret"})) is True
+    assert web_app._admin_action_authorized(_Req()) is False
+    assert web_app._admin_action_authorized(_Req(args={"admin_token": "wrong"})) is False
+    assert web_app._admin_action_authorized(_Req(args={"admin_token": "s3cret"})) is True
+    assert web_app._admin_action_authorized(_Req(headers={"X-Admin-Token": "s3cret"})) is True
 
 
 def test_dispatch_alerts_route_requires_token(monkeypatch):

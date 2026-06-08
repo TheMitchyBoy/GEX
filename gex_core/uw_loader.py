@@ -9,7 +9,7 @@ Endpoints used
   GET /api/stock/{ticker}/greek-exposure/strike
       774 strikes, all expirations combined.  Returns call_gex, put_gex,
       call_delta, put_delta, call_charm, put_charm, call_vanna, put_vanna.
-      Values are in raw dollars (divide by 1e6 to get Bn$/%).
+      Values are in millions of dollars (M$); divide by 1e3 for Bn$/%.
 
   GET /api/stock/{ticker}/spot-exposures/strike
       ~50 ATM strikes.  Used for the current spot price (``price`` field)
@@ -67,7 +67,7 @@ _GEX_SCALE = 1e3
 # Exposure normalization helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _normalize_net_exposure(
+def normalize_net_exposure(
     frame: pd.DataFrame,
     *,
     call_col: str,
@@ -346,7 +346,7 @@ def fetch_uw_greek_exposure(
     for col in greek_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce") / _GEX_SCALE
 
-    df["net_gex"] = _normalize_net_exposure(
+    df["net_gex"] = normalize_net_exposure(
         df,
         call_col="call_gex",
         put_col="put_gex",
@@ -471,7 +471,7 @@ def fetch_uw_spot_exposures(
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "call_gamma_oi" in df.columns and "put_gamma_oi" in df.columns:
-        df["net_gamma_oi"] = _normalize_net_exposure(
+        df["net_gamma_oi"] = normalize_net_exposure(
             df,
             call_col="call_gamma_oi",
             put_col="put_gamma_oi",
@@ -604,30 +604,3 @@ def fetch_spot_gamma_aggregate_bn(
         return None
     return minute_row_total_gex_bn(minute_df.iloc[-1])
 
-
-def fetch_uw_charm_vanna(
-    ticker: str = "SPX",
-    api_key: str | None = None,
-    date: str | None = None,
-) -> dict[str, pd.Series]:
-    """
-    Return charm and vanna exposure by strike.
-
-    Values are in UW's native units for each greek (charm: ∂Δ/∂t,
-    vanna: ∂Δ/∂σ), scaled by the same _GEX_SCALE as GEX columns.
-    They are useful for relative comparison across strikes but should NOT
-    be directly compared to GEX (Bn$) values — the formulae differ.
-
-    Keys: ``call_charm``, ``put_charm``, ``net_charm``,
-          ``call_vanna``, ``put_vanna``, ``net_vanna``.
-    """
-    df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
-    idx = df["strike"].values
-    return {
-        "call_charm":  pd.Series(df["call_charm"].values, index=idx),
-        "put_charm":   pd.Series(df["put_charm"].values,  index=idx),
-        "net_charm":   pd.Series((df["call_charm"] + df["put_charm"]).values, index=idx),
-        "call_vanna":  pd.Series(df["call_vanna"].values, index=idx),
-        "put_vanna":   pd.Series(df["put_vanna"].values,  index=idx),
-        "net_vanna":   pd.Series((df["call_vanna"] + df["put_vanna"]).values, index=idx),
-    }

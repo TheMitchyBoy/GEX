@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 
-from gex_core.features import select_atm_strike_series
+from gex_core.features import safe_float, select_atm_strike_series
 
 _CHART_BG = "#07090f"
 _GREEN = "#00d97e"
@@ -26,13 +26,6 @@ _BASE_LAYOUT = dict(
     xaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.15)"),
     yaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.15)"),
 )
-
-
-def safe_float(value, default=0.0):
-    try:
-        return float(value)
-    except Exception:
-        return float(default)
 
 
 def _bar_width(values: list[float], fill_ratio: float = 0.86) -> float | None:

@@ -3,7 +3,8 @@ Flask SPX gamma dashboard.
 
 Serves historical GEX snapshots from ``data/exports/``, renders Plotly charts,
 runs weighted-KNN forecasts, and optionally auto-refreshes via APScheduler when
-``UW_API_KEY`` is set. All state is file-based; there is no database.
+``UW_API_KEY`` is set. Snapshots live under ``data/exports/`` with an optional
+SQLite index for fast history lookup.
 """
 
 from __future__ import annotations
@@ -24,14 +25,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
-from gex_core.charts import safe_float
+from gex_core.features import gamma_flip_from_uw_greek, safe_float
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
     build_periscope_context,
     build_slice_options,
     build_timeline_navigation,
-    group_timestamps_by_date,
     resolve_selected_timestamp,
 )
 from gex_core.periscope_api import (
@@ -43,16 +43,10 @@ from gex_core.exports import EXPORT_DIR
 from gex_core.history import (
     build_history,
     get_latest_ts,
-    list_tickers,
     list_timestamps,
     load_snapshot_at_ts,
-    ts_label,
 )
-from gex_core.market_features import (
-    fetch_spx_price,
-    fetch_spx_price_history,
-    fetch_spx_price_series_for_dashboard,
-)
+from gex_core.market_features import fetch_spx_price_series_for_dashboard
 from gex_core.startup import deferred_web_startup
 from gex_core.uw_price_stream import start_uw_price_stream
 from gex_core.intelligence import (
@@ -77,9 +71,9 @@ from gex_core.predict import (
 from gex_core.alert_dispatch import maybe_dispatch_alerts
 from gex_core.env_bootstrap import bootstrap_env, parse_env_minutes, uw_api_configured, uw_api_key
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
-from gex_core.export_diagnostics import prediction_lookback_days, summarize_export_state
+from gex_core.export_diagnostics import prediction_lookback_days
 from gex_core.system_status import build_system_status
-from gex_core.tickers import PRIMARY_TICKER, is_supported_ticker, supported_tickers
+from gex_core.tickers import PRIMARY_TICKER, find_available_tickers, is_supported_ticker, supported_tickers
 
 APP = Flask(__name__)
 app = APP
@@ -166,19 +160,15 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
     try:
         from gex_core.uw_loader import fetch_spot_gamma_aggregate_bn, fetch_uw_gex
         from gex_core.ai_analyst import analyze_dealer_gamma
-        from gex_core.features import estimate_gamma_flip, gamma_flip_from_profile
-        from gex_core.periscope import _magnet_gamma_from_call_put
 
         spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
         greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
-        flip_series = agg.gex_by_strike
-        if isinstance(greek_df, pd.DataFrame) and not greek_df.empty:
-            magnet = _magnet_gamma_from_call_put(greek_df, spot)
-            if not magnet.empty:
-                flip_series = magnet
-        gamma_flip = gamma_flip_from_profile(flip_series, spot)
-        if gamma_flip is None:
-            gamma_flip = estimate_gamma_flip(agg.cumulative_gex)
+        gamma_flip = gamma_flip_from_uw_greek(
+            greek_df if isinstance(greek_df, pd.DataFrame) else None,
+            spot,
+            gex_by_strike=agg.gex_by_strike,
+            cumulative_gex=agg.cumulative_gex,
+        )
         spot_gamma_bn = fetch_spot_gamma_aggregate_bn(ticker, api_key=uw_api_key())
         analysis = analyze_dealer_gamma(
             ticker=ticker, spot=spot,
@@ -225,11 +215,6 @@ REFRESH_TICKERS = supported_tickers()
 REFRESH_MINUTES = DEFAULT_REFRESH_MINUTES
 
 
-def find_available_tickers(export_dir: Path | None = None):
-    tickers = list_tickers(export_dir)
-    return tickers if PRIMARY_TICKER in tickers else supported_tickers()
-
-
 def _uw_live_enabled() -> bool:
     return os.environ.get("GEX_SHOW_UW_LIVE", "1").lower() in {"1", "true", "yes"}
 
@@ -255,11 +240,6 @@ def _dashboard_history(ticker: str) -> list[dict]:
         max_snapshots=int(os.environ.get("GEX_DASHBOARD_HISTORY_MAX", "240")),
         dedupe_identical_strikes=True,
     )
-
-
-def _dashboard_skip_backtest() -> bool:
-    raw = os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "1").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
 
 
 def _prediction_history(ticker: str) -> list[dict]:
@@ -1378,14 +1358,7 @@ _scheduler: BackgroundScheduler | None = None
 _scheduler_lock_path = Path(os.environ.get("GEX_SCHEDULER_LOCK", "data/.gex_scheduler.lock"))
 
 
-def _manual_dispatch_authorized(req) -> bool:
-    """Backward-compatible alias for :func:`_admin_action_authorized`."""
-    return _admin_action_authorized(req)
-
-
 def _previous_spot_from_context(ctx: dict) -> float | None:
-    from gex_core.features import safe_float
-
     history = ctx.get("history") or []
     if len(history) >= 2:
         prev = safe_float(history[-2].get("spot"), 0.0)

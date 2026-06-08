@@ -6,7 +6,7 @@ import requests
 
 from gex_core.uw_loader import (
     _get,
-    _normalize_net_exposure,
+    normalize_net_exposure,
     fetch_uw_best_spot_price,
     fetch_uw_gex,
     fetch_uw_greek_exposure,
@@ -57,7 +57,7 @@ def test_normalize_net_exposure_prefers_explicit_net_column():
             "net_gex": [3.0, 4.0],
         }
     )
-    result = _normalize_net_exposure(
+    result = normalize_net_exposure(
         frame,
         call_col="call_gex",
         put_col="put_gex",
@@ -73,7 +73,7 @@ def test_normalize_net_exposure_uses_signed_put_sum_when_puts_negative():
             "put_gamma_oi": [-6.0, -3.0, -1.0],
         }
     )
-    result = _normalize_net_exposure(
+    result = normalize_net_exposure(
         frame,
         call_col="call_gamma_oi",
         put_col="put_gamma_oi",

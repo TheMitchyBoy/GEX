@@ -6,9 +6,15 @@ from typing import Any
 
 import pandas as pd
 
-from gex_core.features import safe_float
 from gex_core.env_bootstrap import uw_api_key
-from gex_core.features import gamma_flip_from_profile, select_atm_strike_series, spot_covers_strike_grid
+from gex_core.features import (
+    gamma_flip_from_profile,
+    greek_gamma_series_from_df,
+    magnet_gamma_from_call_put,
+    safe_float,
+    select_atm_strike_series,
+    spot_covers_strike_grid,
+)
 from gex_core.market_time import (
     market_today,
     ts_display_label,
@@ -159,14 +165,7 @@ def _greek_exposure_from_df(greek_df: pd.DataFrame | None, exposure: str) -> pd.
         return pd.Series(dtype=float)
     df = greek_df.set_index("strike") if "strike" in greek_df.columns else greek_df
     if exposure == "gamma":
-        if "net_gex" in df.columns:
-            return pd.to_numeric(df["net_gex"], errors="coerce").dropna()
-        if "GEX" in df.columns:
-            return pd.to_numeric(df["GEX"], errors="coerce").dropna()
-        if "call_gex" in df.columns and "put_gex" in df.columns:
-            return pd.to_numeric(df["call_gex"], errors="coerce").fillna(0.0) + pd.to_numeric(
-                df["put_gex"], errors="coerce"
-            ).fillna(0.0)
+        return greek_gamma_series_from_df(greek_df)
     elif exposure == "vanna" and "call_vanna" in df.columns:
         return pd.to_numeric(df["call_vanna"], errors="coerce").fillna(0.0) + pd.to_numeric(
             df["put_vanna"], errors="coerce"
@@ -176,45 +175,6 @@ def _greek_exposure_from_df(greek_df: pd.DataFrame | None, exposure: str) -> pd.
             df["put_charm"], errors="coerce"
         ).fillna(0.0)
     return pd.Series(dtype=float)
-
-
-def _magnet_gamma_from_call_put(greek_df: pd.DataFrame | None, spot: float | None) -> pd.Series:
-    """Magnet profile: when call/put gamma cancel, show the dominant leg near spot."""
-    if greek_df is None or greek_df.empty:
-        return pd.Series(dtype=float)
-    df = greek_df.set_index("strike") if "strike" in greek_df.columns else greek_df
-    if "call_gex" not in df.columns or "put_gex" not in df.columns:
-        return _greek_exposure_from_df(greek_df, "gamma")
-
-    calls = pd.to_numeric(df["call_gex"], errors="coerce").fillna(0.0)
-    puts = pd.to_numeric(df["put_gex"], errors="coerce").fillna(0.0)
-    if "net_gex" in df.columns:
-        net = pd.to_numeric(df["net_gex"], errors="coerce").fillna(calls + puts)
-    elif "GEX" in df.columns:
-        net = pd.to_numeric(df["GEX"], errors="coerce").fillna(calls + puts)
-    else:
-        net = calls + puts
-
-    spot_val = safe_float(spot, 0.0)
-    values: dict[float, float] = {}
-    for strike in df.index:
-        strike_f = float(strike)
-        n = float(net.loc[strike])
-        c = float(calls.loc[strike])
-        p = float(puts.loc[strike])
-        leg_peak = max(abs(c), abs(p))
-        if leg_peak >= 0.1 and abs(n) < 0.15 * leg_peak:
-            if spot_val > 0 and strike_f < spot_val and c > abs(p):
-                values[strike_f] = c
-            elif spot_val > 0 and strike_f > spot_val and abs(p) > c:
-                values[strike_f] = p
-            else:
-                values[strike_f] = n
-        else:
-            values[strike_f] = n
-    if not values:
-        return pd.Series(dtype=float)
-    return pd.Series(values, dtype=float).sort_index()
 
 
 def _snapshot_strike_is_spot_oi(snapshot: dict[str, Any]) -> bool:
@@ -261,7 +221,7 @@ def _magnet_exposure_series(
     resolved_df = _resolve_magnet_greek_df(uw_entry=uw_entry, greek_df=greek_df, snapshot=snapshot)
 
     if exposure == "gamma" and isinstance(resolved_df, pd.DataFrame) and not resolved_df.empty:
-        series = _magnet_gamma_from_call_put(resolved_df, spot)
+        series = magnet_gamma_from_call_put(resolved_df, spot)
         if not series.empty:
             return series.sort_index()
 

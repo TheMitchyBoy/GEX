@@ -20,7 +20,7 @@ from gex_core.tickers import is_supported_ticker
 
 logger = logging.getLogger(__name__)
 
-_RAW_GAMMA_SCALE = 1e9  # spot-exposures aggregate fields are raw dollars per 1%
+from gex_core.spot_exposure import RAW_SCALE as _RAW_GAMMA_SCALE
 DEFAULT_BACKFILL_DAYS = int(os.environ.get("GEX_INTRADAY_BACKFILL_DAYS", "90"))
 DEFAULT_BACKFILL_INTERVAL_MINUTES = parse_env_minutes("GEX_BACKFILL_INTERVAL_MINUTES", 10.0)
 DEFAULT_LIVE_INTERVAL_MINUTES = parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 10.0)

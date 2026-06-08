@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from gex_core.uw_loader import _normalize_net_exposure
+from gex_core.uw_loader import normalize_net_exposure
 
 # spot-exposures/strike values are raw dollars per 1% move (or greek unit).
 RAW_SCALE = 1e9
@@ -37,7 +37,7 @@ def spot_exposure_net_series(
     if call_col not in spot_df.columns or put_col not in spot_df.columns:
         return pd.Series(dtype=float)
 
-    net = _normalize_net_exposure(spot_df, call_col=call_col, put_col=put_col)
+    net = normalize_net_exposure(spot_df, call_col=call_col, put_col=put_col)
     series = pd.Series(
         (net / RAW_SCALE).values,
         index=pd.to_numeric(spot_df["strike"], errors="coerce"),

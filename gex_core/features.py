@@ -93,6 +93,78 @@ def gamma_flip_from_profile(
     return estimate_gamma_flip(local.cumsum())
 
 
+def greek_gamma_series_from_df(greek_df: pd.DataFrame | None) -> pd.Series:
+    """Net gamma by strike from a UW greek-exposure DataFrame."""
+    if greek_df is None or greek_df.empty:
+        return pd.Series(dtype=float)
+    df = greek_df.set_index("strike") if "strike" in greek_df.columns else greek_df
+    if "net_gex" in df.columns:
+        return pd.to_numeric(df["net_gex"], errors="coerce").dropna()
+    if "GEX" in df.columns:
+        return pd.to_numeric(df["GEX"], errors="coerce").dropna()
+    if "call_gex" in df.columns and "put_gex" in df.columns:
+        return pd.to_numeric(df["call_gex"], errors="coerce").fillna(0.0) + pd.to_numeric(
+            df["put_gex"], errors="coerce"
+        ).fillna(0.0)
+    return pd.Series(dtype=float)
+
+
+def magnet_gamma_from_call_put(greek_df: pd.DataFrame | None, spot: float | None) -> pd.Series:
+    """Magnet profile: when call/put gamma cancel, show the dominant leg near spot."""
+    if greek_df is None or greek_df.empty:
+        return pd.Series(dtype=float)
+    df = greek_df.set_index("strike") if "strike" in greek_df.columns else greek_df
+    if "call_gex" not in df.columns or "put_gex" not in df.columns:
+        return greek_gamma_series_from_df(greek_df)
+
+    calls = pd.to_numeric(df["call_gex"], errors="coerce").fillna(0.0)
+    puts = pd.to_numeric(df["put_gex"], errors="coerce").fillna(0.0)
+    if "net_gex" in df.columns:
+        net = pd.to_numeric(df["net_gex"], errors="coerce").fillna(calls + puts)
+    elif "GEX" in df.columns:
+        net = pd.to_numeric(df["GEX"], errors="coerce").fillna(calls + puts)
+    else:
+        net = calls + puts
+
+    spot_val = safe_float(spot, 0.0)
+    values: dict[float, float] = {}
+    for strike in df.index:
+        strike_f = float(strike)
+        n = float(net.loc[strike])
+        c = float(calls.loc[strike])
+        p = float(puts.loc[strike])
+        leg_peak = max(abs(c), abs(p))
+        if leg_peak >= 0.1 and abs(n) < 0.15 * leg_peak:
+            if spot_val > 0 and strike_f < spot_val and c > abs(p):
+                values[strike_f] = c
+            elif spot_val > 0 and strike_f > spot_val and abs(p) > c:
+                values[strike_f] = p
+            else:
+                values[strike_f] = n
+        else:
+            values[strike_f] = n
+    if not values:
+        return pd.Series(dtype=float)
+    return pd.Series(values, dtype=float).sort_index()
+
+
+def gamma_flip_from_uw_greek(
+    greek_df: pd.DataFrame | None,
+    spot: float | None,
+    *,
+    gex_by_strike: pd.Series | None = None,
+    cumulative_gex: pd.Series | None = None,
+) -> float | None:
+    """ATM gamma flip from UW greek-exposure (magnet profile when call/put cancel)."""
+    flip_series = magnet_gamma_from_call_put(greek_df, spot)
+    if flip_series.empty and gex_by_strike is not None and not gex_by_strike.empty:
+        flip_series = pd.Series(gex_by_strike, dtype=float).sort_index()
+    gamma_flip = gamma_flip_from_profile(flip_series, spot)
+    if gamma_flip is None and cumulative_gex is not None and not cumulative_gex.empty:
+        gamma_flip = estimate_gamma_flip(cumulative_gex)
+    return gamma_flip
+
+
 def strike_center_of_mass(strike: pd.Series, spot: float | None = None) -> float:
     if strike.empty:
         return 0.0

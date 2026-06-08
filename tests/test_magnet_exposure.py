@@ -4,11 +4,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from gex_core.periscope import (
-    _greek_exposure_from_df,
-    _magnet_gamma_from_call_put,
-    build_periscope_context,
-)
+from gex_core.features import magnet_gamma_from_call_put
+from gex_core.periscope import _greek_exposure_from_df, build_periscope_context
 from gex_core.spot_exposure import spot_exposure_net_series
 
 
@@ -176,7 +173,7 @@ def test_magnet_gamma_shows_dominant_call_when_net_cancels_at_7430():
             "put_gex": [-3.851552, -4.624214, -2.367276],
         }
     )
-    magnet = _magnet_gamma_from_call_put(greek_df, spot=7460.8)
+    magnet = magnet_gamma_from_call_put(greek_df, spot=7460.8)
     assert float(magnet.loc[7430.0]) == 4.630437
     assert float(magnet.loc[7420.0]) < 0
     assert float(magnet.loc[7460.0]) == 1.206460

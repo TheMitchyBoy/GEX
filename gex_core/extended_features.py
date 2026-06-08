@@ -21,13 +21,9 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _top_strike_concentration(strike: pd.Series, top_n: int = 5) -> float:
-    if strike.empty:
-        return 0.0
-    total_abs = strike.abs().sum()
-    if total_abs == 0:
-        return 0.0
-    top = strike.abs().sort_values(ascending=False).head(top_n).sum()
-    return float(top / total_abs)
+    from gex_core.features import top_strike_concentration
+
+    return top_strike_concentration(strike, top_n=top_n)
 
 EXTENDED_FEATURE_DEFAULTS: dict[str, float] = {
     "net_charm_bn": 0.0,
