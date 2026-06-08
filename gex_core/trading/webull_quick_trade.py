@@ -65,6 +65,75 @@ def _tick(price: float) -> float:
     return 0.05
 
 
+def estimate_option_quote(
+    *,
+    symbol: str,
+    spot: float,
+    strike: float,
+    spread_pct: float = 0.06,
+) -> dict[str, float | str | None]:
+    """Synthetic NBBO when Webull is unavailable or the contract has no live quote."""
+    mid = estimate_entry_premium(spot, strike)
+    half = mid * spread_pct / 2.0
+    bid = round(max(0.01, mid - half), 2)
+    ask = round(max(0.01, mid + half), 2)
+    return {
+        "bid": bid,
+        "ask": ask,
+        "last": round(mid, 2),
+        "symbol": symbol,
+        "source": "estimated",
+    }
+
+
+def _resolve_quote_spot(
+    spot: float | None,
+    strategy_trade: dict[str, Any] | None,
+) -> float | None:
+    if spot and spot > 0:
+        return float(spot)
+    if strategy_trade:
+        exec_spot = strategy_trade.get("execution_spot")
+        if exec_spot and float(exec_spot) > 0:
+            return float(exec_spot)
+        signal_spot = strategy_trade.get("signal_spot")
+        if signal_spot and float(signal_spot) > 0:
+            mapped = resolve_execution_spot(signal_spot=float(signal_spot))
+            if mapped and mapped > 0:
+                return float(mapped)
+    mapped = resolve_execution_spot()
+    return float(mapped) if mapped and mapped > 0 else None
+
+
+def _maybe_map_strike_for_execution(
+    underlying: str,
+    strike: float,
+    *,
+    strategy_trade: dict[str, Any] | None = None,
+    spot: float | None = None,
+) -> float:
+    """Map SPX-scale strikes to SPY when the trade desk underlying is SPY."""
+    und = underlying.upper()
+    exec_sym = execution_ticker().upper()
+    sig_sym = signal_ticker().upper()
+    if und != exec_sym or und == sig_sym or strike <= 500:
+        return strike
+
+    if strategy_trade and strategy_trade.get("execution_strike"):
+        signal_strike = float(strategy_trade.get("signal_strike") or 0.0)
+        if abs(strike - signal_strike) < 1.0 or strike > 500:
+            return float(strategy_trade["execution_strike"])
+
+    signal_spot = float((strategy_trade or {}).get("signal_spot") or spot or 0.0)
+    exec_spot = float((strategy_trade or {}).get("execution_spot") or 0.0)
+    if exec_spot <= 0 and signal_spot > 0:
+        resolved = resolve_execution_spot(signal_spot=signal_spot)
+        exec_spot = float(resolved) if resolved else 0.0
+    if signal_spot > 0 and exec_spot > 0:
+        return map_execution_strike(strike, signal_spot=signal_spot, execution_spot=exec_spot)
+    return strike
+
+
 def analyze_quote(quote: dict[str, float | None]) -> QuoteAnalysis:
     bid = quote.get("bid")
     ask = quote.get("ask")
@@ -166,7 +235,7 @@ def exit_limit_price(
     return _round_limit(mid or 0.01)
 
 
-def entry_conditions(analysis: QuoteAnalysis) -> dict[str, Any]:
+def entry_conditions(analysis: QuoteAnalysis, *, quote_source: str = "live") -> dict[str, Any]:
     """When to enter — favors tight spreads and two-sided quotes."""
     if not analysis.bid and not analysis.ask and not analysis.last:
         return {
@@ -174,10 +243,14 @@ def entry_conditions(analysis: QuoteAnalysis) -> dict[str, Any]:
             "signal": "no_quote",
             "summary": "No live option quote — check Webull connection or contract.",
             "score": 0.0,
+            "quote_source": quote_source,
         }
 
     score = 0.5
     reasons: list[str] = []
+    if quote_source == "estimated":
+        reasons.append("Paper estimate — connect Webull for live NBBO before trading")
+        score = 0.48
     if analysis.bid and analysis.ask and analysis.bid > 0 and analysis.ask > 0:
         score += 0.25
         reasons.append("Two-sided NBBO available")
@@ -196,11 +269,14 @@ def entry_conditions(analysis: QuoteAnalysis) -> dict[str, Any]:
             reasons.append(f"Wide spread ({analysis.spread_pct:.1%}) — wait or bid only")
 
     action = "go" if score >= 0.65 else "wait" if score >= 0.45 else "avoid"
+    if quote_source == "estimated" and action == "go":
+        action = "wait"
     return {
         "action": action,
         "signal": "spread_quality",
         "summary": "; ".join(reasons),
         "score": round(min(1.0, max(0.0, score)), 2),
+        "quote_source": quote_source,
     }
 
 
@@ -471,22 +547,40 @@ def quote_payload(
 ) -> dict[str, Any]:
     underlying = underlying.upper()
     expire_date = expire_date or market_today()
-    quote = fetch_option_quote(
-        underlying=underlying,
-        option_type=option_type,
-        strike=strike,
-        expire_date=expire_date,
+    spot_val = _resolve_quote_spot(spot, strategy_trade)
+    strike = _maybe_map_strike_for_execution(
+        underlying,
+        strike,
+        strategy_trade=strategy_trade,
+        spot=spot_val,
     )
-    analysis = analyze_quote(quote)
-    entry = entry_conditions(analysis)
-    if strategy_trade:
-        entry = combined_entry_guidance(entry, strategy_trade=strategy_trade)
     option_symbol = build_webull_option_symbol(
         underlying=underlying,
         expire_date=expire_date,
         option_type=option_type,
         strike=strike,
     )
+    quote_source = "live"
+    quote: dict[str, float | str | None] = {
+        "bid": None,
+        "ask": None,
+        "last": None,
+        "symbol": option_symbol,
+    }
+    if webull_configured():
+        quote = fetch_option_quote(
+            underlying=underlying,
+            option_type=option_type,
+            strike=strike,
+            expire_date=expire_date,
+        )
+    if not any(quote.get(k) for k in ("bid", "ask", "last")) and spot_val and spot_val > 0:
+        quote = estimate_option_quote(symbol=option_symbol, spot=spot_val, strike=strike)
+        quote_source = "estimated"
+    analysis = analyze_quote(quote)
+    entry = entry_conditions(analysis, quote_source=quote_source)
+    if strategy_trade:
+        entry = combined_entry_guidance(entry, strategy_trade=strategy_trade)
     mark = analysis.mid or analysis.bid or analysis.last
     unrealized_pnl_pct = None
     if entry_premium and entry_premium > 0 and mark and mark > 0:
@@ -497,6 +591,8 @@ def quote_payload(
         "strike": strike,
         "expire_date": expire_date,
         "option_symbol": option_symbol,
+        "quote_source": quote_source,
+        "spot": spot_val,
         "unrealized_pnl_pct": unrealized_pnl_pct,
         "quote": analysis.to_dict(),
         "entry_conditions": entry,
@@ -507,7 +603,7 @@ def quote_payload(
         ),
         "prices": price_ladder(analysis, entry_premium=entry_premium),
         "limit_price_for_buy": limit_price_for_buy(
-            spot or 0.0,
+            spot_val or 0.0,
             strike,
             side="buy",
             underlying=underlying,
@@ -515,7 +611,7 @@ def quote_payload(
             expire_date=expire_date,
         ),
         "limit_price_for_sell": limit_price_for_buy(
-            spot or 0.0,
+            spot_val or 0.0,
             strike,
             side="sell",
             underlying=underlying,

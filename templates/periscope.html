@@ -892,7 +892,7 @@
           const rec = st.signals?.recommended;
           const qt = document.getElementById('quickTradeLink');
           if (qt && rec?.strike) {
-            const p = new URLSearchParams({ strike: rec.strike, type: rec.option_type || 'call', load_signal: '1' });
+            const p = new URLSearchParams({ load_signal: '1' });
             qt.href = '/trade?' + p.toString();
           }
           updateLastUpdated();

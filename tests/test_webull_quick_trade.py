@@ -1,14 +1,17 @@
 """Tests for Webull quick-trade pricing and conditions."""
 
 from gex_core.trading.webull_quick_trade import (
+    _maybe_map_strike_for_execution,
     analyze_quote,
     build_recommended_trade,
     combined_entry_guidance,
     entry_conditions,
     entry_limit_price,
+    estimate_option_quote,
     exit_conditions,
     exit_limit_price,
     price_ladder,
+    quote_payload,
 )
 
 
@@ -84,6 +87,52 @@ def test_build_recommended_trade_maps_execution_strike(monkeypatch):
     assert out["execution_strike"] > 0
     assert out["strategy_ready"] is True
     assert out["symbol"].startswith("SPY")
+
+
+def test_estimate_option_quote_builds_two_sided_nbbo():
+    q = estimate_option_quote(symbol="SPY260608C00758000", spot=758.0, strike=758.0)
+    assert q["bid"] and q["ask"] and q["last"]
+    assert q["bid"] < q["last"] < q["ask"]
+
+
+def test_maybe_map_strike_for_execution_maps_spx_to_spy(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_EXECUTION_TICKER", "SPY")
+    monkeypatch.setenv("GEX_TRADER_SIGNAL_TICKER", "SPX")
+    strategy = {
+        "signal_strike": 7600.0,
+        "execution_strike": 758.0,
+        "signal_spot": 7580.0,
+        "execution_spot": 757.0,
+    }
+    mapped = _maybe_map_strike_for_execution("SPY", 7600.0, strategy_trade=strategy)
+    assert mapped == 758.0
+
+
+def test_quote_payload_uses_estimate_when_live_missing(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_EXECUTION_TICKER", "SPY")
+    monkeypatch.setenv("GEX_TRADER_SIGNAL_TICKER", "SPX")
+    monkeypatch.setattr("gex_core.trading.webull_quick_trade.webull_configured", lambda: False)
+    strategy = {
+        "available": True,
+        "signal_strike": 7600.0,
+        "execution_strike": 758.0,
+        "signal_spot": 7580.0,
+        "execution_spot": 757.0,
+        "strategy_ready": True,
+        "filters": {"approve": True},
+        "advice": {"approve": True, "reason": "aligned"},
+    }
+    payload = quote_payload(
+        underlying="SPY",
+        option_type="call",
+        strike=7600.0,
+        expire_date="2026-06-08",
+        strategy_trade=strategy,
+    )
+    assert payload["strike"] == 758.0
+    assert payload["quote_source"] == "estimated"
+    assert payload["quote"]["mid"] is not None
+    assert payload["entry_conditions"]["signal"] != "no_quote"
 
 
 def test_combined_entry_guidance_boosts_when_strategy_ready():

@@ -363,6 +363,7 @@
           expire: document.getElementById('expire').value,
           ticker: TICKER,
         });
+        if (executionSpot) params.set('spot', executionSpot);
         const entry = document.getElementById('entry-premium').value;
         if (entry) params.set('entry_premium', entry);
         if (peakPremium) params.set('peak_premium', peakPremium);
@@ -452,9 +453,13 @@
         if (savedToken) document.getElementById('admin-token').value = savedToken;
         if (INITIAL.default_expire) document.getElementById('expire').value = INITIAL.default_expire;
         const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('strike')) document.getElementById('strike').value = urlParams.get('strike');
-        if (urlParams.get('type')) document.getElementById('option-type').value = urlParams.get('type');
-        if (urlParams.get('load_signal') === '1') await loadRecommendedSignal().catch(() => {});
+        const loadSignal = urlParams.get('load_signal') === '1';
+        if (loadSignal) {
+          await loadRecommendedSignal().catch(() => {});
+        } else {
+          if (urlParams.get('strike')) document.getElementById('strike').value = urlParams.get('strike');
+          if (urlParams.get('type')) document.getElementById('option-type').value = urlParams.get('type');
+        }
         await refreshStatus();
         schedulePoll();
         document.getElementById('strike').addEventListener('change', refreshQuote);
