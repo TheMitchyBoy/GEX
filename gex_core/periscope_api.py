@@ -73,6 +73,7 @@ def _snapshot_from_strike(
     total_gex_bn: float,
     data_source: str = "uw_api",
     spot_exposures_df: pd.DataFrame | None = None,
+    greek_strike: pd.Series | None = None,
 ) -> dict[str, Any]:
     cumulative = strike.cumsum()
     call_wall = float(strike.idxmax()) if len(strike) else None
@@ -98,6 +99,8 @@ def _snapshot_from_strike(
     }
     if spot_exposures_df is not None and not spot_exposures_df.empty:
         metrics["spot_exposures_df"] = spot_exposures_df
+    if greek_strike is not None and not greek_strike.empty:
+        metrics["greek_strike"] = greek_strike.sort_index()
     return enrich_snapshot_metrics(metrics)
 
 
@@ -118,6 +121,13 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
         safe_float(agg.total_gex_bn, float(strike.sum())),
     )
     active_ts = ts or market_now_export_ts()
+    greek_strike = pd.Series(dtype=float)
+    greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
+    if isinstance(greek_df, pd.DataFrame) and not greek_df.empty and "net_gex" in greek_df.columns:
+        greek_strike = pd.Series(greek_df["net_gex"].values, index=greek_df["strike"].values, dtype=float).sort_index()
+    elif not agg.gex_by_strike.empty:
+        greek_strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
+
     return _snapshot_from_strike(
         ticker,
         active_ts,
@@ -126,6 +136,7 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
         total_gex_bn=total_gex,
         data_source="unusual_whales",
         spot_exposures_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
+        greek_strike=greek_strike if not greek_strike.empty else None,
     )
 
 
@@ -152,7 +163,11 @@ def fetch_intraday_day_cache(
     if not api_key:
         return None
 
-    from gex_core.uw_loader import fetch_uw_spot_exposures, fetch_uw_spot_exposures_intraday
+    from gex_core.uw_loader import (
+        fetch_uw_greek_exposure,
+        fetch_uw_spot_exposures,
+        fetch_uw_spot_exposures_intraday,
+    )
 
     try:
         minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key, date=market_date)
@@ -163,6 +178,18 @@ def fetch_intraday_day_cache(
         base_strike = spot_exposure_net_series(spot_df, "gamma")
         if base_strike.empty:
             return cached if cached else None
+
+        greek_strike = pd.Series(dtype=float)
+        try:
+            greek_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=market_date)
+            if not greek_df.empty and "net_gex" in greek_df.columns:
+                greek_strike = pd.Series(
+                    greek_df["net_gex"].values,
+                    index=greek_df["strike"].values,
+                    dtype=float,
+                ).sort_index()
+        except Exception:
+            logger.debug("Greek exposure unavailable for intraday cache %s %s", ticker, market_date)
     except Exception:
         logger.exception("UW intraday fetch failed for %s on %s", ticker, market_date)
         return cached if cached else None
@@ -187,6 +214,7 @@ def fetch_intraday_day_cache(
             spot=spot,
             total_gex_bn=total_gex_bn,
             spot_exposures_df=spot_df,
+            greek_strike=greek_strike if not greek_strike.empty else None,
         )
         timestamps.append(ts)
         if spot > 0:

@@ -161,6 +161,8 @@ def _greek_exposure_from_df(greek_df: pd.DataFrame | None, exposure: str) -> pd.
     if exposure == "gamma":
         if "net_gex" in df.columns:
             return pd.to_numeric(df["net_gex"], errors="coerce").dropna()
+        if "GEX" in df.columns:
+            return pd.to_numeric(df["GEX"], errors="coerce").dropna()
         if "call_gex" in df.columns and "put_gex" in df.columns:
             return pd.to_numeric(df["call_gex"], errors="coerce").fillna(0.0) + pd.to_numeric(
                 df["put_gex"], errors="coerce"
@@ -173,6 +175,51 @@ def _greek_exposure_from_df(greek_df: pd.DataFrame | None, exposure: str) -> pd.
         return pd.to_numeric(df["call_charm"], errors="coerce").fillna(0.0) + pd.to_numeric(
             df["put_charm"], errors="coerce"
         ).fillna(0.0)
+    return pd.Series(dtype=float)
+
+
+def _snapshot_strike_is_spot_oi(snapshot: dict[str, Any]) -> bool:
+    """True when snapshot strike came from UW spot-exposures (OI), not greek-exposure."""
+    spot_df = snapshot.get("spot_exposures_df")
+    return isinstance(spot_df, pd.DataFrame) and not spot_df.empty
+
+
+def _magnet_exposure_series(
+    *,
+    exposure: str,
+    uw_entry: dict | None,
+    greek_df: pd.DataFrame | None,
+    snapshot: dict[str, Any],
+    gex_series: pd.Series,
+) -> pd.Series:
+    """Greek-exposure profile for the magnet map — never spot-exposures OI when greek exists."""
+    exposure = exposure.lower()
+    series = _greek_exposure_from_df(greek_df, exposure)
+    if not series.empty:
+        return series.sort_index()
+
+    if uw_entry and uw_entry.get("agg") is not None:
+        gbs = uw_entry["agg"].gex_by_strike
+        if isinstance(gbs, pd.Series) and not gbs.empty:
+            return pd.Series(gbs, dtype=float).sort_index()
+
+    greek_strike = snapshot.get("greek_strike")
+    if isinstance(greek_strike, pd.Series) and not greek_strike.empty:
+        return greek_strike.sort_index()
+    if greek_strike is not None and not isinstance(greek_strike, pd.Series):
+        converted = pd.Series(greek_strike, dtype=float)
+        if not converted.empty:
+            return converted.sort_index()
+
+    surface_df = snapshot.get("surface_df")
+    if isinstance(surface_df, pd.DataFrame) and not surface_df.empty:
+        series = _greek_exposure_from_df(surface_df, exposure)
+        if not series.empty:
+            return series.sort_index()
+
+    if exposure == "gamma" and not gex_series.empty and not _snapshot_strike_is_spot_oi(snapshot):
+        return gex_series.sort_index()
+
     return pd.Series(dtype=float)
 
 
@@ -332,15 +379,27 @@ def build_periscope_context(
         )
 
     # Extended panel: wider greek-exposure chain when available.
-    greek_exposure = _greek_exposure_from_df(greek_df, exposure)
-    if greek_exposure.empty and not gex_series.empty and exposure == "gamma":
-        greek_exposure = pd.Series(gex_series, dtype=float).sort_index()
+    greek_exposure = _magnet_exposure_series(
+        exposure=exposure,
+        uw_entry=uw_entry,
+        greek_df=greek_df,
+        snapshot=selected,
+        gex_series=gex_series,
+    )
     magnet_exposure = greek_exposure if not greek_exposure.empty else current_exposure
     previous_magnet_exposure = previous_exposure
     if previous_snapshot:
-        prev_strike = previous_snapshot.get("strike")
-        if isinstance(prev_strike, pd.Series) and not prev_strike.empty:
-            previous_magnet_exposure = pd.Series(prev_strike, dtype=float).sort_index()
+        prev_greek = _magnet_exposure_series(
+            exposure=exposure,
+            uw_entry=None,
+            greek_df=None,
+            snapshot=previous_snapshot,
+            gex_series=previous_snapshot.get("strike")
+            if isinstance(previous_snapshot.get("strike"), pd.Series)
+            else pd.Series(dtype=float),
+        )
+        if not prev_greek.empty:
+            previous_magnet_exposure = prev_greek
     extended_source = greek_exposure if not greek_exposure.empty else current_exposure
     exposure_extended = _strike_window(
         extended_source,
