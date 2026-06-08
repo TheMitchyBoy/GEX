@@ -1,0 +1,246 @@
+# Unusual Whales API contract used by gex_core.uw_loader and dashboards.
+# Source: https://api.unusualwhales.com/docs
+#
+# This file is the canonical reference for endpoint paths, response fields, and
+# unit scaling. When UW changes an endpoint, update this spec and uw_loader.py
+# together, then run: pytest tests/test_api_spec.py tests/test_uw_loader.py
+
+openapi: 3.0.3
+info:
+  title: GEX Dashboard — Unusual Whales API subset
+  version: "2026-06-08"
+  description: |
+    Endpoints and field semantics consumed by this repository. Gamma charts and
+    magnet maps must use greek-exposure/strike (verified trade-level GEX), not
+    spot-exposures/strike OI profiles, except where noted for intraday totals.
+
+servers:
+  - url: https://api.unusualwhales.com
+    description: Production
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+  headers:
+    UW-CLIENT-API-ID:
+      description: Client identifier sent on every request
+      schema:
+        type: string
+        default: "100001"
+  schemas:
+    GreekExposureStrikeRow:
+      type: object
+      required: [strike, call_gex, put_gex]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Market date for the row (optional on live data)
+        strike:
+          type: string
+          description: Strike price (numeric string)
+        call_gex:
+          type: string
+          description: Call gamma exposure; API raw value in millions of dollars (M$)
+        put_gex:
+          type: string
+          description: Put gamma exposure; signed M$ (puts are typically negative)
+        call_delta: { type: string }
+        put_delta: { type: string }
+        call_charm: { type: string }
+        put_charm: { type: string }
+        call_vanna: { type: string }
+        put_vanna: { type: string }
+        net_gex:
+          type: string
+          description: Optional explicit net; prefer when present
+    SpotExposureStrikeRow:
+      type: object
+      required: [strike, price]
+      properties:
+        strike: { type: string }
+        price:
+          type: string
+          description: Underlying price at snapshot time
+        call_gamma_oi: { type: string, description: Raw dollars per 1% move }
+        put_gamma_oi: { type: string, description: Raw dollars per 1% move; signed }
+        call_gamma_vol: { type: string }
+        put_gamma_vol: { type: string }
+    SpotExposureMinuteRow:
+      type: object
+      properties:
+        time: { type: string, format: date-time }
+        price: { type: string }
+        gamma_per_one_percent_move_oi: { type: string, description: Aggregate net gamma, raw $ }
+        call_gamma_oi: { type: string }
+        put_gamma_oi: { type: string }
+
+x-gex-scaling:
+  greek_exposure:
+    endpoint_family: greek-exposure
+    api_unit: millions_usd
+    pipeline_unit: billions_usd_per_one_percent
+    divisor: 1000
+    notes: Divide API numeric fields by 1e3 (M$ → Bn$). Net = net_gex or call+put when puts signed.
+  spot_exposure_strike:
+    endpoint_family: spot-exposures/strike
+    api_unit: raw_usd
+    pipeline_unit: billions_usd_per_one_percent
+    divisor: 1000000000
+    notes: OI/vol/bid/ask columns are raw $. Use for ATM grid only; charts prefer greek-exposure.
+  spot_exposure_intraday:
+    endpoint_family: spot-exposures
+    api_unit: raw_usd
+    pipeline_unit: billions_usd_per_one_percent
+    divisor: 1000000000
+    notes: Minute aggregates for total GEX banner; strike profile still from spot-exposures/strike.
+
+paths:
+  /api/stock/{ticker}/greek-exposure/strike:
+    get:
+      operationId: greekExposureByStrike
+      summary: Full GEX chain by strike (primary chart source)
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string, example: SPX }
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Strike-level greek exposure rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/GreekExposureStrikeRow" }
+
+  /api/stock/{ticker}/greek-exposure/expiry:
+    get:
+      operationId: greekExposureByExpiry
+      summary: GEX by expiration (term structure)
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+
+  /api/stock/{ticker}/greek-exposure:
+    get:
+      operationId: greekExposureHistory
+      summary: Daily aggregate greek exposure history
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: timeframe
+          in: query
+          required: false
+          schema: { type: string, example: 1Y }
+
+  /api/stock/{ticker}/spot-exposures/strike:
+    get:
+      operationId: spotExposuresByStrike
+      summary: ATM spot GEX grid (~50 strikes); secondary to greek-exposure for charts
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: min_strike
+          in: query
+          required: false
+          schema: { type: number }
+        - name: max_strike
+          in: query
+          required: false
+          schema: { type: number }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 500, maximum: 500 }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/SpotExposureStrikeRow" }
+
+  /api/stock/{ticker}/spot-exposures:
+    get:
+      operationId: spotExposuresIntraday
+      summary: One-minute aggregate spot exposures (advanced tier)
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+
+  /api/stock/{ticker}/stock-state:
+    get:
+      operationId: stockState
+      summary: Live last price (preferred spot for current session)
+
+  /api/stock/{ticker}/ohlc/{candle_size}:
+    get:
+      operationId: ohlc
+      summary: OHLC candles for price history
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+        - name: candle_size
+          in: path
+          required: true
+          schema: { type: string, example: 15m }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer }
+
+x-gex-implementation:
+  loader_module: gex_core.uw_loader
+  client_id: "100001"
+  chart_gamma_source: greek-exposure/strike
+  magnet_gamma_source: greek-exposure/strike
+  gamma_flip_source: greek-exposure/strike
+  intraday_total_gex_source: spot-exposures
+  retryable_http_status: [429, 500, 502, 503, 504]

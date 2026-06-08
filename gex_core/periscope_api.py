@@ -79,6 +79,11 @@ def _snapshot_from_strike(
     cumulative = strike.cumsum()
     call_wall = float(strike.idxmax()) if len(strike) else None
     put_wall = float(strike.idxmin()) if len(strike) else None
+    flip_series = (
+        greek_strike.sort_index()
+        if greek_strike is not None and not greek_strike.empty
+        else strike
+    )
     metrics: dict[str, Any] = {
         "ts": ts,
         "ts_label": ts_display_label(ts),
@@ -92,7 +97,7 @@ def _snapshot_from_strike(
         "neg_gex": float(strike[strike < 0].sum()),
         "call_wall": call_wall,
         "put_wall": put_wall,
-        "gamma_flip": gamma_flip_from_profile(strike, spot),
+        "gamma_flip": gamma_flip_from_profile(flip_series, spot),
         "regime": "LONG gamma" if total_gex_bn >= 0 else "SHORT gamma",
         "data_source": data_source,
         "spot": float(spot),

@@ -498,7 +498,13 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     spot = safe_float(metrics.get("spot"), float(np.median(strike.index.astype(float))) if len(strike) else 0.0)
     call_wall = safe_float(metrics.get("call_wall"), 0.0)
     put_wall = safe_float(metrics.get("put_wall"), 0.0)
-    strike_for_flip = pd.Series(strike, dtype=float) if len(strike) else pd.Series(dtype=float)
+    greek_strike = metrics.get("greek_strike")
+    if isinstance(greek_strike, pd.Series) and not greek_strike.empty:
+        strike_for_flip = greek_strike.sort_index()
+    elif len(strike):
+        strike_for_flip = pd.Series(strike, dtype=float).sort_index()
+    else:
+        strike_for_flip = pd.Series(dtype=float)
     gamma_flip = (
         gamma_flip_from_profile(strike_for_flip, spot)
         if spot > 0 and len(strike_for_flip) >= 2

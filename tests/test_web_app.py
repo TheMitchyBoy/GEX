@@ -209,3 +209,55 @@ def test_persistent_banner_when_uw_not_configured(monkeypatch):
     response = client.get("/ticker/SPX/")
     assert response.status_code == 200
     assert b"UW_API_KEY" in response.data
+
+
+def test_refresh_uw_data_gamma_flip_uses_greek_exposure(monkeypatch):
+    """Live UW cache must not derive gamma flip from spot-exposures OI."""
+    from unittest.mock import patch
+
+    import pandas as pd
+
+    import web_app
+    from gex_core.pipeline import GexAggregates
+
+    monkeypatch.setenv("UW_API_KEY", "test-key")
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
+    web_app._UW_CACHE.clear()
+
+    greek_df = pd.DataFrame(
+        {
+            "strike": [7440.0, 7450.0, 7460.0, 7480.0],
+            "call_gex": [2.0, 2.5, 3.0, 2.0],
+            "put_gex": [-3.0, -0.5, -1.0, -1.0],
+            "net_gex": [-1.0, 2.0, 2.0, 1.0],
+        }
+    )
+    spot_df = pd.DataFrame(
+        {
+            "strike": [7440.0, 7450.0, 7460.0],
+            "call_gamma_oi": [1e9, 1e9, 2e9],
+            "put_gamma_oi": [-3e9, -3e9, -2e9],
+        }
+    )
+    spot_df["net_gamma_oi"] = spot_df["call_gamma_oi"] + spot_df["put_gamma_oi"]
+    gex_by_strike = pd.Series(greek_df["net_gex"].values, index=greek_df["strike"].values)
+    gex_by_strike.attrs["greek_exposure_df"] = greek_df
+    gex_by_strike.attrs["spot_exposures_df"] = spot_df
+    agg = GexAggregates(
+        gex_by_strike=gex_by_strike,
+        gex_by_expiration=pd.Series(dtype=float),
+        cumulative_gex=gex_by_strike.cumsum(),
+        surface_data=pd.DataFrame(),
+        total_gex_bn=float(gex_by_strike.sum()),
+    )
+
+    with (
+        patch("gex_core.uw_loader.fetch_uw_gex", return_value=(7460.0, agg)),
+        patch("gex_core.uw_loader.fetch_spot_gamma_aggregate_bn", return_value=1.0),
+        patch("gex_core.ai_analyst.analyze_dealer_gamma", return_value=None),
+    ):
+        entry = web_app.refresh_uw_data("SPX", force=True)
+
+    assert entry is not None
+    flip = float(entry["gamma_flip"])
+    assert 7440.0 < flip < 7455.0

@@ -166,13 +166,19 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
     try:
         from gex_core.uw_loader import fetch_spot_gamma_aggregate_bn, fetch_uw_gex
         from gex_core.ai_analyst import analyze_dealer_gamma
-        from gex_core.features import estimate_gamma_flip
-        from gex_core.spot_exposure import spot_exposure_gamma_flip, spot_exposure_net_series
+        from gex_core.features import estimate_gamma_flip, gamma_flip_from_profile
+        from gex_core.periscope import _magnet_gamma_from_call_put
 
         spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
-        spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
-        spot_gamma = spot_exposure_net_series(spot_df, "gamma") if isinstance(spot_df, pd.DataFrame) else pd.Series(dtype=float)
-        gamma_flip = spot_exposure_gamma_flip(spot_gamma) if not spot_gamma.empty else estimate_gamma_flip(agg.cumulative_gex)
+        greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
+        flip_series = agg.gex_by_strike
+        if isinstance(greek_df, pd.DataFrame) and not greek_df.empty:
+            magnet = _magnet_gamma_from_call_put(greek_df, spot)
+            if not magnet.empty:
+                flip_series = magnet
+        gamma_flip = gamma_flip_from_profile(flip_series, spot)
+        if gamma_flip is None:
+            gamma_flip = estimate_gamma_flip(agg.cumulative_gex)
         spot_gamma_bn = fetch_spot_gamma_aggregate_bn(ticker, api_key=uw_api_key())
         analysis = analyze_dealer_gamma(
             ticker=ticker, spot=spot,
