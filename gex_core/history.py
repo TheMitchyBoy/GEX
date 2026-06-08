@@ -24,6 +24,7 @@ from gex_core.exports import (
     list_export_timestamps,
     load_cumulative_series,
     load_expiration_series,
+    load_greek_exposure_df,
     load_strike_series,
     load_surface_df,
     parse_timestamp,
@@ -216,6 +217,17 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         if "GEX" in surface_df.columns and not surface_df.empty:
             surface_peak = float(pd.to_numeric(surface_df["GEX"], errors="coerce").abs().max())
 
+    greek_exposure_df = pd.DataFrame()
+    if "greek_exposure" in files:
+        greek_exposure_df = load_greek_exposure_df(files["greek_exposure"])
+    elif (
+        not surface_df.empty
+        and {"call_gex", "put_gex"}.issubset(surface_df.columns)
+    ):
+        greek_exposure_df = surface_df.copy()
+        if "GEX" in greek_exposure_df.columns and "net_gex" not in greek_exposure_df.columns:
+            greek_exposure_df["net_gex"] = greek_exposure_df["GEX"]
+
     total_gex = float(strike.sum())
     pos_gex = float(strike[strike > 0].sum())
     neg_gex = float(strike[strike < 0].sum())
@@ -255,7 +267,9 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         "strike": strike,
         "cumulative": cumulative,
         "surface_df": surface_df,
+        "greek_exposure_df": greek_exposure_df if not greek_exposure_df.empty else None,
         "surface_path": files.get("gex_surface"),
+        "greek_exposure_path": files.get("greek_exposure"),
         "strike_path": files.get("gex_by_strike"),
         "exp_path": files.get("gex_by_expiration"),
         "cum_path": files.get("cumulative_gex"),

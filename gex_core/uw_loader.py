@@ -559,7 +559,12 @@ def fetch_uw_gex(
 
     surface_data = pd.DataFrame()
     if not df.empty and {"strike", "net_gex"}.issubset(df.columns):
-        surface_data = df[["strike", "net_gex"]].rename(columns={"net_gex": "GEX"}).copy()
+        surface_cols = ["strike", "net_gex"]
+        if "call_gex" in df.columns:
+            surface_cols.append("call_gex")
+        if "put_gex" in df.columns:
+            surface_cols.append("put_gex")
+        surface_data = df[surface_cols].rename(columns={"net_gex": "GEX"}).copy()
         if "call_charm" in df.columns:
             surface_data["charm"] = pd.to_numeric(df["call_charm"], errors="coerce").fillna(0.0) + pd.to_numeric(
                 df["put_charm"], errors="coerce"

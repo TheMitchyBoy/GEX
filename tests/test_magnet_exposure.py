@@ -179,6 +179,53 @@ def test_magnet_gamma_shows_dominant_call_when_net_cancels_at_7430():
     assert float(magnet.loc[7460.0]) == 1.206460
 
 
+def test_magnet_never_falls_back_to_spot_oi_when_greek_missing():
+    """Intraday API snapshots without greek must not feed spot OI into the magnet map."""
+    spot_df = pd.DataFrame(
+        {
+            "strike": [7540.0, 7550.0, 7560.0, 7570.0, 7580.0],
+            "call_gamma_oi": [1e9, 1e9, 2e9, 3e9, 2e9],
+            "put_gamma_oi": [-3e9, -3e9, -2.5e9, -1e9, -0.5e9],
+        }
+    )
+    spot_df["net_gamma_oi"] = spot_df["call_gamma_oi"] + spot_df["put_gamma_oi"]
+    spot_df["net_gamma_oi_bn"] = spot_df["net_gamma_oi"] / 1e9
+    spot_strike = spot_exposure_net_series(spot_df, "gamma")
+    greek_df = pd.DataFrame(
+        {
+            "strike": [7540.0, 7550.0, 7560.0, 7570.0, 7580.0, 7590.0],
+            "net_gex": [-1.0, -0.5, 0.24, 0.76, 1.0, 3.0],
+            "call_gex": [0.5, 0.5, 1.0, 2.5, 2.0, 3.0],
+            "put_gex": [-1.5, -1.0, -0.76, -1.74, -1.0, -0.5],
+        }
+    )
+
+    snapshot = {
+        "ts": "2026-06-08_151806",
+        "spot": 7580.0,
+        "strike": spot_strike,
+        "spot_exposures_df": spot_df,
+        "uw_endpoint": "spot-exposures/strike",
+    }
+
+    with (
+        patch("gex_core.periscope.list_periscope_timestamps", return_value=["2026-06-08_151806"]),
+        patch("gex_core.periscope.load_periscope_snapshot", return_value=snapshot),
+        patch("gex_core.periscope.periscope_price_points", return_value=[]),
+        patch("gex_core.periscope.list_periscope_dates", return_value=["2026-06-08"]),
+        patch("gex_core.periscope.uw_api_key", return_value="test"),
+        patch("gex_core.periscope.should_use_api_for_date", return_value=True),
+        patch("gex_core.periscope._fetch_greek_exposure_cached", return_value=greek_df),
+    ):
+        ctx = build_periscope_context(ticker="SPX", selected_ts="2026-06-08_151806", uw_entry=None)
+
+    magnet = ctx["magnet_exposure_series"]
+    below = magnet[magnet.index < 7580.0]
+    assert (below > 0).sum() >= 2
+    assert float(magnet.loc[7560.0]) == 0.24
+    assert float(magnet.loc[7570.0]) == 0.76
+
+
 def test_magnet_context_uses_call_gex_for_cancelled_7430():
     greek_df = pd.DataFrame(
         {

@@ -164,6 +164,7 @@ def export_live_strike_snapshot(
         cumulative_gex=agg.cumulative_gex,
         gex_by_expiration=agg.gex_by_expiration,
         surface_data=agg.surface_data,
+        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         summary=summary,
         export_dir=export_dir,
     )
@@ -219,6 +220,14 @@ def backfill_intraday_minutes(
         logger.exception("Could not load spot-exposure strike profile for %s on %s", ticker, market_date)
         return 0
 
+    greek_exposure_df = pd.DataFrame()
+    try:
+        from gex_core.uw_loader import fetch_uw_greek_exposure
+
+        greek_exposure_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=market_date)
+    except Exception:
+        logger.debug("Greek exposure unavailable for intraday backfill %s on %s", ticker, market_date)
+
     existing = _existing_timestamps(ticker, export_dir)
     vol_regime = fetch_vol_regime()
     cross_asset = fetch_cross_asset_returns()
@@ -248,6 +257,7 @@ def backfill_intraday_minutes(
             ticker,
             gex_by_strike=base_strike,
             cumulative_gex=cumulative,
+            greek_exposure_df=greek_exposure_df if not greek_exposure_df.empty else None,
             summary=summary,
             export_dir=export_dir,
             timestamp=ts,
@@ -307,6 +317,7 @@ def backfill_daily_strike_snapshots(
         cumulative_gex=agg.cumulative_gex,
         gex_by_expiration=agg.gex_by_expiration,
         surface_data=agg.surface_data,
+        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         summary=summary,
         export_dir=export_dir,
         timestamp=ts,

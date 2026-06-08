@@ -19,6 +19,7 @@ def write_snapshot_export(
     cumulative_gex: pd.Series,
     gex_by_expiration: pd.Series | None = None,
     surface_data: pd.DataFrame | None = None,
+    greek_exposure_df: pd.DataFrame | None = None,
     summary: dict | None = None,
     export_dir: str | Path = "data/exports",
     timestamp: str | None = None,
@@ -56,6 +57,11 @@ def write_snapshot_export(
     )
     if surface_data is not None and not surface_data.empty:
         surface_data.to_csv(export_dir / f"{ticker.upper()}_gex_surface_{timestamp}.csv", index=False)
+    if greek_exposure_df is not None and not greek_exposure_df.empty:
+        greek_exposure_df.to_csv(
+            export_dir / f"{ticker.upper()}_greek_exposure_{timestamp}.csv",
+            index=False,
+        )
 
     summary_path = export_dir / f"{ticker.upper()}_summary_{timestamp}.json"
     with summary_path.open("w", encoding="utf-8") as f:

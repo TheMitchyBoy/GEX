@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
 from typing import Any
 
 import pandas as pd
@@ -32,9 +35,15 @@ from gex_core.storage import list_indexed_timestamps_for_date
 from gex_core.spot_exposure import spot_exposure_mm_positions, spot_exposure_net_series
 from gex_core.tickers import PRIMARY_TICKER
 
+logger = logging.getLogger(__name__)
+
 EXPOSURE_TYPES = ("gamma", "vanna", "charm")
 PERISCOPE_PROFILE_MAX = 55
 PERISCOPE_EXTENDED_MAX = 96
+
+_GREEK_FETCH_CACHE: dict[tuple[str, str], tuple[float, pd.DataFrame]] = {}
+_GREEK_FETCH_LOCK = threading.Lock()
+_GREEK_FETCH_TTL = 120.0
 
 
 def group_timestamps_by_date(timestamps: list[str]) -> dict[str, list[str]]:
@@ -180,7 +189,147 @@ def _greek_exposure_from_df(greek_df: pd.DataFrame | None, exposure: str) -> pd.
 def _snapshot_strike_is_spot_oi(snapshot: dict[str, Any]) -> bool:
     """True when snapshot strike came from UW spot-exposures (OI), not greek-exposure."""
     spot_df = snapshot.get("spot_exposures_df")
-    return isinstance(spot_df, pd.DataFrame) and not spot_df.empty
+    if isinstance(spot_df, pd.DataFrame) and not spot_df.empty:
+        return True
+    endpoint = str(snapshot.get("uw_endpoint") or "").lower()
+    return "spot-exposure" in endpoint
+
+
+def _greek_df_has_call_put(greek_df: pd.DataFrame | None) -> bool:
+    if greek_df is None or greek_df.empty:
+        return False
+    return {"call_gex", "put_gex"}.issubset(greek_df.columns)
+
+
+def _greek_df_from_surface(surface: pd.DataFrame | None) -> pd.DataFrame | None:
+    if surface is None or surface.empty or "strike" not in surface.columns:
+        return None
+    if _greek_df_has_call_put(surface):
+        out = surface.copy()
+        if "GEX" in out.columns and "net_gex" not in out.columns:
+            out["net_gex"] = pd.to_numeric(out["GEX"], errors="coerce")
+        return out
+    if "net_gex" in surface.columns or "GEX" in surface.columns:
+        out = surface.copy()
+        if "GEX" in out.columns and "net_gex" not in out.columns:
+            out["net_gex"] = pd.to_numeric(out["GEX"], errors="coerce")
+        return out
+    return None
+
+
+def _fetch_greek_exposure_cached(
+    ticker: str,
+    market_date: str,
+    *,
+    api_key: str | None,
+) -> pd.DataFrame | None:
+    """Best-effort greek-exposure/strike fetch for magnet maps (short TTL cache)."""
+    if not api_key or not market_date:
+        return None
+    ticker = ticker.upper()
+    market_date = market_date[:10]
+    cache_key = (ticker, market_date)
+    with _GREEK_FETCH_LOCK:
+        cached = _GREEK_FETCH_CACHE.get(cache_key)
+        if cached and (time.monotonic() - cached[0]) < _GREEK_FETCH_TTL:
+            return cached[1].copy()
+
+    try:
+        from gex_core.uw_loader import fetch_uw_greek_exposure
+
+        df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=market_date)
+    except Exception:
+        logger.debug("Magnet greek-exposure fetch failed for %s on %s", ticker, market_date, exc_info=True)
+        return None
+
+    if df is None or df.empty:
+        return None
+    with _GREEK_FETCH_LOCK:
+        _GREEK_FETCH_CACHE[cache_key] = (time.monotonic(), df.copy())
+    return df
+
+
+def _ensure_greek_exposure_df(
+    *,
+    ticker: str,
+    market_date: str | None,
+    api_key: str | None,
+    snapshot: dict[str, Any],
+    uw_entry: dict | None,
+    greek_df: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """Resolve call/put greek data for magnet maps — never spot-exposures OI."""
+    if _greek_df_has_call_put(greek_df):
+        return greek_df
+
+    snap_df = snapshot.get("greek_exposure_df")
+    if isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
+        if _greek_df_has_call_put(snap_df):
+            return snap_df
+        if greek_df is None:
+            greek_df = snap_df
+
+    if uw_entry and uw_entry.get("agg") is not None:
+        attrs_df = uw_entry["agg"].gex_by_strike.attrs.get("greek_exposure_df")
+        if isinstance(attrs_df, pd.DataFrame) and not attrs_df.empty:
+            if _greek_df_has_call_put(attrs_df):
+                return attrs_df
+            if greek_df is None:
+                greek_df = attrs_df
+        surface_df = _greek_df_from_surface(uw_entry["agg"].surface_data)
+        if surface_df is not None and _greek_df_has_call_put(surface_df):
+            return surface_df
+
+    surface_df = _greek_df_from_surface(snapshot.get("surface_df"))
+    if surface_df is not None and _greek_df_has_call_put(surface_df):
+        return surface_df
+
+    greek_path = snapshot.get("greek_exposure_path")
+    if greek_path is not None:
+        from gex_core.exports import load_greek_exposure_df
+
+        loaded = load_greek_exposure_df(greek_path)
+        if _greek_df_has_call_put(loaded):
+            return loaded
+        if greek_df is None and not loaded.empty:
+            greek_df = loaded
+
+    if market_date:
+        fetched = _fetch_greek_exposure_cached(ticker, market_date, api_key=api_key)
+        if fetched is not None and not fetched.empty:
+            return fetched
+
+    return greek_df if isinstance(greek_df, pd.DataFrame) and not greek_df.empty else None
+
+
+def _magnet_net_fallback_series(
+    *,
+    exposure: str,
+    snapshot: dict[str, Any],
+    uw_entry: dict | None,
+    greek_df: pd.DataFrame | None,
+    gex_series: pd.Series,
+) -> pd.Series:
+    """Net greek profile for magnets when call/put decomposition is unavailable."""
+    exposure = exposure.lower()
+    greek_strike = snapshot.get("greek_strike")
+    if isinstance(greek_strike, pd.Series) and not greek_strike.empty:
+        return greek_strike.sort_index()
+
+    if uw_entry and uw_entry.get("agg") is not None:
+        gbs = uw_entry["agg"].gex_by_strike
+        if isinstance(gbs, pd.Series) and not gbs.empty:
+            return pd.Series(gbs, dtype=float).sort_index()
+
+    if isinstance(greek_df, pd.DataFrame) and not greek_df.empty:
+        series = _greek_exposure_from_df(greek_df, exposure)
+        if not series.empty:
+            return series.sort_index()
+
+    if exposure == "gamma" and not gex_series.empty and not _snapshot_strike_is_spot_oi(snapshot):
+        return gex_series.sort_index()
+
+    return pd.Series(dtype=float)
 
 
 def _resolve_magnet_greek_df(
@@ -198,12 +347,15 @@ def _resolve_magnet_greek_df(
         attrs_df = uw_entry["agg"].gex_by_strike.attrs.get("greek_exposure_df")
         if isinstance(attrs_df, pd.DataFrame) and not attrs_df.empty:
             return attrs_df
-        surface = uw_entry["agg"].surface_data
-        if isinstance(surface, pd.DataFrame) and not surface.empty:
+        surface = _greek_df_from_surface(uw_entry["agg"].surface_data)
+        if surface is not None:
             return surface
-    surface_df = snapshot.get("surface_df")
-    if isinstance(surface_df, pd.DataFrame) and not surface_df.empty:
+    surface_df = _greek_df_from_surface(snapshot.get("surface_df"))
+    if surface_df is not None:
         return surface_df
+    snap_greek = snapshot.get("greek_exposure_df")
+    if isinstance(snap_greek, pd.DataFrame) and not snap_greek.empty:
+        return snap_greek
     return None
 
 
@@ -225,27 +377,13 @@ def _magnet_exposure_series(
         if not series.empty:
             return series.sort_index()
 
-    series = _greek_exposure_from_df(resolved_df, exposure)
-    if not series.empty:
-        return series.sort_index()
-
-    if uw_entry and uw_entry.get("agg") is not None:
-        gbs = uw_entry["agg"].gex_by_strike
-        if isinstance(gbs, pd.Series) and not gbs.empty:
-            return pd.Series(gbs, dtype=float).sort_index()
-
-    greek_strike = snapshot.get("greek_strike")
-    if isinstance(greek_strike, pd.Series) and not greek_strike.empty:
-        return greek_strike.sort_index()
-    if greek_strike is not None and not isinstance(greek_strike, pd.Series):
-        converted = pd.Series(greek_strike, dtype=float)
-        if not converted.empty:
-            return converted.sort_index()
-
-    if exposure == "gamma" and not gex_series.empty and not _snapshot_strike_is_spot_oi(snapshot):
-        return gex_series.sort_index()
-
-    return pd.Series(dtype=float)
+    return _magnet_net_fallback_series(
+        exposure=exposure,
+        snapshot=snapshot,
+        uw_entry=uw_entry,
+        greek_df=resolved_df,
+        gex_series=gex_series,
+    )
 
 
 def _prefer_denser_exposure(spot_series: pd.Series, greek_series: pd.Series, spot: float) -> pd.Series | None:
@@ -385,8 +523,17 @@ def build_periscope_context(
             spot_df = uw_entry["agg"].gex_by_strike.attrs.get("spot_exposures_df")
         if greek_df is None:
             greek_df = uw_entry["agg"].gex_by_strike.attrs.get("greek_exposure_df")
-        if greek_df is None and uw_entry["agg"].surface_data is not None and not uw_entry["agg"].surface_data.empty:
-            greek_df = uw_entry["agg"].surface_data
+        if greek_df is None:
+            greek_df = _greek_df_from_surface(uw_entry["agg"].surface_data)
+
+    greek_df = _ensure_greek_exposure_df(
+        ticker=ticker,
+        market_date=active_date,
+        api_key=api_key,
+        snapshot=selected,
+        uw_entry=uw_entry,
+        greek_df=greek_df,
+    )
 
     current_exposure = _exposure_series(spot_df, greek_df, gex_series, exposure, spot=spot or None)
     previous_exposure = pd.Series(dtype=float)
@@ -415,7 +562,18 @@ def build_periscope_context(
         snapshot=selected,
         gex_series=gex_series,
     )
-    magnet_exposure = greek_exposure if not greek_exposure.empty else current_exposure
+    if not greek_exposure.empty:
+        magnet_exposure = greek_exposure
+    elif _snapshot_strike_is_spot_oi(selected):
+        magnet_exposure = _magnet_net_fallback_series(
+            exposure=exposure,
+            snapshot=selected,
+            uw_entry=uw_entry,
+            greek_df=greek_df,
+            gex_series=gex_series,
+        )
+    else:
+        magnet_exposure = current_exposure
     previous_magnet_exposure = previous_exposure
     if previous_snapshot:
         prev_greek = _magnet_exposure_series(

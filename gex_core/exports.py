@@ -6,6 +6,7 @@ Each UW refresh writes a matched set of files sharing a timestamp suffix::
     {TICKER}_cumulative_gex_{ts}.csv
     {TICKER}_gex_by_expiration_{ts}.csv
     {TICKER}_gex_surface_{ts}.csv      (when surface data is present)
+    {TICKER}_greek_exposure_{ts}.csv   (call/put/net greek by strike)
     {TICKER}_summary_{ts}.json
 
 ``{ts}`` is ``YYYY-MM-DD_HHMMSS``. Dashboards discover history by globbing these
@@ -47,7 +48,7 @@ def refresh_export_dir() -> Path:
     return EXPORT_DIR
 
 TIMESTAMP_RE = re.compile(
-    r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"
+    r"^(?P<ticker>[A-Z0-9]+)_(?P<kind>gex_by_strike|gex_by_expiration|gex_surface|greek_exposure|cumulative_gex)_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.csv$"
 )
 SUMMARY_RE = re.compile(
     r"^(?P<ticker>[A-Z0-9]+)_summary_(?P<ts>\d{4}-\d{2}-\d{2}_\d{6})\.json$"
@@ -63,7 +64,7 @@ def paths_for_export_timestamp(ticker: str, ts: str, export_dir: Path | None = N
     export_dir = export_dir or EXPORT_DIR
     ticker = ticker.upper()
     kinds: dict[str, Path] = {}
-    for kind in ("gex_by_strike", "cumulative_gex", "gex_by_expiration", "gex_surface"):
+    for kind in ("gex_by_strike", "cumulative_gex", "gex_by_expiration", "gex_surface", "greek_exposure"):
         path = export_dir / f"{ticker}_{kind}_{ts}.csv"
         if path.exists():
             kinds[kind] = path
@@ -216,4 +217,24 @@ def load_surface_df(path: Path) -> pd.DataFrame:
         df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
     if "GEX" in df.columns:
         df["GEX"] = pd.to_numeric(df["GEX"], errors="coerce")
+    for col in ("call_gex", "put_gex", "net_gex"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
+
+
+def load_greek_exposure_df(path: Path) -> pd.DataFrame:
+    """Load full UW greek-exposure/strike table from export CSV."""
+    if not path.exists() or path.stat().st_size < 2:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+    if "strike" in df.columns:
+        df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+    for col in df.columns:
+        if col in {"strike", "date"}:
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
