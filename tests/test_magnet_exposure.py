@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from gex_core.periscope import _greek_exposure_from_df, build_periscope_context
+from gex_core.periscope import (
+    _greek_exposure_from_df,
+    _magnet_gamma_from_call_put,
+    build_periscope_context,
+)
 from gex_core.spot_exposure import spot_exposure_net_series
 
 
@@ -161,3 +165,45 @@ def test_magnet_uses_surface_data_when_greek_df_missing():
 
     magnet = ctx["magnet_exposure_series"]
     assert float(magnet.loc[7450.0]) == 2.5
+
+
+def test_magnet_gamma_shows_dominant_call_when_net_cancels_at_7430():
+    greek_df = pd.DataFrame(
+        {
+            "strike": [7420.0, 7430.0, 7460.0],
+            "net_gex": [-1.226612, 0.006224, 1.206460],
+            "call_gex": [2.624939, 4.630437, 3.573736],
+            "put_gex": [-3.851552, -4.624214, -2.367276],
+        }
+    )
+    magnet = _magnet_gamma_from_call_put(greek_df, spot=7460.8)
+    assert float(magnet.loc[7430.0]) == 4.630437
+    assert float(magnet.loc[7420.0]) < 0
+    assert float(magnet.loc[7460.0]) == 1.206460
+
+
+def test_magnet_context_uses_call_gex_for_cancelled_7430():
+    greek_df = pd.DataFrame(
+        {
+            "strike": [7420.0, 7430.0, 7460.0, 7480.0],
+            "net_gex": [-1.226612, 0.006224, 1.206460, 2.0],
+            "call_gex": [2.624939, 4.630437, 3.573736, 2.0],
+            "put_gex": [-3.851552, -4.624214, -2.367276, -1.0],
+        }
+    )
+    snapshot = {
+        "ts": "2026-06-08_151806",
+        "spot": 7460.8,
+        "strike": pd.Series(dtype=float),
+        "greek_exposure_df": greek_df,
+    }
+    with (
+        patch("gex_core.periscope.list_periscope_timestamps", return_value=["2026-06-08_151806"]),
+        patch("gex_core.periscope.load_periscope_snapshot", return_value=snapshot),
+        patch("gex_core.periscope.periscope_price_points", return_value=[]),
+        patch("gex_core.periscope.list_periscope_dates", return_value=["2026-06-08"]),
+        patch("gex_core.periscope.uw_api_key", return_value="test"),
+    ):
+        ctx = build_periscope_context(ticker="SPX", selected_ts="2026-06-08_151806")
+    magnet = ctx["magnet_exposure_series"]
+    assert float(magnet.loc[7430.0]) == 4.630437

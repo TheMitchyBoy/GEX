@@ -74,6 +74,7 @@ def _snapshot_from_strike(
     data_source: str = "uw_api",
     spot_exposures_df: pd.DataFrame | None = None,
     greek_strike: pd.Series | None = None,
+    greek_exposure_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     cumulative = strike.cumsum()
     call_wall = float(strike.idxmax()) if len(strike) else None
@@ -101,6 +102,8 @@ def _snapshot_from_strike(
         metrics["spot_exposures_df"] = spot_exposures_df
     if greek_strike is not None and not greek_strike.empty:
         metrics["greek_strike"] = greek_strike.sort_index()
+    if greek_exposure_df is not None and not greek_exposure_df.empty:
+        metrics["greek_exposure_df"] = greek_exposure_df
     return enrich_snapshot_metrics(metrics)
 
 
@@ -137,6 +140,7 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
         data_source="unusual_whales",
         spot_exposures_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
         greek_strike=greek_strike if not greek_strike.empty else None,
+        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) and not greek_df.empty else None,
     )
 
 
@@ -180,12 +184,13 @@ def fetch_intraday_day_cache(
             return cached if cached else None
 
         greek_strike = pd.Series(dtype=float)
+        greek_exposure_df = pd.DataFrame()
         try:
-            greek_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=market_date)
-            if not greek_df.empty and "net_gex" in greek_df.columns:
+            greek_exposure_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=market_date)
+            if not greek_exposure_df.empty and "net_gex" in greek_exposure_df.columns:
                 greek_strike = pd.Series(
-                    greek_df["net_gex"].values,
-                    index=greek_df["strike"].values,
+                    greek_exposure_df["net_gex"].values,
+                    index=greek_exposure_df["strike"].values,
                     dtype=float,
                 ).sort_index()
         except Exception:
@@ -215,6 +220,7 @@ def fetch_intraday_day_cache(
             total_gex_bn=total_gex_bn,
             spot_exposures_df=spot_df,
             greek_strike=greek_strike if not greek_strike.empty else None,
+            greek_exposure_df=greek_exposure_df if not greek_exposure_df.empty else None,
         )
         timestamps.append(ts)
         if spot > 0:
