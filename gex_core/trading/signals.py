@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from gex_core.features import select_atm_strike_series
 from gex_core.trading.config import (
     clear_all_filters,
     magnet_anchored_strikes,
@@ -347,7 +348,13 @@ def compute_entry_candidates(
     if cur.empty:
         return {"available": False, "reason": "No gamma exposure data"}
 
-    positive = cur[cur > 0]
+    search = cur
+    if spot_val > 0:
+        near = select_atm_strike_series(cur, spot_val, window_pct=0.12, min_strikes=5)
+        if not near.empty:
+            search = near
+
+    positive = search[search > 0]
     max_pos_strike = float(positive.idxmax()) if not positive.empty else float(cur.idxmax())
     max_pos_gamma = float(positive.max()) if not positive.empty else float(cur.max())
     max_pos_delta = 0.0

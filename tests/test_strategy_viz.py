@@ -1,6 +1,23 @@
 import pandas as pd
 
-from gex_core.trading.strategy_viz import build_strategy_chart, build_strategy_dashboard, build_strategy_state
+from gex_core.trading.strategy_viz import (
+    _chart_exposure_window,
+    build_strategy_chart,
+    build_strategy_dashboard,
+    build_strategy_state,
+)
+
+
+def test_chart_exposure_window_keeps_dense_atm_strikes():
+    series = pd.Series(
+        {7000 + i * 5: float(i % 3 - 1) for i in range(200)},
+    )
+    window = _chart_exposure_window(series, 7383.0, window_pct=0.025, max_strikes=65)
+    assert len(window) >= 10
+    steps = sorted(window.index.astype(float))
+    gaps = [b - a for a, b in zip(steps, steps[1:])]
+    assert max(gaps) <= 10.0
+    assert window.index.min() <= 7383.0 <= window.index.max()
 
 
 def test_build_strategy_state_with_signals(monkeypatch):

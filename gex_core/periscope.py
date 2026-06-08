@@ -8,7 +8,7 @@ import pandas as pd
 
 from gex_core.features import safe_float
 from gex_core.env_bootstrap import uw_api_key
-from gex_core.features import estimate_gamma_flip, select_atm_strike_series, spot_covers_strike_grid
+from gex_core.features import gamma_flip_from_profile, select_atm_strike_series, spot_covers_strike_grid
 from gex_core.market_time import (
     market_today,
     ts_display_label,
@@ -341,15 +341,13 @@ def build_periscope_context(
         max_strikes=PERISCOPE_EXTENDED_MAX,
     )
 
-    gamma_flip = selected.get("gamma_flip")
-    if gamma_flip is None and not current_exposure.empty and spot > 0:
-        atm = select_atm_strike_series(current_exposure, spot, window_pct=0.06, min_strikes=5)
-        if not atm.empty:
-            gamma_flip = estimate_gamma_flip(atm.cumsum())
-    elif gamma_flip is None and not gex_series.empty:
-        cumulative = selected.get("cumulative")
-        if isinstance(cumulative, pd.Series) and not cumulative.empty:
-            gamma_flip = estimate_gamma_flip(cumulative)
+    gamma_flip = None
+    if not current_exposure.empty and spot > 0:
+        gamma_flip = gamma_flip_from_profile(current_exposure, spot)
+    if gamma_flip is None:
+        gamma_flip = selected.get("gamma_flip")
+    if gamma_flip is None and not gex_series.empty:
+        gamma_flip = gamma_flip_from_profile(gex_series, spot or None)
 
     regime = selected.get("regime", "N/A")
     total_gex = safe_float(selected.get("total_gex"), 0.0)

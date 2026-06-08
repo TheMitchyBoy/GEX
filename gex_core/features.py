@@ -54,6 +54,45 @@ def estimate_gamma_flip(cumulative: pd.Series) -> float | None:
     return None
 
 
+def gamma_flip_from_profile(
+    strike_series: pd.Series | None,
+    spot: float | None = None,
+    *,
+    window_pct: float = 0.06,
+    min_strikes: int = 5,
+) -> float | None:
+    """Gamma flip from an ATM-local cumulative profile.
+
+    The full strike chain often crosses zero only far OTM; dealers flip near
+    spot, so we window around ATM before estimating the zero-crossing.
+    """
+    if strike_series is None or strike_series.empty:
+        return None
+    series = pd.Series(
+        pd.to_numeric(strike_series, errors="coerce"),
+        index=pd.to_numeric(strike_series.index, errors="coerce"),
+    )
+    series = series.dropna()
+    series = series[~series.index.isna()].sort_index()
+    if series.index.duplicated().any():
+        series = series.groupby(level=0).sum()
+    if len(series) < 2:
+        return None
+
+    spot_val = safe_float(spot, 0.0)
+    local = series
+    if spot_val > 0:
+        windowed = select_atm_strike_series(
+            series,
+            spot_val,
+            window_pct=window_pct,
+            min_strikes=min_strikes,
+        )
+        if len(windowed) >= 2:
+            local = windowed
+    return estimate_gamma_flip(local.cumsum())
+
+
 def strike_center_of_mass(strike: pd.Series, spot: float | None = None) -> float:
     if strike.empty:
         return 0.0
@@ -459,11 +498,17 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     spot = safe_float(metrics.get("spot"), float(np.median(strike.index.astype(float))) if len(strike) else 0.0)
     call_wall = safe_float(metrics.get("call_wall"), 0.0)
     put_wall = safe_float(metrics.get("put_wall"), 0.0)
-    gamma_flip = metrics.get("gamma_flip")
+    strike_for_flip = pd.Series(strike, dtype=float) if len(strike) else pd.Series(dtype=float)
+    gamma_flip = (
+        gamma_flip_from_profile(strike_for_flip, spot)
+        if spot > 0 and len(strike_for_flip) >= 2
+        else metrics.get("gamma_flip")
+    )
 
     metrics["wall_spread"] = call_wall - put_wall
     metrics["gex_concentration"] = top_strike_concentration(strike) if len(strike) else 0.0
     metrics["gex_com"] = strike_center_of_mass(strike, spot) if len(strike) else spot
+    metrics["gamma_flip"] = gamma_flip
     metrics["flip_distance_pct"] = (
         (safe_float(gamma_flip) - spot) / spot if gamma_flip is not None and spot > 0 else 0.0
     )

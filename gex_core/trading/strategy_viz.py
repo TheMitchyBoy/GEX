@@ -10,7 +10,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from plotly.utils import PlotlyJSONEncoder
 
-from gex_core.features import safe_float
+from gex_core.charts import _bar_width, _strike_axis_layout
+from gex_core.features import safe_float, select_dense_atm_strike_series
 from gex_core.trading.advisor import advise_entry
 from gex_core.trading.config import (
     max_strike_distance_pct,
@@ -41,12 +42,22 @@ def _encode(fig: go.Figure) -> str:
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def _atm_window(series: pd.Series, spot: float, window_pct: float = 0.012) -> pd.Series:
+def _chart_exposure_window(
+    series: pd.Series | None,
+    spot: float,
+    *,
+    window_pct: float = 0.025,
+    max_strikes: int = 65,
+) -> pd.Series:
+    """Dense ATM strike ladder for the magnet map (no peak-skip gaps)."""
     if series is None or series.empty or spot <= 0:
         return pd.Series(dtype=float)
-    s = pd.Series(series, dtype=float).sort_index()
-    lo, hi = spot * (1 - window_pct), spot * (1 + window_pct)
-    return s[(s.index >= lo) & (s.index <= hi)]
+    return select_dense_atm_strike_series(
+        pd.Series(series, dtype=float).sort_index(),
+        spot,
+        window_pct=window_pct,
+        max_strikes=max_strikes,
+    )
 
 
 def build_strategy_state(
@@ -170,16 +181,21 @@ def build_strategy_chart(
         subplot_titles=("Magnet map · entry levels & open positions", "Cumulative PnL (recent trades)"),
     )
 
-    window = _atm_window(exposure if isinstance(exposure, pd.Series) else pd.Series(dtype=float), spot_val)
+    window = _chart_exposure_window(
+        exposure if isinstance(exposure, pd.Series) else pd.Series(dtype=float),
+        spot_val,
+    )
     if not window.empty and spot_val > 0:
+        strikes = [float(s) for s in window.index]
         colors = [_GREEN if v >= 0 else _RED for v in window.values]
         fig.add_trace(
             go.Bar(
                 x=window.values,
-                y=window.index.astype(float),
+                y=strikes,
                 orientation="h",
+                width=_bar_width(strikes),
                 marker_color=colors,
-                opacity=0.75,
+                opacity=0.86,
                 name="Gamma",
                 hovertemplate="Strike %{y:.0f}<br>γ %{x:+.3f} Bn<extra></extra>",
             ),
@@ -302,7 +318,11 @@ def build_strategy_chart(
             font=dict(size=11, color=_MUTED),
         ),
     )
-    fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.08)")
+    if not window.empty:
+        strike_axis = _strike_axis_layout([float(s) for s in window.index], spot_val, axis="y")
+        fig.update_yaxes(**strike_axis, row=1, col=1)
+    else:
+        fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.08)")
     fig.update_xaxes(title_text="Net gamma (Bn)", row=1, col=1, gridcolor="rgba(148,163,184,0.08)", zeroline=True, zerolinecolor="rgba(255,255,255,0.2)")
     fig.update_xaxes(title_text="Trade #", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
     fig.update_yaxes(title_text="USD", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
