@@ -42,11 +42,19 @@ def _encode(fig: go.Figure) -> str:
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
+def _symmetric_x_range(values: list[float], pad: float = 1.15) -> list[float]:
+    if not values:
+        return [-1.0, 1.0]
+    peak = max((abs(float(v)) for v in values), default=0.05)
+    peak = max(peak, 0.05) * pad
+    return [-peak, peak]
+
+
 def _chart_exposure_window(
     series: pd.Series | None,
     spot: float,
     *,
-    window_pct: float = 0.025,
+    window_pct: float = 0.04,
     max_strikes: int = 65,
 ) -> pd.Series:
     """Dense ATM strike ladder for the magnet map (no peak-skip gaps)."""
@@ -185,6 +193,7 @@ def build_strategy_chart(
         exposure if isinstance(exposure, pd.Series) else pd.Series(dtype=float),
         spot_val,
     )
+    x_range = _symmetric_x_range([float(v) for v in window.values]) if not window.empty else [-1.0, 1.0]
     if not window.empty and spot_val > 0:
         strikes = [float(s) for s in window.index]
         colors = [_GREEN if v >= 0 else _RED for v in window.values]
@@ -202,13 +211,17 @@ def build_strategy_chart(
             row=1,
             col=1,
         )
+        fig.add_vline(
+            x=0,
+            line=dict(color="rgba(226, 232, 240, 0.45)", width=1.5),
+            row=1,
+            col=1,
+        )
 
     if spot_val > 0:
-        x_span = list(window.values) if not window.empty else [0]
-        pad = max(0.05, max((abs(v) for v in x_span), default=0.1) * 1.2)
         fig.add_trace(
             go.Scatter(
-                x=[-pad, pad],
+                x=x_range,
                 y=[spot_val, spot_val],
                 mode="lines",
                 line=dict(color=_AMBER, width=3),
@@ -323,7 +336,15 @@ def build_strategy_chart(
         fig.update_yaxes(**strike_axis, row=1, col=1)
     else:
         fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.08)")
-    fig.update_xaxes(title_text="Net gamma (Bn)", row=1, col=1, gridcolor="rgba(148,163,184,0.08)", zeroline=True, zerolinecolor="rgba(255,255,255,0.2)")
+    fig.update_xaxes(
+        title_text="Net gamma (Bn)",
+        row=1,
+        col=1,
+        range=x_range,
+        gridcolor="rgba(148,163,184,0.08)",
+        zeroline=True,
+        zerolinecolor="rgba(255,255,255,0.2)",
+    )
     fig.update_xaxes(title_text="Trade #", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
     fig.update_yaxes(title_text="USD", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
     return fig

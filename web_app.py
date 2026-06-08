@@ -296,6 +296,17 @@ def _prediction_public_view(prediction: dict | None) -> dict | None:
     }
 
 
+def _strategy_exposure_from_context(ctx: dict) -> tuple[pd.Series | None, pd.Series | None]:
+    """Greek-exposure profile for magnets (shows +γ below spot); falls back to spot-exposures."""
+    exposure = ctx.get("magnet_exposure_series")
+    if exposure is None or (isinstance(exposure, pd.Series) and exposure.empty):
+        exposure = ctx.get("exposure_series")
+    previous = ctx.get("previous_magnet_exposure")
+    if previous is None or (isinstance(previous, pd.Series) and previous.empty):
+        previous = ctx.get("previous_exposure")
+    return exposure, previous
+
+
 def _spx_redirect(**extra):
     args = request.args.to_dict(flat=True)
     args.update(extra)
@@ -384,10 +395,8 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
             refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
 
     selected = ctx.get("selected") or {}
-    gex_series = ctx.get("exposure_series")
-    prev_series = ctx.get("previous_exposure")
+    gex_series, prev_series = _strategy_exposure_from_context(ctx)
     spot = ctx.get("spot")
-    selected = ctx.get("selected") or {}
 
     prev_spot = None
     history = ctx.get("history") or []
@@ -752,11 +761,12 @@ def api_trader_run():
     if not spot:
         return jsonify({"error": "No spot price available"}), 503
     uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
+    exposure, previous_exposure = _strategy_exposure_from_context(ctx)
     result = run_trading_cycle(
         ticker=ticker,
         spot=float(spot),
-        exposure=ctx.get("exposure_series"),
-        previous_exposure=ctx.get("previous_exposure"),
+        exposure=exposure,
+        previous_exposure=previous_exposure,
         uw_bundle=uw_bundle,
         snapshot=ctx.get("selected"),
         previous_spot=_previous_spot_from_context(ctx),
@@ -788,11 +798,12 @@ def api_trader_strategy():
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
     uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
+    exposure, previous_exposure = _strategy_exposure_from_context(ctx)
     payload = build_strategy_dashboard(
         ticker=ticker,
         spot=ctx.get("spot"),
-        exposure=ctx.get("exposure_series"),
-        previous_exposure=ctx.get("previous_exposure"),
+        exposure=exposure,
+        previous_exposure=previous_exposure,
         snapshot=ctx.get("selected"),
         prev_spot=prev_spot,
         uw_bundle=uw_bundle,
@@ -856,11 +867,12 @@ def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
     uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
+    exposure, previous_exposure = _strategy_exposure_from_context(ctx)
     state = build_strategy_state(
         ticker=ticker,
         spot=ctx.get("spot"),
-        exposure=ctx.get("exposure_series"),
-        previous_exposure=ctx.get("previous_exposure"),
+        exposure=exposure,
+        previous_exposure=previous_exposure,
         snapshot=ctx.get("selected"),
         prev_spot=prev_spot,
         uw_bundle=uw_bundle,
@@ -1457,11 +1469,12 @@ def _run_auto_trader(ticker: str) -> dict[str, Any] | None:
             api_key=uw_api_key(),
             fetch_extras=False,
         )
+    exposure, previous_exposure = _strategy_exposure_from_context(ctx)
     return run_trading_cycle(
         ticker=ticker,
         spot=float(spot),
-        exposure=ctx.get("exposure_series"),
-        previous_exposure=ctx.get("previous_exposure"),
+        exposure=exposure,
+        previous_exposure=previous_exposure,
         uw_bundle=uw_bundle,
         snapshot=ctx.get("selected"),
         previous_spot=_previous_spot_from_context(ctx),

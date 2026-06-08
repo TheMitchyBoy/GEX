@@ -333,6 +333,14 @@ def build_periscope_context(
 
     # Extended panel: wider greek-exposure chain when available.
     greek_exposure = _greek_exposure_from_df(greek_df, exposure)
+    if greek_exposure.empty and not gex_series.empty and exposure == "gamma":
+        greek_exposure = pd.Series(gex_series, dtype=float).sort_index()
+    magnet_exposure = greek_exposure if not greek_exposure.empty else current_exposure
+    previous_magnet_exposure = previous_exposure
+    if previous_snapshot:
+        prev_strike = previous_snapshot.get("strike")
+        if isinstance(prev_strike, pd.Series) and not prev_strike.empty:
+            previous_magnet_exposure = pd.Series(prev_strike, dtype=float).sort_index()
     extended_source = greek_exposure if not greek_exposure.empty else current_exposure
     exposure_extended = _strike_window(
         extended_source,
@@ -342,7 +350,9 @@ def build_periscope_context(
     )
 
     gamma_flip = None
-    if not current_exposure.empty and spot > 0:
+    if not magnet_exposure.empty and spot > 0:
+        gamma_flip = gamma_flip_from_profile(magnet_exposure, spot)
+    elif not current_exposure.empty and spot > 0:
         gamma_flip = gamma_flip_from_profile(current_exposure, spot)
     if gamma_flip is None:
         gamma_flip = selected.get("gamma_flip")
@@ -378,7 +388,11 @@ def build_periscope_context(
         "has_history": bool(timestamps),
         "price_points": price_points or [],
         "exposure_series": current_exposure,
+        "magnet_exposure_series": magnet_exposure.sort_index(),
         "previous_exposure": previous_exposure,
+        "previous_magnet_exposure": previous_magnet_exposure.sort_index()
+        if isinstance(previous_magnet_exposure, pd.Series) and not previous_magnet_exposure.empty
+        else previous_exposure,
         "exposure_profile": exposure_profile,
         "exposure_window": exposure_profile,
         "exposure_extended": exposure_extended,

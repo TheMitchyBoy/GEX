@@ -8,6 +8,16 @@ from gex_core.trading.strategy_viz import (
 )
 
 
+def test_chart_exposure_window_shows_positive_gamma_below_spot():
+    spot = 7580.0
+    strikes = list(range(7420, 7621, 5))
+    values = [1.0 if s < spot and s in {7430, 7475, 7525, 7570, 7575} else -0.5 for s in strikes]
+    series = pd.Series(values, index=strikes, dtype=float)
+    window = _chart_exposure_window(series, spot)
+    below = window[window.index < spot]
+    assert (below > 0).sum() >= 1
+
+
 def test_chart_exposure_window_keeps_dense_atm_strikes():
     series = pd.Series(
         {7000 + i * 5: float(i % 3 - 1) for i in range(200)},
