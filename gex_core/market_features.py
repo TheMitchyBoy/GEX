@@ -223,8 +223,45 @@ def fetch_spx_price_history(
     return fetch_uw_price_history(ticker, candle_size=candle_size)
 
 
+_REST_PRICE_CACHE: dict[str, tuple[float, float]] = {}
+
+
+def _rest_price_cache_ttl() -> float:
+    try:
+        return max(5.0, float(os.environ.get("GEX_UW_REST_PRICE_CACHE_SECONDS", "30")))
+    except (TypeError, ValueError):
+        return 30.0
+
+
+def _cached_rest_price(ticker: str) -> float:
+    """Throttled UW REST spot lookup — not for sub-second polling loops."""
+    import time
+
+    key = ticker.upper()
+    now = time.monotonic()
+    cached = _REST_PRICE_CACHE.get(key)
+    if cached and (now - cached[0]) < _rest_price_cache_ttl():
+        return cached[1]
+
+    price = 0.0
+    try:
+        from gex_core.uw_loader import fetch_uw_stock_state_price, fetch_uw_spot
+
+        state_price = fetch_uw_stock_state_price(ticker)
+        if state_price > 0:
+            price = state_price
+        else:
+            price = float(fetch_uw_spot(ticker) or 0.0)
+    except Exception as exc:
+        logger.debug("UW REST price fallback unavailable for %s: %s", ticker, exc)
+
+    if price > 0:
+        _REST_PRICE_CACHE[key] = (now, price)
+    return price
+
+
 def fetch_spx_price(ticker: str = "SPX") -> float:
-    """Latest price from UW websocket cache, then REST fallbacks."""
+    """Latest price from UW websocket cache, then throttled REST fallbacks."""
     if _uw_price_enabled():
         try:
             from gex_core.uw_price_stream import get_uw_price_stream
@@ -234,15 +271,9 @@ def fetch_spx_price(ticker: str = "SPX") -> float:
                 return live
         except Exception as exc:
             logger.debug("UW websocket price unavailable for %s: %s", ticker, exc)
-        try:
-            from gex_core.uw_loader import fetch_uw_stock_state_price, fetch_uw_spot
-
-            state_price = fetch_uw_stock_state_price(ticker)
-            if state_price > 0:
-                return state_price
-            return fetch_uw_spot(ticker)
-        except Exception as exc:
-            logger.debug("UW REST price fallback unavailable for %s: %s", ticker, exc)
+        rest = _cached_rest_price(ticker)
+        if rest > 0:
+            return rest
     points = fetch_spx_price_history(ticker=ticker)
     if points:
         return float(points[-1]["close"])

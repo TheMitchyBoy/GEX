@@ -243,4 +243,12 @@ x-gex-implementation:
   magnet_gamma_source: greek-exposure/strike
   gamma_flip_source: greek-exposure/strike
   intraday_total_gex_source: spot-exposures
+  live_price_source: uw_price_websocket
+  live_price_poll_seconds: 1
+  gex_refresh_minutes: 10
+  rest_price_cache_seconds: 30
   retryable_http_status: [429, 500, 502, 503, 504]
+  notes: |
+    Only the UW price websocket (and SSE /api/spot-stream reading that cache) should
+    update sub-second. Gamma/GEX REST endpoints refresh on the scheduler cadence
+    (GEX_REFRESH_INTERVAL_MINUTES, default 10m), not every tick.

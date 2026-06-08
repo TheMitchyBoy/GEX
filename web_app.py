@@ -646,23 +646,21 @@ def api_spx_price():
 
 @APP.get("/api/spot-stream")
 def api_spot_stream():
-    """SSE stream of live spot ticks from the UW price websocket cache."""
+    """SSE stream of live spot ticks from the UW price websocket cache only.
+
+    Does not poll UW REST on this loop — that burned API quota at ~2 req/s when
+    the websocket was disconnected. REST spot fallbacks belong on page load only.
+    """
     from gex_core.uw_price_stream import get_uw_price_stream
 
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    poll_seconds = max(0.25, float(os.environ.get("GEX_SPOT_STREAM_POLL_SECONDS", "1")))
 
     def generate():
         stream = get_uw_price_stream()
         last_price: float | None = None
         while True:
             price = stream.get_latest_price(ticker)
-            if price <= 0:
-                try:
-                    from gex_core.market_features import fetch_spx_price
-
-                    price = float(fetch_spx_price(ticker) or 0.0)
-                except Exception:
-                    price = 0.0
             if price > 0 and price != last_price:
                 last_price = price
                 payload = json.dumps(
@@ -674,7 +672,7 @@ def api_spot_stream():
                     }
                 )
                 yield f"data: {payload}\n\n"
-            time.sleep(0.5)
+            time.sleep(poll_seconds)
 
     return Response(
         generate(),

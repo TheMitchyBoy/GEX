@@ -523,7 +523,18 @@ def fetch_uw_gex(
     """
     df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
     spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=date)
-    spot = fetch_uw_best_spot_price(ticker, api_key=api_key, date=date)
+    spot = 0.0
+    if not spot_df.empty and "price" in spot_df.columns:
+        prices = pd.to_numeric(spot_df["price"], errors="coerce").dropna()
+        if not prices.empty:
+            spot = float(prices.iloc[0])
+    if spot <= 0:
+        spot = fetch_uw_best_spot_price(ticker, api_key=api_key, date=date)
+    elif date is None:
+        # Live session: prefer stock-state over spot-exposures strike ``price``.
+        state_price = fetch_uw_stock_state_price(ticker, api_key=api_key)
+        if state_price > 0:
+            spot = state_price
     logger.info("UW spot price for %s: %.2f", ticker, spot)
 
     gex_by_expiration = fetch_uw_greek_exposure_by_expiration(ticker, api_key=api_key, date=date)

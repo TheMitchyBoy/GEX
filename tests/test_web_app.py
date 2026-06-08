@@ -211,6 +211,35 @@ def test_persistent_banner_when_uw_not_configured(monkeypatch):
     assert b"UW_API_KEY" in response.data
 
 
+def test_spot_stream_does_not_poll_uw_rest(monkeypatch):
+    """SSE spot updates must use websocket cache only (no REST every 0.5s)."""
+    from unittest.mock import MagicMock, patch
+
+    import web_app
+    from gex_core.uw_price_stream import UWPriceStream
+
+    stream = UWPriceStream()
+    stream.ingest_point(
+        "SPX",
+        {"ticker": "SPX", "ts": "2026-06-05T20:00:00+00:00", "close": 5012.5},
+    )
+    monkeypatch.setattr("gex_core.uw_price_stream.get_uw_price_stream", lambda: stream)
+    monkeypatch.setenv("GEX_SPOT_STREAM_POLL_SECONDS", "0.25")
+
+    client = web_app.APP.test_client()
+    with patch("gex_core.market_features.fetch_spx_price") as mock_rest:
+        response = client.get("/api/spot-stream?ticker=SPX")
+        assert response.status_code == 200
+        # Read one event from the stream without blocking forever.
+        chunks = []
+        for _ in range(3):
+            chunks.append(next(response.response))
+            if b"5012.5" in chunks[-1]:
+                break
+        mock_rest.assert_not_called()
+        assert any(b"5012.5" in chunk for chunk in chunks)
+
+
 def test_refresh_uw_data_gamma_flip_uses_greek_exposure(monkeypatch):
     """Live UW cache must not derive gamma flip from spot-exposures OI."""
     from unittest.mock import patch
