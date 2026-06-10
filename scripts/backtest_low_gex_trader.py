@@ -12,6 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import os
 
+from gex_core.env_bootstrap import load_env_files
+
+load_env_files()
+os.environ.setdefault("GEX_WALL_SIGNAL_FILTERS", "0")
+
 from gex_core.trading.low_gex_backtest import backtest_low_gex_trader
 
 
@@ -44,7 +49,17 @@ def main() -> None:
         action="store_true",
         help="Close prior position every bar and open fresh toward current lowest GEX",
     )
+    parser.add_argument(
+        "--signal-filters",
+        action="store_true",
+        help="Enable wall signal quality filters (default off)",
+    )
     args = parser.parse_args()
+
+    if args.signal_filters:
+        os.environ["GEX_WALL_SIGNAL_FILTERS"] = "1"
+    else:
+        os.environ["GEX_WALL_SIGNAL_FILTERS"] = "0"
 
     if args.max_hold_bars is not None:
         os.environ["GEX_WALL_MAX_HOLD_BARS"] = str(args.max_hold_bars)

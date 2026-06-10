@@ -242,15 +242,15 @@ def wall_min_gamma_bn() -> float:
 
 def wall_block_short_gamma() -> bool:
     """Skip entries when snapshot regime is short gamma."""
-    return _flag("GEX_WALL_BLOCK_SHORT_GAMMA", "1")
+    return _flag("GEX_WALL_BLOCK_SHORT_GAMMA", "0")
 
 
 def wall_min_drift_pts() -> float:
     """Require wall strike to move at least this many points vs prior bar (0=off)."""
     try:
-        return max(0.0, float(os.environ.get("GEX_WALL_MIN_DRIFT_PTS", "10")))
+        return max(0.0, float(os.environ.get("GEX_WALL_MIN_DRIFT_PTS", "0")))
     except (TypeError, ValueError):
-        return 10.0
+        return 0.0
 
 
 def wall_max_hold_bars() -> int:
