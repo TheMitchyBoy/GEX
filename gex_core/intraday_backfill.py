@@ -123,6 +123,27 @@ def _build_summary(
         vol_regime=vol_regime if vol_regime is not None else fetch_vol_regime(),
         cross_asset=cross_asset if cross_asset is not None else fetch_cross_asset_returns(),
     )
+    from gex_core.features import resolve_gamma_flip
+
+    if greek_df is not None and not greek_df.empty and "strike" in greek_df.columns:
+        strike = pd.Series(
+            pd.to_numeric(greek_df["net_gex"], errors="coerce").fillna(0.0).values,
+            index=pd.to_numeric(greek_df["strike"], errors="coerce").values,
+            dtype=float,
+        ).dropna()
+        strike = strike[~strike.index.isna()].sort_index()
+        cumulative = strike.cumsum()
+    else:
+        strike = pd.Series(dtype=float)
+        cumulative = pd.Series(dtype=float)
+    flip = resolve_gamma_flip(
+        spot=spot,
+        gex_by_strike=strike if not strike.empty else None,
+        cumulative_gex=cumulative if not cumulative.empty else None,
+        greek_exposure_df=greek_df,
+    )
+    if flip is not None:
+        summary["gamma_flip"] = float(flip)
     return summary
 
 

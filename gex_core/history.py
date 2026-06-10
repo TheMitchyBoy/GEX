@@ -30,7 +30,7 @@ from gex_core.exports import (
     parse_timestamp,
     paths_for_export_timestamp,
 )
-from gex_core.features import enrich_snapshot_metrics, gamma_flip_from_profile, term_structure_breakdown
+from gex_core.features import enrich_snapshot_metrics, resolve_gamma_flip, safe_float, term_structure_breakdown
 from gex_core.tickers import SUPPORTED_TICKERS
 
 _HISTORY_CACHE: dict[tuple, list[dict]] = {}
@@ -259,7 +259,12 @@ def load_snapshot_metrics(ts: str, files: dict[str, Path]) -> dict:
         extended_features = summary.get("extended_features") or {}
         _merge_summary_fields(summary_fields, summary)
 
-    gamma_flip = gamma_flip_from_profile(strike, spot)
+    gamma_flip = resolve_gamma_flip(
+        spot=safe_float(spot, 0.0) or None,
+        gex_by_strike=strike,
+        cumulative_gex=cumulative,
+        greek_exposure_df=greek_exposure_df if not greek_exposure_df.empty else None,
+    )
 
     metrics = {
         "ts": ts,

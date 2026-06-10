@@ -13,7 +13,7 @@ import pandas as pd
 
 from gex_core.features import safe_float
 from gex_core.env_bootstrap import parse_env_minutes, uw_api_configured, uw_api_key
-from gex_core.features import enrich_snapshot_metrics, gamma_flip_from_profile
+from gex_core.features import enrich_snapshot_metrics, resolve_gamma_flip
 from gex_core.history import load_snapshot_at_ts
 from gex_core.market_time import (
     market_now_export_ts,
@@ -97,7 +97,13 @@ def _snapshot_from_strike(
         "neg_gex": float(strike[strike < 0].sum()),
         "call_wall": call_wall,
         "put_wall": put_wall,
-        "gamma_flip": gamma_flip_from_profile(flip_series, spot),
+        "gamma_flip": resolve_gamma_flip(
+            spot=spot,
+            gex_by_strike=strike,
+            cumulative_gex=cumulative,
+            greek_exposure_df=greek_exposure_df,
+            greek_strike=flip_series if greek_strike is not None else None,
+        ),
         "regime": "LONG gamma" if total_gex_bn >= 0 else "SHORT gamma",
         "data_source": data_source,
         "spot": float(spot),

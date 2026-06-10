@@ -26,6 +26,7 @@ from gex_core.features import (
     enrich_snapshot_metrics,
     estimate_gamma_flip,
     extract_surface_vector,
+    resolve_gamma_flip,
 )
 from gex_core.pipeline import GexAggregates
 from gex_core.predict import (
@@ -70,6 +71,7 @@ __all__ = [
     "enrich_snapshot_metrics",
     "estimate_gamma_flip",
     "extract_surface_vector",
+    "resolve_gamma_flip",
     "find_exports_for_ticker",
     "fetch_uw_gex",
     "fetch_uw_greek_exposure",

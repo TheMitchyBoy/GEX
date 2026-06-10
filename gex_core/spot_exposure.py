@@ -69,13 +69,20 @@ def spot_exposure_mm_positions(spot_df: pd.DataFrame | None) -> dict[str, float]
     return out
 
 
-def spot_exposure_gamma_flip(strike_series: pd.Series) -> float | None:
-    """Gamma flip from a spot-exposure strike profile."""
+def spot_exposure_gamma_flip(
+    strike_series: pd.Series,
+    spot: float | None = None,
+) -> float | None:
+    """Gamma flip from a spot-exposure strike profile (ATM-local window)."""
     if strike_series is None or strike_series.empty:
         return None
-    from gex_core.features import estimate_gamma_flip
+    from gex_core.features import resolve_gamma_flip
 
-    return estimate_gamma_flip(strike_series.cumsum())
+    return resolve_gamma_flip(
+        spot=spot,
+        gex_by_strike=strike_series,
+        cumulative_gex=strike_series.cumsum(),
+    )
 
 
 def spot_exposure_walls(strike_series: pd.Series) -> tuple[float | None, float | None]:

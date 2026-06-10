@@ -467,10 +467,16 @@ def main():
             try:
                 from gex_core.uw_loader import fetch_uw_gex
                 from gex_core.ai_analyst import analyze_dealer_gamma
-                from gex_core.features import estimate_gamma_flip
+                from gex_core.features import resolve_gamma_flip
 
                 uw_spot, uw_agg = fetch_uw_gex(ticker)
-                uw_gamma_flip = estimate_gamma_flip(uw_agg.cumulative_gex)
+                greek_df = uw_agg.gex_by_strike.attrs.get("greek_exposure_df")
+                uw_gamma_flip = resolve_gamma_flip(
+                    spot=uw_spot,
+                    gex_by_strike=uw_agg.gex_by_strike,
+                    cumulative_gex=uw_agg.cumulative_gex,
+                    greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+                )
                 uw_analysis = analyze_dealer_gamma(
                     ticker=ticker, spot=uw_spot,
                     gex_by_strike=uw_agg.gex_by_strike,

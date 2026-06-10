@@ -25,7 +25,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
-from gex_core.features import gamma_flip_from_uw_greek, safe_float
+from gex_core.features import resolve_gamma_flip, safe_float
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
@@ -163,11 +163,11 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
 
         spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
         greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
-        gamma_flip = gamma_flip_from_uw_greek(
-            greek_df if isinstance(greek_df, pd.DataFrame) else None,
-            spot,
+        gamma_flip = resolve_gamma_flip(
+            spot=spot,
             gex_by_strike=agg.gex_by_strike,
             cumulative_gex=agg.cumulative_gex,
+            greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         )
         spot_gamma_bn = fetch_spot_gamma_aggregate_bn(ticker, api_key=uw_api_key())
         analysis = analyze_dealer_gamma(

@@ -18,7 +18,7 @@ import pandas as pd
 
 from gex_core.ai_analyst import _clean_strike_series
 from gex_core.extended_features import merge_extended_features
-from gex_core.features import estimate_gamma_flip, safe_float
+from gex_core.features import resolve_gamma_flip, safe_float
 from gex_core.market_features import attach_market_features, fetch_cross_asset_returns, fetch_vol_regime
 from gex_core.pipeline import GexAggregates
 from gex_core.spot_exposure import spot_exposure_mm_positions, spot_exposure_net_series
@@ -121,7 +121,12 @@ def _series_to_records(series: pd.Series, *, value_name: str = "value") -> list[
     return out
 
 
-def _summarize_gex_profile(gex_by_strike: pd.Series, spot: float) -> dict[str, Any]:
+def _summarize_gex_profile(
+    gex_by_strike: pd.Series,
+    spot: float,
+    *,
+    greek_exposure_df: pd.DataFrame | None = None,
+) -> dict[str, Any]:
     gex_by_strike = _clean_strike_series(gex_by_strike)
     if gex_by_strike.empty:
         return {}
@@ -134,7 +139,12 @@ def _summarize_gex_profile(gex_by_strike: pd.Series, spot: float) -> dict[str, A
     put_wall = float(gex_by_strike.idxmin())
     dominant = float(abs_vals.idxmax())
     cumulative = gex_by_strike.cumsum()
-    flip = estimate_gamma_flip(cumulative)
+    flip = resolve_gamma_flip(
+        spot=spot,
+        gex_by_strike=gex_by_strike,
+        cumulative_gex=cumulative,
+        greek_exposure_df=greek_exposure_df,
+    )
     return {
         "total_gex_bn": _round(total, 3),
         "positive_gex_bn": _round(pos, 3),
@@ -238,7 +248,11 @@ def build_uw_context_bundle(
     elif isinstance(spot_df, pd.DataFrame) and spot_df.attrs.get("market_date"):
         market_date = spot_df.attrs["market_date"]
 
-    gex_summary = _summarize_gex_profile(agg.gex_by_strike, spot)
+    gex_summary = _summarize_gex_profile(
+        agg.gex_by_strike,
+        spot,
+        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+    )
     if gamma_flip is None:
         gamma_flip = gex_summary.get("gamma_flip")
 

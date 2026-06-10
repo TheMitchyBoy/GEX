@@ -163,8 +163,22 @@ def _run_uw(
     for strike, gex in negative.items():
         print(f"  {color_text('SHORT', ANSI_RED):<12} {strike:<10.0f} {gex:.3f}")
 
-    gamma_flip = print_gamma_flip_estimate(cumulative_gex)
-    gamma_flip_strike = gamma_flip.get("flip_strike") if isinstance(gamma_flip, dict) else None
+    greek_df = gex_by_strike.attrs.get("greek_exposure_df") if hasattr(gex_by_strike, "attrs") else None
+    from gex_core.features import estimate_gamma_flip_detailed, resolve_gamma_flip
+
+    gamma_flip_detail = estimate_gamma_flip_detailed(
+        spot=spot_price,
+        gex_by_strike=gex_by_strike,
+        cumulative_gex=cumulative_gex,
+        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+    )
+    gamma_flip_strike = resolve_gamma_flip(
+        spot=spot_price,
+        gex_by_strike=gex_by_strike,
+        cumulative_gex=cumulative_gex,
+        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+    )
+    print_gamma_flip_estimate(gamma_flip_detail)
 
     try:
         from gex_core.ai_analyst import analyze_dealer_gamma
@@ -250,7 +264,6 @@ def _run_uw(
         from gex_core.extended_features import merge_extended_features
         from gex_core.market_features import fetch_cross_asset_returns, fetch_vol_regime
 
-        greek_df = gex_by_strike.attrs.get("greek_exposure_df") if hasattr(gex_by_strike, "attrs") else None
         spot_df = None
         try:
             spot_df = fetch_uw_spot_exposures(ticker, api_key=uw_api_key, date=market_date)
@@ -290,18 +303,24 @@ def _run_uw(
             }
             if not gex_by_strike.empty
             else None,
-            "gamma_flip": gamma_flip,
+            "gamma_flip": gamma_flip_strike,
+            "gamma_flip_detail": gamma_flip_detail,
+            "uw_endpoint": "greek-exposure/strike",
         }
-        export_analytics_csv(
+        from gex_core.snapshot_export import write_snapshot_export
+
+        write_snapshot_export(
             ticker=ticker,
             gex_by_strike=gex_by_strike,
             cumulative_gex=cumulative_gex,
             gex_by_expiration=gex_by_expiration,
             surface_data=surface_data,
+            greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
             summary=summary,
             export_dir=export_dir,
             timestamp=f"{market_date}_000000" if market_date else None,
         )
+        print(f"Saved CSV exports to: {export_dir}")
 
 
 def run(
@@ -344,46 +363,8 @@ def run(
     )
 
 
-def estimate_gamma_flip(cumulative):
-    """Estimate gamma flip strike and confidence from cumulative GEX."""
-    if cumulative.empty:
-        return {"flip_strike": None, "confidence": "none", "message": "no strike data"}
-
-    signs = np.sign(cumulative.values)
-    change_points = np.where(np.diff(signs) != 0)[0]
-    if len(change_points) == 0:
-        return {"flip_strike": None, "confidence": "none", "message": "no zero-crossing"}
-
-    idx = int(change_points[0])
-    x0 = float(cumulative.index[idx])
-    x1 = float(cumulative.index[idx + 1])
-    y0 = float(cumulative.iloc[idx])
-    y1 = float(cumulative.iloc[idx + 1])
-
-    if y1 == y0:
-        flip_estimate = float(x0)
-    else:
-        flip_estimate = float(x0 - y0 * (x1 - x0) / (y1 - y0))
-
-    local_slope = abs(y1 - y0) / max(abs(x1 - x0), 1e-9)
-    if local_slope >= 0.10:
-        confidence = "high"
-    elif local_slope >= 0.03:
-        confidence = "medium"
-    else:
-        confidence = "low"
-
-    return {
-        "flip_strike": flip_estimate,
-        "confidence": confidence,
-        "message": "ok",
-        "local_slope": float(local_slope),
-    }
-
-
-def print_gamma_flip_estimate(cumulative):
-    """Print the strike where cumulative GEX crosses zero."""
-    result = estimate_gamma_flip(cumulative)
+def print_gamma_flip_estimate(result):
+    """Print the strike where dealer gamma flips near ATM."""
     print_section_header("Gamma Flip")
     if result["flip_strike"] is None:
         print(color_text(f"Gamma flip estimate unavailable: {result['message']}.", ANSI_DIM))

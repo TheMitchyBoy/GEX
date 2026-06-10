@@ -32,6 +32,116 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def parse_gamma_flip_value(value: Any) -> float | None:
+    """Normalize gamma flip from summary JSON (float or legacy detail dict)."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        flip = safe_float(value.get("flip_strike"), 0.0)
+        return flip if flip > 0 else None
+    try:
+        flip = float(value)
+    except (TypeError, ValueError):
+        return None
+    return flip if flip > 0 else None
+
+
+def resolve_gamma_flip(
+    *,
+    spot: float | None = None,
+    gex_by_strike: pd.Series | None = None,
+    cumulative_gex: pd.Series | None = None,
+    greek_exposure_df: pd.DataFrame | None = None,
+    greek_strike: pd.Series | None = None,
+) -> float | None:
+    """Canonical gamma flip: UW magnet profile near ATM, then profile fallbacks."""
+    if greek_exposure_df is not None and not greek_exposure_df.empty:
+        flip = gamma_flip_from_uw_greek(
+            greek_exposure_df,
+            spot,
+            gex_by_strike=gex_by_strike,
+            cumulative_gex=cumulative_gex,
+        )
+        if flip is not None:
+            return flip
+    if greek_strike is not None and not greek_strike.empty:
+        flip = gamma_flip_from_profile(greek_strike, spot)
+        if flip is not None:
+            return flip
+    if gex_by_strike is not None and not gex_by_strike.empty:
+        flip = gamma_flip_from_profile(gex_by_strike, spot)
+        if flip is not None:
+            return flip
+    if cumulative_gex is not None and not cumulative_gex.empty:
+        return estimate_gamma_flip(cumulative_gex)
+    return None
+
+
+def estimate_gamma_flip_detailed(
+    *,
+    spot: float | None = None,
+    gex_by_strike: pd.Series | None = None,
+    cumulative_gex: pd.Series | None = None,
+    greek_exposure_df: pd.DataFrame | None = None,
+    greek_strike: pd.Series | None = None,
+) -> dict[str, Any]:
+    """Gamma flip strike with confidence from the ATM-local profile."""
+    flip = resolve_gamma_flip(
+        spot=spot,
+        gex_by_strike=gex_by_strike,
+        cumulative_gex=cumulative_gex,
+        greek_exposure_df=greek_exposure_df,
+        greek_strike=greek_strike,
+    )
+    if flip is None:
+        return {"flip_strike": None, "confidence": "none", "message": "no zero-crossing"}
+
+    profile = pd.Series(dtype=float)
+    if greek_exposure_df is not None and not greek_exposure_df.empty:
+        profile = magnet_gamma_from_call_put(greek_exposure_df, spot)
+    if profile.empty and greek_strike is not None and not greek_strike.empty:
+        profile = pd.Series(greek_strike, dtype=float).sort_index()
+    if profile.empty and gex_by_strike is not None and not gex_by_strike.empty:
+        profile = pd.Series(gex_by_strike, dtype=float).sort_index()
+    if profile.empty and cumulative_gex is not None and not cumulative_gex.empty:
+        profile = cumulative_gex.diff().dropna()
+        if profile.empty:
+            profile = cumulative_gex
+
+    local = profile
+    spot_val = safe_float(spot, 0.0)
+    if spot_val > 0 and len(profile) >= 2:
+        windowed = select_atm_strike_series(profile, spot_val, window_pct=0.06, min_strikes=5)
+        if len(windowed) >= 2:
+            local = windowed
+
+    cumulative = local.cumsum()
+    signs = np.sign(cumulative.astype(float).values)
+    change_points = np.where(np.diff(signs) != 0)[0]
+    local_slope = 0.0
+    if len(change_points):
+        idx = int(change_points[0])
+        x0 = float(cumulative.index[idx])
+        x1 = float(cumulative.index[idx + 1])
+        y0 = float(cumulative.iloc[idx])
+        y1 = float(cumulative.iloc[idx + 1])
+        local_slope = abs(y1 - y0) / max(abs(x1 - x0), 1e-9)
+
+    if local_slope >= 0.10:
+        confidence = "high"
+    elif local_slope >= 0.03:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    return {
+        "flip_strike": float(flip),
+        "confidence": confidence,
+        "message": "ok",
+        "local_slope": float(local_slope),
+    }
+
+
 def estimate_gamma_flip(cumulative: pd.Series) -> float | None:
     if cumulative.empty:
         return None
@@ -463,16 +573,24 @@ def compute_features_from_exports(
     else:
         features.update(term_structure_breakdown(pd.Series(dtype=float)))
 
-    if "cumulative_gex" in info:
-        cumulative = load_cumulative_series(info["cumulative_gex"])
-        flip = estimate_gamma_flip(cumulative)
-        features["gamma_flip"] = safe_float(flip, 0.0)
-    else:
-        features["gamma_flip"] = 0.0
-
     if spot is None and not strike.empty:
         spot = float(np.median(strike.index.astype(float)))
     features["spot"] = safe_float(spot, 0.0)
+
+    greek_df = None
+    if "greek_exposure" in info:
+        from gex_core.exports import load_greek_exposure_df
+
+        greek_df = load_greek_exposure_df(info["greek_exposure"])
+    if "cumulative_gex" in info:
+        cumulative = load_cumulative_series(info["cumulative_gex"])
+    flip = resolve_gamma_flip(
+        spot=features["spot"] if features["spot"] > 0 else None,
+        gex_by_strike=strike if len(strike) else None,
+        cumulative_gex=cumulative if len(cumulative) else None,
+        greek_exposure_df=greek_df if greek_df is not None and not greek_df.empty else None,
+    )
+    features["gamma_flip"] = safe_float(flip, 0.0)
 
     if not cumulative.empty and features["spot"] > 0:
         features["flip_distance_pct"] = (
@@ -571,17 +689,19 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     call_wall = safe_float(metrics.get("call_wall"), 0.0)
     put_wall = safe_float(metrics.get("put_wall"), 0.0)
     greek_strike = metrics.get("greek_strike")
-    if isinstance(greek_strike, pd.Series) and not greek_strike.empty:
-        strike_for_flip = greek_strike.sort_index()
-    elif len(strike):
-        strike_for_flip = pd.Series(strike, dtype=float).sort_index()
-    else:
-        strike_for_flip = pd.Series(dtype=float)
-    gamma_flip = (
-        gamma_flip_from_profile(strike_for_flip, spot)
-        if spot > 0 and len(strike_for_flip) >= 2
-        else metrics.get("gamma_flip")
+    greek_df = metrics.get("greek_exposure_df")
+    if not isinstance(greek_df, pd.DataFrame):
+        greek_df = None
+    strike_for_flip = pd.Series(strike, dtype=float).sort_index() if len(strike) else pd.Series(dtype=float)
+    gamma_flip = resolve_gamma_flip(
+        spot=spot if spot > 0 else None,
+        gex_by_strike=strike_for_flip if len(strike_for_flip) else None,
+        cumulative_gex=pd.Series(cumulative, dtype=float).sort_index() if len(cumulative) else None,
+        greek_exposure_df=greek_df,
+        greek_strike=greek_strike if isinstance(greek_strike, pd.Series) else None,
     )
+    if gamma_flip is None:
+        gamma_flip = parse_gamma_flip_value(metrics.get("gamma_flip"))
 
     metrics["wall_spread"] = call_wall - put_wall
     metrics["gex_concentration"] = top_strike_concentration(strike) if len(strike) else 0.0

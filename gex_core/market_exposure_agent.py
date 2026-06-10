@@ -17,7 +17,7 @@ from typing import Any
 import pandas as pd
 
 from gex_core.ai_analyst import analyze_dealer_gamma
-from gex_core.features import estimate_gamma_flip
+from gex_core.features import resolve_gamma_flip
 from gex_core.uw_context_bundle import build_uw_context_bundle, bundle_to_prompt_json
 from gex_core.uw_ai_predictor import predict_from_uw_data
 
@@ -175,8 +175,18 @@ def analyze_market_exposure(
     """
     if cumulative_gex is None or cumulative_gex.empty:
         cumulative_gex = gex_by_strike.cumsum() if not gex_by_strike.empty else pd.Series(dtype=float)
-    if gamma_flip is None and not cumulative_gex.empty:
-        gamma_flip = estimate_gamma_flip(cumulative_gex)
+    greek_df = None
+    if agg is not None and hasattr(agg.gex_by_strike, "attrs"):
+        raw = agg.gex_by_strike.attrs.get("greek_exposure_df")
+        if isinstance(raw, pd.DataFrame) and not raw.empty:
+            greek_df = raw
+    if gamma_flip is None:
+        gamma_flip = resolve_gamma_flip(
+            spot=spot,
+            gex_by_strike=gex_by_strike,
+            cumulative_gex=cumulative_gex,
+            greek_exposure_df=greek_df,
+        )
 
     base = analyze_dealer_gamma(
         ticker=ticker,
@@ -273,8 +283,18 @@ def predict_market_exposure(
     """
     if cumulative_gex is None or cumulative_gex.empty:
         cumulative_gex = gex_by_strike.cumsum() if not gex_by_strike.empty else pd.Series(dtype=float)
-    if gamma_flip is None and not cumulative_gex.empty:
-        gamma_flip = estimate_gamma_flip(cumulative_gex)
+    greek_df = None
+    if hasattr(agg.gex_by_strike, "attrs"):
+        raw = agg.gex_by_strike.attrs.get("greek_exposure_df")
+        if isinstance(raw, pd.DataFrame) and not raw.empty:
+            greek_df = raw
+    if gamma_flip is None:
+        gamma_flip = resolve_gamma_flip(
+            spot=spot,
+            gex_by_strike=gex_by_strike,
+            cumulative_gex=cumulative_gex,
+            greek_exposure_df=greek_df,
+        )
 
     return predict_from_uw_data(
         ticker=ticker,

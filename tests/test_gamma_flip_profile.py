@@ -3,7 +3,7 @@
 import pandas as pd
 
 from gex_core.exports import load_strike_series
-from gex_core.features import estimate_gamma_flip, gamma_flip_from_profile
+from gex_core.features import estimate_gamma_flip, gamma_flip_from_profile, resolve_gamma_flip
 from pathlib import Path
 
 
@@ -16,6 +16,16 @@ def test_gamma_flip_from_profile_uses_atm_window_not_full_chain():
     assert atm_flip is not None
     assert abs(atm_flip - spot) < abs(full_flip - spot)
     assert atm_flip < full_flip
+
+
+def test_resolve_gamma_flip_prefers_atm_over_full_chain():
+    strike = load_strike_series(Path("data/exports/SPX_gex_by_strike_2026-06-05_021908.csv"))
+    spot = 7580.0
+    full_flip = estimate_gamma_flip(strike.cumsum())
+    resolved = resolve_gamma_flip(spot=spot, gex_by_strike=strike, cumulative_gex=strike.cumsum())
+    assert resolved is not None
+    assert full_flip is not None
+    assert abs(resolved - spot) < abs(full_flip - spot)
 
 
 def test_gamma_flip_from_profile_small_series():

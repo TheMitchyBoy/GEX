@@ -43,6 +43,7 @@ def test_implementation_rules_match_loader():
     assert rules["client_id"] == _CLIENT_ID
     assert rules["chart_gamma_source"] == "greek-exposure/strike"
     assert rules["gamma_flip_source"] == "greek-exposure/strike"
+    assert rules["gamma_flip_method"] == "magnet_profile_atm_window"
     assert set(rules["retryable_http_status"]) == set(_RETRYABLE_STATUS)
 
 

@@ -501,15 +501,26 @@ def analyze_dealer_gamma(
     -------
     GammaAnalysis
     """
-    from gex_core.features import estimate_gamma_flip as _estimate_flip
+    from gex_core.features import resolve_gamma_flip
 
     gex_by_strike = _clean_strike_series(gex_by_strike)
     if not cumulative_gex.empty:
         cumulative_gex = _clean_strike_series(cumulative_gex)
 
+    greek_df = None
+    if hasattr(gex_by_strike, "attrs"):
+        raw = gex_by_strike.attrs.get("greek_exposure_df")
+        if isinstance(raw, pd.DataFrame) and not raw.empty:
+            greek_df = raw
+
     # ── Key levels ──────────────────────────────────────────────────────────
-    if gamma_flip is None and not cumulative_gex.empty:
-        gamma_flip = _estimate_flip(cumulative_gex)
+    if gamma_flip is None:
+        gamma_flip = resolve_gamma_flip(
+            spot=spot,
+            gex_by_strike=gex_by_strike,
+            cumulative_gex=cumulative_gex,
+            greek_exposure_df=greek_df,
+        )
 
     call_wall: float | None = None
     call_wall_gex: float | None = None
