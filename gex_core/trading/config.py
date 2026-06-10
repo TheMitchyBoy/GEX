@@ -217,6 +217,16 @@ def wall_take_profit_pct() -> float:
         return 0.20
 
 
+def wall_reenter_on_shift() -> bool:
+    """Close and reopen when the target GEX wall strike moves."""
+    return _flag("GEX_WALL_REENTER_ON_SHIFT", "1")
+
+
+def wall_reentry_after_stop() -> bool:
+    """Allow a fresh entry at the same strike after a stop-loss (no strike cooldown)."""
+    return _flag("GEX_WALL_REENTRY_AFTER_STOP", "1")
+
+
 def low_gex_reenter_each_bar() -> bool:
     """Close open low-GEX positions every bar and open fresh toward the current wall."""
     return _flag("GEX_LOW_GEX_REENTER_EACH_BAR", "0")

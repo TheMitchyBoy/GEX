@@ -30,6 +30,8 @@ from gex_core.trading.config import (
     max_entries_per_cycle,
     max_open_positions,
     trader_session_only,
+    wall_reenter_on_shift,
+    wall_reentry_after_stop,
     wall_stop_loss_pct,
     wall_take_profit_pct,
 )
@@ -37,6 +39,41 @@ from gex_core.trading.exits import build_simple_exit_profile
 from gex_core.trading.low_gex_signals import WallTarget, compute_wall_gex_signal
 from gex_core.trading.paper_broker import estimate_entry_premium
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
+
+
+def _flatten_on_wall_shift(
+    state: BacktestState,
+    *,
+    idx: int,
+    ts: str,
+    signal_spot: float,
+    row: dict,
+    wall_strike: float,
+) -> None:
+    """Close positions tied to a prior wall when the GEX wall strike moves."""
+    mark_spot = _mark_spot(signal_spot)
+    if mark_spot is None or mark_spot <= 0 or not state.open_positions:
+        return
+    bar_minutes = _snapshot_bar_minutes(row)
+    for pos in list(state.open_positions):
+        prior_wall = float(pos.magnet_strike or pos.signal_strike or 0.0)
+        if prior_wall <= 0 or abs(prior_wall - wall_strike) < 0.5:
+            continue
+        pnl_pct = _position_pnl(pos, mark_spot)
+        bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
+        _apply_backtest_exit(
+            state,
+            pos,
+            idx=idx,
+            exit_ts=ts,
+            exit_spot=mark_spot,
+            pnl_pct=pnl_pct,
+            exit_reason="wall_shift",
+            bars_held=bars_held,
+        )
+    state.open_positions = [p for p in state.open_positions if p.qty > 0]
+    if state.account:
+        state.account.record_equity(ts, state.open_positions, mark_spot)
 
 
 def _flatten_for_reentry(
@@ -79,6 +116,8 @@ def _maybe_enter_wall_gex(
     max_open: int,
     target: WallTarget = "min",
     reenter_each_bar: bool = False,
+    reenter_on_shift: bool | None = None,
+    reentry_after_stop: bool | None = None,
     stop_loss: float | None = None,
     take_profit: float | None = None,
 ) -> None:
@@ -111,6 +150,17 @@ def _maybe_enter_wall_gex(
         state.skipped_no_execution_spot += 1
         return
     exec_strike, exec_spot, _ = trade_ctx
+
+    shift = wall_reenter_on_shift() if reenter_on_shift is None else reenter_on_shift
+    if shift and not reenter_each_bar:
+        _flatten_on_wall_shift(
+            state,
+            idx=idx,
+            ts=ts,
+            signal_spot=spot,
+            row=row,
+            wall_strike=wall_strike,
+        )
 
     if not reenter_each_bar and _has_open_duplicate(
         state.open_positions, strike=exec_strike, option_type=option_type
@@ -180,6 +230,8 @@ def backtest_wall_gex_trader(
     starting_capital: float | None = None,
     history: list[dict] | None = None,
     reenter_each_bar: bool | None = None,
+    reenter_on_shift: bool | None = None,
+    reentry_after_stop: bool | None = None,
 ) -> dict[str, Any]:
     """Simulate min/max GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
@@ -187,6 +239,8 @@ def backtest_wall_gex_trader(
     take_profit = take_profit if take_profit is not None else wall_take_profit_pct()
     max_open = max_open if max_open is not None else max_open_positions()
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
+    shift = wall_reenter_on_shift() if reenter_on_shift is None else reenter_on_shift
+    after_stop = wall_reentry_after_stop() if reentry_after_stop is None else reentry_after_stop
     if rotate:
         max_open = max(max_open, max_entries_per_cycle())
 
@@ -240,6 +294,7 @@ def backtest_wall_gex_trader(
                 row=row,
                 prev_ts=str(history[idx - 1]["ts"]),
                 prev_signal_spot=safe_float(history[idx - 1].get("spot"), 0.0) or None,
+                apply_stop_cooldown=not after_stop,
             )
         else:
             _flatten_for_reentry(state, idx=idx, ts=ts, signal_spot=spot, row=row)
@@ -251,6 +306,8 @@ def backtest_wall_gex_trader(
             max_open=max_open,
             target=target,
             reenter_each_bar=rotate,
+            reenter_on_shift=shift,
+            reentry_after_stop=after_stop,
             stop_loss=stop_loss,
             take_profit=take_profit,
         )
@@ -293,6 +350,8 @@ def backtest_wall_gex_trader(
     result["strategy"] = "low_gex" if target == "min" else "high_gex"
     result["wall_target"] = target
     result["reenter_each_bar"] = rotate
+    result["reenter_on_shift"] = shift
+    result["reentry_after_stop"] = after_stop
     return result
 
 

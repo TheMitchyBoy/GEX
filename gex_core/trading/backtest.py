@@ -404,6 +404,7 @@ def _check_exits(
     row: dict,
     prev_ts: str | None = None,
     prev_signal_spot: float | None = None,
+    apply_stop_cooldown: bool = True,
 ) -> None:
     mark_spot = _mark_spot(signal_spot)
     if mark_spot is None or mark_spot <= 0:
@@ -475,7 +476,7 @@ def _check_exits(
                 bars_held=bars_held,
                 sell_qty=sell_qty,
             )
-            if reason == "stop_loss":
+            if reason == "stop_loss" and apply_stop_cooldown:
                 key = (pos.signal_strike or pos.strike, pos.option_type.lower())
                 cooldown_bars = stop_cooldown_bars()
                 cooldown_minutes = cooldown_bars * bar_minutes
