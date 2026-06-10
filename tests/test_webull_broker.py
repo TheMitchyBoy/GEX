@@ -1,3 +1,4 @@
+from gex_core.trading.config import webull_data_endpoint, webull_trade_endpoint
 from gex_core.trading.execution import (
     build_webull_option_symbol,
     map_execution_strike,
@@ -113,3 +114,17 @@ def test_get_account_equity_uses_webull_live_value(monkeypatch):
 
     assert journal.get_account_equity() == 2500.0
     assert journal.get_account_equity_source() == "webull_live"
+
+
+def test_webull_trade_endpoint_defaults_to_production(monkeypatch):
+    monkeypatch.delenv("GEX_WEBULL_ENDPOINT", raising=False)
+    monkeypatch.delenv("GEX_WEBULL_USE_UAT", raising=False)
+    assert webull_trade_endpoint() == "api.webull.com"
+    assert webull_data_endpoint() == "broker-api.webull.com"
+
+
+def test_webull_trade_endpoint_uat(monkeypatch):
+    monkeypatch.setenv("GEX_WEBULL_USE_UAT", "1")
+    monkeypatch.delenv("GEX_WEBULL_ENDPOINT", raising=False)
+    assert webull_trade_endpoint() == "us-openapi-alb.uat.webullbroker.com"
+    assert webull_data_endpoint() == "us-broker-api.uat.webullbroker.com"

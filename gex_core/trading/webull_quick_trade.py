@@ -627,7 +627,13 @@ def dashboard_state(*, signal_ticker_arg: str | None = None) -> dict[str, Any]:
     und = execution_ticker().upper()
     live = live_trading_allowed()
     paper = paper_trading_only()
-    equity = fetch_total_account_value() if webull_configured() else None
+    from gex_core.trading.config import use_webull_account_equity
+
+    equity = (
+        fetch_total_account_value()
+        if live and use_webull_account_equity() and webull_configured()
+        else None
+    )
     exec_spot = resolve_execution_spot()
     signal_spot = None
     try:
