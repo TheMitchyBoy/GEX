@@ -98,6 +98,7 @@
     <script>
       const TICKER = {{ ticker|tojson }};
       const LIVE_MODE = {{ status.live_mode|tojson }};
+      const API = {{ api_urls|tojson }};
 
       function fmtUsd(v) {
         if (v == null || Number.isNaN(v)) return '—';
@@ -143,11 +144,27 @@
         document.getElementById('info-open').textContent = (st.open_positions || []).length;
       }
 
+      async function readJson(res) {
+        const text = await res.text();
+        const ctype = (res.headers.get('content-type') || '').toLowerCase();
+        if (!ctype.includes('json')) {
+          const hint = res.status === 404
+            ? 'API not found — redeploy/restart the server'
+            : `Server returned HTML (HTTP ${res.status})`;
+          throw new Error(hint);
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error('Invalid JSON from server');
+        }
+      }
+
       async function refresh() {
         try {
-          const res = await fetch(`/api/wall-gex/status?ticker=${encodeURIComponent(TICKER)}`);
-          if (!res.ok) throw new Error('status ' + res.status);
-          const data = await res.json();
+          const res = await fetch(`${API.status}?ticker=${encodeURIComponent(TICKER)}`);
+          const data = await readJson(res);
+          if (!res.ok) throw new Error(data.error || 'status ' + res.status);
           renderStatus(data);
           renderSignal(data.last_cycle || {});
           if (data.spot) document.getElementById('info-spot').textContent = Number(data.spot).toFixed(2);
@@ -162,7 +179,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body || {}),
         });
-        const data = await res.json();
+        const data = await readJson(res);
         if (!res.ok) throw new Error(data.error || res.statusText);
         return data;
       }
@@ -172,7 +189,7 @@
           const body = { armed: true, ticker: TICKER };
           if (LIVE_MODE && !confirm('Arm LIVE trading?')) return;
           if (LIVE_MODE) body.live_confirm = true;
-          const data = await postJson('/api/wall-gex/arm', body);
+          const data = await postJson(API.arm, body);
           renderStatus(data.status || data);
           setMsg('Armed', 'ok');
         } catch (e) { setMsg(e.message, 'err'); }
@@ -180,7 +197,7 @@
 
       document.getElementById('btn-disarm').addEventListener('click', async () => {
         try {
-          const data = await postJson('/api/wall-gex/arm', { armed: false, ticker: TICKER });
+          const data = await postJson(API.arm, { armed: false, ticker: TICKER });
           renderStatus(data.status || data);
           setMsg('Disarmed', 'ok');
         } catch (e) { setMsg(e.message, 'err'); }
@@ -190,7 +207,7 @@
         const btn = document.getElementById('btn-run');
         btn.disabled = true;
         try {
-          const data = await postJson('/api/wall-gex/run', { ticker: TICKER });
+          const data = await postJson(API.run, { ticker: TICKER });
           renderStatus(data.status || data);
           renderSignal(data);
           const note = data.action ? data.action.replace(/_/g, ' ') : 'done';
