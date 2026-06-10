@@ -17,8 +17,11 @@ from gex_core.trading.config import (
     paper_trading_only,
     signal_ticker,
     wall_entry_time_filter,
+    wall_gex_auto_enabled,
+    wall_gex_cycle_seconds,
     wall_intraday_session,
     wall_max_hold_bars,
+    wall_reenter_on_shift,
     wall_signal_filters_enabled,
     wall_stop_loss_pct,
     wall_take_profit_pct,
@@ -29,7 +32,9 @@ from gex_core.trading.execution import execution_summary, map_execution_strike, 
 from gex_core.trading.journal import (
     close_trade,
     get_account_equity,
+    is_trader_armed,
     list_open_trades,
+    list_recent_trades,
     open_trade,
     patch_trade_meta,
     record_decision,
@@ -42,6 +47,71 @@ from gex_core.trading.webull_broker import limit_price_for_buy
 logger = logging.getLogger(__name__)
 
 _last_wall_strike: dict[str, float] = {}
+
+
+def is_wall_gex_trade(trade: dict[str, Any]) -> bool:
+    meta = trade.get("meta") or {}
+    return meta.get("strategy") == "low_gex" or trade.get("signal_type") == "min_gamma_strike"
+
+
+def wall_gex_open_trades(ticker: str) -> list[dict[str, Any]]:
+    return [t for t in list_open_trades(ticker) if is_wall_gex_trade(t)]
+
+
+def _wall_gex_performance(ticker: str) -> dict[str, Any]:
+    closed = [
+        t
+        for t in list_recent_trades(limit=200, ticker=ticker)
+        if is_wall_gex_trade(t) and t.get("status") == "closed"
+    ]
+    if not closed:
+        return {
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "avg_pnl_pct": 0.0,
+            "total_pnl_usd": 0.0,
+        }
+    wins = sum(1 for t in closed if float(t.get("pnl_usd") or 0) > 0)
+    total_pnl = sum(float(t.get("pnl_usd") or 0) for t in closed)
+    avg_pct = sum(float(t.get("pnl_pct") or 0) for t in closed) / len(closed)
+    return {
+        "total_trades": len(closed),
+        "win_rate": wins / len(closed),
+        "avg_pnl_pct": avg_pct,
+        "total_pnl_usd": total_pnl,
+    }
+
+
+def wall_gex_status(ticker: str = "SPX") -> dict[str, Any]:
+    """Dashboard status payload for the wall GEX live trader."""
+    ticker = ticker.upper()
+    return {
+        "ticker": ticker,
+        "enabled": wall_gex_auto_enabled(),
+        "armed": is_trader_armed(),
+        "paper_mode": paper_trading_only(),
+        "live_mode": live_trading_allowed(),
+        "broker_mode": broker_mode_label(),
+        "signal_ticker": signal_ticker(),
+        "execution_ticker": execution_ticker(),
+        "webull_underlying": webull_underlying(),
+        "stop_loss_pct": wall_stop_loss_pct(),
+        "take_profit_pct": wall_take_profit_pct(),
+        "max_hold_bars": wall_max_hold_bars(),
+        "reenter_on_shift": wall_reenter_on_shift(),
+        "entry_time_filter": wall_entry_time_filter(),
+        "intraday_session": wall_intraday_session(),
+        "signal_filters": wall_signal_filters_enabled(),
+        "cycle_seconds": wall_gex_cycle_seconds(),
+        "account_equity": get_account_equity(),
+        "open_positions": wall_gex_open_trades(ticker),
+        "recent_trades": [
+            t
+            for t in list_recent_trades(limit=50, ticker=ticker)
+            if is_wall_gex_trade(t)
+        ][:20],
+        "performance": _wall_gex_performance(ticker),
+    }
 
 
 def _uses_execution_mapping() -> bool:
@@ -61,7 +131,7 @@ def _flatten_open_positions(ticker: str, *, spot: float, reason: str = "bar_rota
         exec_spot = float(mapped)
 
     closed: list[dict[str, Any]] = []
-    for pos in list_open_trades(ticker):
+    for pos in wall_gex_open_trades(ticker):
         pnl_pct = broker.position_pnl_pct(pos, spot=exec_spot)
         if pnl_pct is None:
             pnl_pct = 0.0
@@ -82,10 +152,46 @@ def _flatten_open_positions(ticker: str, *, spot: float, reason: str = "bar_rota
 
 def _has_open_duplicate(ticker: str, *, strike: float, option_type: str) -> bool:
     ot = option_type.lower()
-    for pos in list_open_trades(ticker):
+    for pos in wall_gex_open_trades(ticker):
         if float(pos["strike"]) == strike and str(pos.get("option_type", "")).lower() == ot:
             return True
     return False
+
+
+def _flatten_on_wall_shift(ticker: str, *, spot: float, wall_strike: float) -> list[dict[str, Any]]:
+    """Close wall GEX positions when the target GEX wall strike moves."""
+    if not wall_reenter_on_shift():
+        return []
+
+    exec_spot = float(spot)
+    if _uses_execution_mapping():
+        mapped = resolve_execution_spot(signal_spot=spot)
+        if mapped is None or mapped <= 0:
+            return []
+        exec_spot = float(mapped)
+
+    broker = get_broker()
+    closed: list[dict[str, Any]] = []
+    for pos in wall_gex_open_trades(ticker):
+        prior_wall = float(pos.get("signal_strike") or pos.get("strike") or 0.0)
+        if prior_wall <= 0 or abs(prior_wall - wall_strike) < 0.5:
+            continue
+        pnl_pct = broker.position_pnl_pct(pos, spot=exec_spot)
+        if pnl_pct is None:
+            pnl_pct = 0.0
+        qty = int(pos.get("qty") or 1)
+        entry_premium = float(pos["entry_premium"])
+        exit_premium = mark_to_market_premium(entry_premium, pnl_pct)
+        close_trade(
+            int(pos["id"]),
+            exit_spot=exec_spot,
+            exit_premium=exit_premium,
+            pnl_pct=pnl_pct,
+            pnl_usd=pnl_usd(entry_premium, exit_premium, qty),
+            exit_reason="wall_shift",
+        )
+        closed.append({"trade_id": pos["id"], "pnl_pct": pnl_pct, "reason": "wall_shift"})
+    return closed
 
 
 def manage_wall_gex_exits(ticker: str, *, spot: float) -> dict[str, list[dict[str, Any]]]:
@@ -113,6 +219,7 @@ def run_low_gex_trade(
     spot: float | None = None,
     exposure: pd.Series | None = None,
     execute: bool = False,
+    force: bool = False,
     session_check: bool = True,
     reenter_each_bar: bool | None = None,
     entry_time_filter: bool | None = None,
@@ -185,11 +292,22 @@ def run_low_gex_trade(
         out["entry_window"] = True
         return out
 
+    if not force and not is_trader_armed():
+        out["ran"] = False
+        out["reason"] = "Trader disarmed — arm to run live entries"
+        return out
+
+    out["wall_shift_exits"] = _flatten_on_wall_shift(
+        ticker,
+        spot=float(spot),
+        wall_strike=wall_strike,
+    )
+
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
     if rotate:
         out["closed_for_rotation"] = _flatten_open_positions(ticker, spot=float(spot))
 
-    if not rotate and len(list_open_trades(ticker)) >= max_open_positions():
+    if not rotate and len(wall_gex_open_trades(ticker)) >= max_open_positions():
         out["ran"] = True
         out["action"] = "skipped"
         out["reason"] = "Max open positions reached"
@@ -354,3 +472,23 @@ def run_low_gex_trade(
         }
     )
     return out
+
+
+def run_wall_gex_cycle(
+    *,
+    ticker: str = "SPX",
+    spot: float | None = None,
+    exposure: pd.Series | None = None,
+    execute: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    """One wall GEX evaluation cycle for the dashboard scheduler or manual run."""
+    result = run_low_gex_trade(
+        ticker=ticker,
+        spot=spot,
+        exposure=exposure,
+        execute=execute,
+        force=force,
+    )
+    result["status"] = wall_gex_status(ticker)
+    return result

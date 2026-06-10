@@ -20,6 +20,22 @@ def auto_trader_enabled() -> bool:
     return _flag("GEX_AUTO_TRADER", "0")
 
 
+def wall_gex_auto_enabled() -> bool:
+    """Background wall GEX loop in the web dashboard scheduler."""
+    return _flag("GEX_WALL_GEX_AUTO", "1")
+
+
+def wall_gex_cycle_seconds() -> int:
+    """How often the wall GEX trader evaluates exits/entries."""
+    explicit = os.environ.get("GEX_WALL_GEX_CYCLE_SECONDS", "").strip()
+    if explicit:
+        try:
+            return max(5, int(explicit))
+        except (TypeError, ValueError):
+            pass
+    return max(5, trader_cycle_seconds())
+
+
 def trader_cycle_seconds() -> int:
     """How often the auto-trader evaluates exits/entries (0 = only on gamma refresh)."""
     try:
