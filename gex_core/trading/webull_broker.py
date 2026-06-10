@@ -6,12 +6,15 @@ import logging
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from gex_core.trading.config import (
+    live_trading_allowed,
     webull_account_id,
     webull_app_key,
     webull_app_secret,
+    webull_configured,
     webull_data_endpoint,
     webull_equity_cache_seconds,
     webull_fill_poll_sec,
@@ -20,6 +23,7 @@ from gex_core.trading.config import (
     webull_option_category,
     webull_region,
     webull_trade_endpoint,
+    webull_use_uat,
 )
 from gex_core.trading.execution import build_webull_option_symbol
 from gex_core.trading.paper_broker import estimate_entry_premium, estimate_option_pnl_pct
@@ -33,11 +37,151 @@ _data_client = None
 _FILLED = frozenset({"FILLED", "PARTIAL FILLED", "PARTIAL_FILLED", 4, 5, "4", "5"})
 _TERMINAL_BAD = frozenset({"CANCELLED", "FAILED", "REJECTED", 2, 3, "2", "3"})
 _EQUITY_CACHE: dict[str, tuple[float, float]] = {}
+_LAST_WEBULL_ERROR: dict[str, Any] = {}
+_RATE_LIMIT_COOLDOWN_SEC = 45
 
 
 def clear_webull_equity_cache() -> None:
     """Drop cached Webull net-liquidation values (for tests)."""
     _EQUITY_CACHE.clear()
+
+
+def clear_webull_error_state() -> None:
+    """Reset cached Webull auth/rate-limit state (for tests)."""
+    _LAST_WEBULL_ERROR.clear()
+
+
+def reset_webull_clients() -> None:
+    """Drop cached SDK clients so the next call re-initializes auth."""
+    global _client, _trade_client, _data_client
+    _client = None
+    _trade_client = None
+    _data_client = None
+
+
+def invalidate_local_webull_token() -> bool:
+    """Remove a stale on-disk token so Webull can issue a fresh one."""
+    path = _token_file_path()
+    try:
+        if path.is_file():
+            path.unlink()
+            logger.info("Removed stale Webull token file at %s", path)
+            return True
+    except OSError as exc:
+        logger.warning("Failed to remove Webull token file %s: %s", path, exc)
+    return False
+
+
+def _token_file_path() -> Path:
+    env_dir = os.environ.get("WEBULL_OPENAPI_TOKEN_DIR", "").strip()
+    base = Path(env_dir).expanduser() if env_dir else Path("conf")
+    return base.resolve() / "token.txt"
+
+
+def _is_rate_limited_message(message: str) -> bool:
+    upper = message.upper()
+    return "429" in upper or "TOO_MANY_REQUESTS" in upper or "TOO MANY REQUESTS" in upper
+
+
+def _is_invalid_token_message(message: str) -> bool:
+    upper = message.upper()
+    return (
+        "INVALID_TOKEN" in upper
+        or ("HTTP STATUS: 401" in upper and "UNAUTHORIZED" in upper)
+        or ("CODE: INVALID_TOKEN" in upper)
+        or ("PERMISSION DENIED" in upper and "401" in upper)
+    )
+
+
+def _classify_webull_error(exc: Exception | str | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(exc, dict):
+        code = str(exc.get("code") or exc.get("error_code") or "").upper()
+        msg = str(exc.get("msg") or exc.get("message") or exc.get("error_msg") or "")
+        message = f"Code: {code}, Msg: {msg}".strip(", ")
+    else:
+        message = str(exc)
+        code = ""
+        msg = message
+        error_code = getattr(exc, "error_code", None)
+        if error_code:
+            code = str(error_code).upper()
+        error_msg = getattr(exc, "error_msg", None)
+        if error_msg:
+            msg = str(error_msg)
+        http_status = getattr(exc, "http_status", None)
+        if http_status and not message.startswith("HTTP Status:"):
+            message = f"HTTP Status: {http_status}, Code: {code}, Msg: {msg}"
+
+    return {
+        "message": message,
+        "rate_limited": _is_rate_limited_message(message),
+        "invalid_token": _is_invalid_token_message(message) or code == "INVALID_TOKEN",
+    }
+
+
+def note_webull_error(exc: Exception | str | dict[str, Any]) -> None:
+    """Remember recent Webull failures for dashboard auth/rate-limit banners."""
+    flags = _classify_webull_error(exc)
+    if flags["invalid_token"]:
+        invalidate_local_webull_token()
+        reset_webull_clients()
+    _LAST_WEBULL_ERROR.update({"at": time.monotonic(), **flags})
+
+
+def webull_api_paused() -> bool:
+    """Skip live Webull calls while we are in a 429 cooldown."""
+    return bool(webull_auth_status().get("pause_api"))
+
+
+def webull_auth_status() -> dict[str, Any]:
+    """Dashboard payload for Webull OpenAPI auth and rate-limit guidance."""
+    if not webull_configured():
+        return {"required": False}
+    if not live_trading_allowed():
+        return {"required": False, "paper_mode": True}
+
+    recent = _LAST_WEBULL_ERROR
+    recent_age = time.monotonic() - float(recent.get("at") or 0.0) if recent.get("at") else None
+    recent_active = recent_age is not None and recent_age < 600
+    rate_limited = (
+        bool(recent.get("rate_limited"))
+        and recent_age is not None
+        and recent_age < _RATE_LIMIT_COOLDOWN_SEC
+    )
+    invalid_token = bool(recent.get("invalid_token")) and recent_active
+
+    if webull_use_uat():
+        return {
+            "required": False,
+            "uat": True,
+            "message": "UAT sandbox — use GEX_WEBULL_USE_UAT=1 with sandbox credentials.",
+        }
+
+    show_banner = rate_limited or invalid_token
+    if invalid_token:
+        headline = "Webull token rejected (401)"
+        detail = (
+            "Webull returned INVALID_TOKEN / permission denied. Any stale token file was cleared. "
+            "Disarm, wait ~30 seconds, confirm GEX_WEBULL_APP_KEY, GEX_WEBULL_APP_SECRET, and "
+            "GEX_WEBULL_ACCOUNT_ID match your production OpenAPI app, then retry."
+        )
+    elif rate_limited:
+        headline = "Webull rate limit (429)"
+        detail = "Disarm the trader and wait about 30 seconds before retrying."
+    else:
+        headline = ""
+        detail = ""
+
+    return {
+        "required": True,
+        "show_banner": show_banner,
+        "pause_api": rate_limited,
+        "invalid_token": invalid_token,
+        "rate_limited": rate_limited,
+        "headline": headline,
+        "message": detail,
+        "last_error": recent.get("message") if recent_active else None,
+    }
 
 
 def _safe_float(value: Any) -> float | None:
@@ -111,6 +255,7 @@ def fetch_total_account_value(*, force_refresh: bool = False) -> float | None:
     try:
         body = fetch_account_balance(account_id=aid)
         if not _is_ok(body):
+            note_webull_error(body)
             logger.warning("Webull balance request rejected: %s", body)
             return cached[1] if cached else None
         value = parse_total_account_value(_balance_payload(body))
@@ -118,6 +263,7 @@ def fetch_total_account_value(*, force_refresh: bool = False) -> float | None:
             _EQUITY_CACHE[aid] = (now, value)
             return value
     except Exception as exc:
+        note_webull_error(exc)
         logger.warning("Webull account balance fetch failed: %s", _format_webull_error(exc))
     return cached[1] if cached else None
 
@@ -150,6 +296,9 @@ def _ensure_client():
     global _client, _trade_client
     if _trade_client is not None:
         return _trade_client
+    if webull_api_paused():
+        auth = webull_auth_status()
+        raise EnvironmentError(auth.get("headline") or "Webull API paused — rate limited.")
     from webull.core.client import ApiClient
     from webull.trade.trade_client import TradeClient
 
@@ -161,6 +310,7 @@ def _ensure_client():
         _configure_api_client(_client, region=region)
         _trade_client = TradeClient(_client)
     except Exception as exc:
+        note_webull_error(exc)
         raise EnvironmentError(_format_webull_error(exc)) from exc
     return _trade_client
 

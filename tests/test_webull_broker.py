@@ -9,9 +9,14 @@ from gex_core.trading.webull_broker import (
     _order_status,
     build_option_order,
     clear_webull_equity_cache,
+    clear_webull_error_state,
     fetch_total_account_value,
     limit_price_for_buy,
+    note_webull_error,
     parse_total_account_value,
+    reset_webull_clients,
+    webull_auth_status,
+    webull_api_paused,
 )
 
 
@@ -128,6 +133,55 @@ def test_webull_trade_endpoint_uat(monkeypatch):
     monkeypatch.delenv("GEX_WEBULL_ENDPOINT", raising=False)
     assert webull_trade_endpoint() == "us-openapi-alb.uat.webullbroker.com"
     assert webull_data_endpoint() == "us-broker-api.uat.webullbroker.com"
+
+
+def test_webull_auth_status_invalid_token_banner(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    reset_webull_clients()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("abc123\n1700000000\nNORMAL\n", encoding="utf-8")
+
+    note_webull_error(
+        'HTTP Status: 401, Code: INVALID_TOKEN, Msg: 401 UNAUTHORIZED "permission denied", RequestID: x'
+    )
+
+    assert not token_file.exists()
+    auth = webull_auth_status()
+    assert auth["invalid_token"] is True
+    assert auth["show_banner"] is True
+    assert "401" in auth["headline"]
+
+
+def test_webull_auth_status_rate_limit_banner(monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    note_webull_error("HTTP Status: 429, Code: TOO_MANY_REQUESTS")
+
+    auth = webull_auth_status()
+    assert auth["rate_limited"] is True
+    assert auth["show_banner"] is True
+    assert webull_api_paused() is True
+
+
+def test_webull_auth_status_ok_without_sms(monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+
+    auth = webull_auth_status()
+    assert auth["show_banner"] is False
+    assert auth["pause_api"] is False
+    assert webull_api_paused() is False
 
 
 def test_webull_trade_endpoint_migrates_deprecated_host(monkeypatch):

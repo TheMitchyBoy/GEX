@@ -15,12 +15,14 @@ def test_wall_gex_status_defaults():
     assert status["max_hold_bars"] == 8
     assert "open_positions" in status
     assert "performance" in status
+    assert "webull_auth" in status
 
 
 def test_run_low_gex_trade_requires_arm_when_execute():
     exposure = pd.Series([-2.0, 0.5, 1.0], index=[7440.0, 7460.0, 7480.0])
     with (
         patch("gex_core.trading.low_gex_engine.is_trader_session_active", return_value=True),
+        patch("gex_core.trading.low_gex_engine.is_entry_window_active", return_value=True),
         patch("gex_core.trading.low_gex_engine.is_trader_armed", return_value=False),
         patch("gex_core.trading.low_gex_engine.manage_wall_gex_exits", return_value={"eod_exits": [], "exits": []}),
     ):
