@@ -47,6 +47,32 @@ def test_api_wall_gex_status():
     assert payload["status"]["take_profit_pct"] == 0.22
 
 
+def test_api_wall_gex_status_returns_json_on_error(monkeypatch):
+    from web_app import APP
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("context failed")
+
+    monkeypatch.setattr("web_app._wall_gex_live_data", _boom)
+    client = APP.test_client()
+    response = client.get("/api/wall-gex/status?ticker=SPX")
+    assert response.status_code == 200
+    assert response.content_type.startswith("application/json")
+    payload = response.get_json()
+    assert payload["status"]["ticker"] == "SPX"
+    assert "context failed" in payload["last_cycle"]["reason"]
+
+
+def test_api_unknown_returns_json_not_html():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/api/wall-gex/missing")
+    assert response.status_code == 404
+    assert response.content_type.startswith("application/json")
+    assert response.get_json()["error"]
+
+
 def test_api_wall_gex_arm_disarm():
     from web_app import APP
 

@@ -23,6 +23,7 @@ from typing import Any
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
+from werkzeug.exceptions import HTTPException
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
 from gex_core.features import parse_gamma_flip_value, safe_float
@@ -80,6 +81,23 @@ app = APP
 logger = logging.getLogger(__name__)
 
 bootstrap_env()
+
+
+@APP.errorhandler(HTTPException)
+def _api_http_error(exc: HTTPException):
+    """Return JSON (not HTML) for /api/* HTTP errors."""
+    if request.path.startswith("/api/"):
+        return jsonify({"error": exc.description or exc.name}), exc.code
+    return exc
+
+
+@APP.errorhandler(Exception)
+def _api_uncaught_error(exc: Exception):
+    """Return JSON (not HTML) for unhandled /api/* exceptions."""
+    if request.path.startswith("/api/"):
+        logger.exception("Unhandled API error on %s", request.path)
+        return jsonify({"error": str(exc) or "Internal server error"}), 500
+    raise exc
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Unusual Whales live data layer
@@ -529,11 +547,19 @@ def health_ready():
     return jsonify(status), code
 
 
-def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
-    from gex_core.trading.low_gex_engine import run_low_gex_trade, wall_gex_status
+def _wall_gex_api_urls() -> dict[str, str]:
+    return {
+        "status": url_for("api_wall_gex_status"),
+        "arm": url_for("api_wall_gex_arm"),
+        "run": url_for("api_wall_gex_run"),
+    }
+
+
+def _wall_gex_live_data(ticker: str) -> tuple[float | None, pd.Series | None, dict[str, Any]]:
+    """Load spot, exposure series, and a dry-run wall GEX signal."""
+    from gex_core.trading.low_gex_engine import run_low_gex_trade
 
     ticker = ticker.upper()
-    status = wall_gex_status(ticker)
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
@@ -542,24 +568,37 @@ def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
         api_key=uw_api_key(),
     )
     spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
-    last_cycle: dict[str, Any] = {}
     exposure, _ = _strategy_exposure_from_context(ctx)
-    if spot and exposure is not None:
-        try:
-            last_cycle = run_low_gex_trade(
-                ticker=ticker,
-                spot=float(spot),
-                exposure=exposure,
-                execute=False,
-            )
-        except Exception:
-            logger.exception("Wall GEX signal preview failed for %s", ticker)
+    if not spot or exposure is None:
+        return spot, exposure, {"ran": False, "reason": "No spot or gamma exposure available"}
+    preview = run_low_gex_trade(
+        ticker=ticker,
+        spot=float(spot),
+        exposure=exposure,
+        execute=False,
+    )
+    return float(spot), exposure, preview
+
+
+def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
+    from gex_core.trading.low_gex_engine import wall_gex_status
+
+    ticker = ticker.upper()
+    status = wall_gex_status(ticker)
+    spot: float | None = None
+    last_cycle: dict[str, Any] = {}
+    try:
+        spot, _, last_cycle = _wall_gex_live_data(ticker)
+    except Exception as exc:
+        logger.exception("Wall GEX signal preview failed for %s", ticker)
+        last_cycle = {"ran": False, "reason": str(exc)}
     return render_template(
         "wall_gex.html",
         ticker=ticker,
         spot=spot,
         status=status,
         last_cycle=last_cycle,
+        api_urls=_wall_gex_api_urls(),
     )
 
 
@@ -846,30 +885,17 @@ def api_trader_suggestions():
 
 @APP.get("/api/wall-gex/status")
 def api_wall_gex_status():
-    from gex_core.trading.low_gex_engine import run_low_gex_trade, wall_gex_status
+    from gex_core.trading.low_gex_engine import wall_gex_status
 
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
     status = wall_gex_status(ticker)
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
-    ctx = build_periscope_context(
-        ticker=ticker,
-        exposure="gamma",
-        uw_entry=uw_entry,
-        api_key=uw_api_key(),
-    )
-    spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
-    last_cycle: dict[str, Any] = {}
-    exposure, _ = _strategy_exposure_from_context(ctx)
-    if spot and exposure is not None:
-        try:
-            last_cycle = run_low_gex_trade(
-                ticker=ticker,
-                spot=float(spot),
-                exposure=exposure,
-                execute=False,
-            )
-        except Exception as exc:
-            last_cycle = {"ran": False, "reason": str(exc)}
+    spot: float | None = None
+    last_cycle: dict[str, Any] = {"ran": False, "reason": "Loading signal"}
+    try:
+        spot, _, last_cycle = _wall_gex_live_data(ticker)
+    except Exception as exc:
+        logger.exception("Wall GEX status failed for %s", ticker)
+        last_cycle = {"ran": False, "reason": str(exc)}
     return jsonify({"ticker": ticker, "spot": spot, "status": status, "last_cycle": last_cycle})
 
 
@@ -900,25 +926,23 @@ def api_wall_gex_run():
 
     payload = request.get_json(silent=True) or {}
     ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
-    ctx = build_periscope_context(
-        ticker=ticker,
-        exposure="gamma",
-        uw_entry=uw_entry,
-        api_key=uw_api_key(),
-    )
-    spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
-    if not spot:
-        return jsonify({"error": "No spot price available"}), 503
-    exposure, _ = _strategy_exposure_from_context(ctx)
-    result = run_wall_gex_cycle(
-        ticker=ticker,
-        spot=float(spot),
-        exposure=exposure,
-        execute=True,
-        force=True,
-    )
-    return jsonify(result)
+    try:
+        spot, exposure, preview = _wall_gex_live_data(ticker)
+        if not spot:
+            return jsonify({"error": "No spot price available", "last_cycle": preview}), 503
+        if exposure is None:
+            return jsonify({"error": "No gamma exposure available", "last_cycle": preview}), 503
+        result = run_wall_gex_cycle(
+            ticker=ticker,
+            spot=float(spot),
+            exposure=exposure,
+            execute=True,
+            force=True,
+        )
+        return jsonify(result)
+    except Exception as exc:
+        logger.exception("Wall GEX run failed for %s", ticker)
+        return jsonify({"error": str(exc)}), 500
 
 
 @APP.get("/trade")
