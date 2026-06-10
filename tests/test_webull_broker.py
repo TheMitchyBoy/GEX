@@ -1,17 +1,27 @@
+from unittest.mock import patch
+
 from gex_core.trading.config import webull_data_endpoint, webull_trade_endpoint
 from gex_core.trading.execution import (
     build_webull_option_symbol,
     map_execution_strike,
 )
 from gex_core.trading.webull_broker import (
+    _purge_stale_webull_token_file,
     _order_avg_price,
     _order_filled_qty,
     _order_status,
     build_option_order,
     clear_webull_equity_cache,
+    clear_webull_error_state,
     fetch_total_account_value,
     limit_price_for_buy,
+    note_webull_error,
     parse_total_account_value,
+    read_local_webull_token,
+    reset_webull_auth,
+    reset_webull_clients,
+    webull_auth_status,
+    webull_api_paused,
 )
 
 
@@ -128,6 +138,110 @@ def test_webull_trade_endpoint_uat(monkeypatch):
     monkeypatch.delenv("GEX_WEBULL_ENDPOINT", raising=False)
     assert webull_trade_endpoint() == "us-openapi-alb.uat.webullbroker.com"
     assert webull_data_endpoint() == "us-broker-api.uat.webullbroker.com"
+
+
+def test_read_local_webull_token_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    payload = read_local_webull_token()
+    assert payload["has_token"] is False
+    assert payload["token_status"] is None
+
+
+def test_webull_auth_status_pending_banner(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("abc123\n1700000000\nPENDING\n", encoding="utf-8")
+
+    auth = webull_auth_status()
+    assert auth["show_banner"] is True
+    assert auth["pending"] is True
+    assert auth["pause_api"] is True
+    assert "Webull 2FA" in auth["headline"]
+
+
+def test_purge_stale_token_when_no_2fa(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEX_WEBULL_NO_2FA", "1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("old\n1\nNORMAL\n", encoding="utf-8")
+    assert _purge_stale_webull_token_file() is True
+    assert not token_file.exists()
+
+
+def test_reset_webull_auth_deletes_token_and_triggers_sms(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    reset_webull_clients()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("old\n1\nEXPIRED\n", encoding="utf-8")
+
+    with patch("gex_core.trading.webull_broker.fetch_account_balance", return_value={"code": 0}):
+        result = reset_webull_auth(trigger_sms=True)
+
+    assert result["removed"] is True
+    assert not token_file.exists()
+    assert result["probe_triggered"] is True
+
+
+def test_webull_auth_status_no_2fa_skips_sms_steps(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_NO_2FA", "1")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "token.txt").write_text("old\n1\nNORMAL\n", encoding="utf-8")
+
+    auth = webull_auth_status()
+    assert auth["two_fa_required"] is False
+    assert auth["show_banner"] is True
+    assert "SMS" not in auth["message"]
+
+
+def test_webull_auth_status_invalid_token_banner(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    reset_webull_clients()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("abc123\n1700000000\nNORMAL\n", encoding="utf-8")
+
+    note_webull_error(
+        'HTTP Status: 401, Code: INVALID_TOKEN, Msg: 401 UNAUTHORIZED "permission denied", RequestID: x'
+    )
+
+    assert not token_file.exists()
+    auth = webull_auth_status()
+    assert auth["invalid_token"] is True
+    assert auth["show_banner"] is True
+    assert "401" in auth["headline"]
+
+
+def test_webull_auth_status_rate_limit_banner(monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    note_webull_error("HTTP Status: 429, Code: TOO_MANY_REQUESTS")
+
+    auth = webull_auth_status()
+    assert auth["rate_limited"] is True
+    assert auth["show_banner"] is True
+    assert webull_api_paused() is True
 
 
 def test_webull_trade_endpoint_migrates_deprecated_host(monkeypatch):

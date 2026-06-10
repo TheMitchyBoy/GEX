@@ -57,9 +57,29 @@
       #status-msg.err { color: var(--red); }
       .type-call { color: var(--green); }
       .type-put { color: var(--red); }
+      .wrap { width: min(420px, 100%); }
+      .auth-banner {
+        display: none; margin-bottom: 0.75rem; padding: 0.9rem 1rem; border-radius: 12px;
+        border: 1px solid rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.1);
+        color: #fde68a; font-size: 0.78rem; line-height: 1.45;
+      }
+      .auth-banner.show { display: block; }
+      .auth-banner strong { color: #fef3c7; font-weight: 600; }
+      .auth-banner ol { margin: 0.45rem 0 0; padding-left: 1.15rem; }
+      .auth-banner li { margin: 0.15rem 0; }
+      .auth-banner .token { color: #fcd34d; font-size: 0.7rem; margin-top: 0.35rem; }
+      .auth-banner .btn-reset {
+        margin-top: 0.65rem; width: 100%; border: 1px solid rgba(251, 191, 36, 0.45);
+        background: rgba(251, 191, 36, 0.16); color: #fef3c7; border-radius: 8px;
+        padding: 0.55rem 0.7rem; font-weight: 600; font-size: 0.78rem; cursor: pointer;
+        font-family: inherit;
+      }
+      .auth-banner .btn-reset:disabled { opacity: 0.55; cursor: not-allowed; }
     </style>
   </head>
   <body>
+    <div class="wrap">
+    <div id="auth-banner" class="auth-banner" role="alert" aria-live="polite"></div>
     <div class="card">
       <h1>Wall GEX Trader</h1>
       <div class="sub">{{ status.signal_ticker }} → {{ status.execution_ticker }}</div>
@@ -93,6 +113,7 @@
         <button class="btn-run full" id="btn-run" type="button">Run cycle</button>
       </div>
       <div id="status-msg"></div>
+    </div>
     </div>
 
     <script>
@@ -128,8 +149,54 @@
         line.className = 'signal mono type-' + rec.option_type;
       }
 
+      function renderAuthBanner(st) {
+        const auth = st.webull_auth || {};
+        const el = document.getElementById('auth-banner');
+        if (!auth.show_banner) {
+          el.className = 'auth-banner';
+          el.innerHTML = '';
+          return;
+        }
+        const steps = (auth.verify_steps || []).map((s) => `<li>${s}</li>`).join('');
+        const token = auth.token_status ? `<div class="token">Token: ${auth.token_status}</div>` : '';
+        const resetLabel = auth.two_fa_required === false
+          ? 'Reset Webull connection'
+          : 'Delete token &amp; request new SMS';
+        const resetBtn = auth.required
+          ? `<button class="btn-reset" id="btn-reset-token" type="button">${resetLabel}</button>`
+          : '';
+        el.className = 'auth-banner show';
+        el.innerHTML =
+          `<strong>${auth.headline || 'Webull verification required'}</strong>` +
+          `<div>${auth.message || ''}</div>` +
+          (steps ? `<ol>${steps}</ol>` : '') +
+          token +
+          resetBtn;
+        const resetEl = document.getElementById('btn-reset-token');
+        if (resetEl) {
+          resetEl.addEventListener('click', resetWebullToken, { once: true });
+        }
+      }
+
+      async function resetWebullToken() {
+        const btn = document.getElementById('btn-reset-token');
+        if (btn) btn.disabled = true;
+        try {
+          const data = await postJson(API.reset_token, { ticker: TICKER, trigger_sms: true });
+          if (data.status) renderStatus({ status: data.status });
+          const err = data.probe_error || data.sms_error;
+          const okMsg = data.message || 'Webull connection reset';
+          const note = err ? `${okMsg} — ${err}` : okMsg;
+          setMsg(note, err ? 'err' : 'ok');
+        } catch (e) {
+          setMsg(e.message, 'err');
+          if (btn) btn.disabled = false;
+        }
+      }
+
       function renderStatus(payload) {
         const st = payload.status || payload;
+        renderAuthBanner(st);
         const perf = st.performance || {};
         const pnl = perf.total_pnl_usd || 0;
         const pnlEl = document.getElementById('pnl-value');
@@ -216,6 +283,7 @@
         finally { btn.disabled = false; }
       });
 
+      renderAuthBanner({{ status|tojson }});
       refresh();
       setInterval(refresh, 30000);
     </script>

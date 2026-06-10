@@ -552,6 +552,7 @@ def _wall_gex_api_urls() -> dict[str, str]:
         "status": url_for("api_wall_gex_status"),
         "arm": url_for("api_wall_gex_arm"),
         "run": url_for("api_wall_gex_run"),
+        "reset_token": url_for("api_wall_gex_reset_token"),
     }
 
 
@@ -917,6 +918,26 @@ def api_wall_gex_arm():
     arm_trader(armed)
     ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
     return jsonify({"armed": armed, "status": wall_gex_status(ticker)})
+
+
+@APP.post("/api/wall-gex/reset-token")
+def api_wall_gex_reset_token():
+    """Delete cached Webull token and optionally trigger a fresh SMS code."""
+    from gex_core.trading.config import live_trading_allowed
+    from gex_core.trading.engine import arm_trader
+    from gex_core.trading.low_gex_engine import wall_gex_status
+    from gex_core.trading.webull_broker import reset_webull_auth
+
+    payload = request.get_json(silent=True) or {}
+    ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
+    if not live_trading_allowed():
+        return jsonify({"error": "Live Webull trading is not enabled (paper mode or missing credentials)."}), 400
+
+    arm_trader(False)
+    result = reset_webull_auth(trigger_sms=bool(payload.get("trigger_sms", True)))
+    result["armed"] = False
+    result["status"] = wall_gex_status(ticker)
+    return jsonify(result)
 
 
 @APP.post("/api/wall-gex/run")
