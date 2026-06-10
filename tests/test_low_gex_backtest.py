@@ -25,6 +25,7 @@ def _rth(hhmmss: str, spot: float, strikes: dict[float, float]) -> dict:
 def _disable_wall_session_filters(monkeypatch):
     monkeypatch.setenv("GEX_WALL_INTRADAY_SESSION", "0")
     monkeypatch.setenv("GEX_WALL_ENTRY_TIME_FILTER", "0")
+    monkeypatch.setenv("GEX_WALL_SIGNAL_FILTERS", "0")
 
 
 def test_backtest_low_gex_trader_runs_on_synthetic_history(monkeypatch):

@@ -152,6 +152,10 @@ class BacktestState:
     skipped_no_execution_spot: int = 0
     skipped_weekends: int = 0
     skipped_low_confidence: int = 0
+    skipped_wall_weak_gamma: int = 0
+    skipped_wall_regime: int = 0
+    skipped_wall_drift: int = 0
+    last_wall_strike: float | None = None
     strike_cooldown: dict[tuple[float, str], str] = field(default_factory=dict)
     account: AccountLedger | None = None
 

@@ -19,6 +19,7 @@ from gex_core.trading.config import (
     wall_entry_time_filter,
     wall_intraday_session,
     wall_max_hold_bars,
+    wall_signal_filters_enabled,
     wall_stop_loss_pct,
     wall_take_profit_pct,
     webull_underlying,
@@ -33,12 +34,14 @@ from gex_core.trading.journal import (
     patch_trade_meta,
     record_decision,
 )
-from gex_core.trading.low_gex_signals import compute_low_gex_signal
+from gex_core.trading.low_gex_signals import compute_low_gex_signal, wall_entry_quality_ok
 from gex_core.trading.paper_broker import estimate_entry_premium, mark_to_market_premium, pnl_usd
 from gex_core.trading.sizing import resolve_contract_qty
 from gex_core.trading.webull_broker import limit_price_for_buy
 
 logger = logging.getLogger(__name__)
+
+_last_wall_strike: dict[str, float] = {}
 
 
 def _uses_execution_mapping() -> bool:
@@ -147,6 +150,22 @@ def run_low_gex_trade(
         return out
 
     rec = signal_pack["recommended"]
+    wall_strike = float(rec.get("wall_strike") or rec["strike"])
+    regime = str((signal_pack.get("regime") or ""))  # may be absent
+    quality_ok, quality_reason = wall_entry_quality_ok(
+        wall_strike=wall_strike,
+        wall_gamma=float(rec["gamma_bn"]),
+        regime=regime,
+        last_wall_strike=_last_wall_strike.get(ticker),
+        signal_filters=wall_signal_filters_enabled(),
+    )
+    _last_wall_strike[ticker] = wall_strike
+    if not quality_ok:
+        out["ran"] = True
+        out["action"] = "skipped" if execute else "signal_only"
+        out["reason"] = quality_reason
+        return out
+
     option_type = str(rec["option_type"])
     trade_strike = float(rec["strike"])
     out["recommended"] = rec

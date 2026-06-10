@@ -95,6 +95,13 @@ def main() -> None:
         print("intraday session filter: on")
     if result.get("entry_time_filter"):
         print(f"entry-time filter: on (skipped {result.get('skipped_filters', 0)})")
+    if result.get("signal_filters"):
+        print(
+            "signal filters: on "
+            f"(weak γ {result.get('skipped_wall_weak_gamma', 0)}, "
+            f"regime {result.get('skipped_wall_regime', 0)}, "
+            f"drift {result.get('skipped_wall_drift', 0)})"
+        )
     if result.get("weekend_snapshots_excluded"):
         print(f"weekend snapshots excluded: {result['weekend_snapshots_excluded']}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")

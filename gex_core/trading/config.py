@@ -227,6 +227,32 @@ def wall_entry_time_filter() -> bool:
     return _flag("GEX_WALL_ENTRY_TIME_FILTER", "1")
 
 
+def wall_signal_filters_enabled() -> bool:
+    """Quality gates: min |gamma|, regime, wall drift (off by default)."""
+    return _flag("GEX_WALL_SIGNAL_FILTERS", "0")
+
+
+def wall_min_gamma_bn() -> float:
+    """Skip walls with |net GEX| below this (Bn)."""
+    try:
+        return max(0.0, float(os.environ.get("GEX_WALL_MIN_GAMMA_BN", "0.5")))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def wall_block_short_gamma() -> bool:
+    """Skip entries when snapshot regime is short gamma."""
+    return _flag("GEX_WALL_BLOCK_SHORT_GAMMA", "1")
+
+
+def wall_min_drift_pts() -> float:
+    """Require wall strike to move at least this many points vs prior bar (0=off)."""
+    try:
+        return max(0.0, float(os.environ.get("GEX_WALL_MIN_DRIFT_PTS", "10")))
+    except (TypeError, ValueError):
+        return 10.0
+
+
 def wall_max_hold_bars() -> int:
     """Hard max hold for wall GEX trades (bars); default 8 ≈ 40 min on 5-min snapshots."""
     minutes = os.environ.get("GEX_WALL_MAX_HOLD_MINUTES", "").strip()

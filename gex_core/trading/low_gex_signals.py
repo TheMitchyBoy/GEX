@@ -8,6 +8,12 @@ from typing import Any, Literal
 import pandas as pd
 
 from gex_core.features import select_atm_strike_series
+from gex_core.trading.config import (
+    wall_block_short_gamma,
+    wall_min_drift_pts,
+    wall_min_gamma_bn,
+    wall_signal_filters_enabled,
+)
 from gex_core.trading.signals import _clean, _option_type_for_strike
 
 WallTarget = Literal["min", "max"]
@@ -34,6 +40,40 @@ class WallGexSignal:
             "rationale": self.rationale,
             "direction": self.option_type,
         }
+
+
+def wall_entry_quality_ok(
+    *,
+    wall_strike: float,
+    wall_gamma: float,
+    regime: str | None = None,
+    last_wall_strike: float | None = None,
+    signal_filters: bool | None = None,
+    min_gamma_bn: float | None = None,
+    block_short_gamma: bool | None = None,
+    min_drift_pts: float | None = None,
+) -> tuple[bool, str]:
+    """Return (ok, reason) for wall GEX entry quality filters (opt #5)."""
+    if signal_filters is None:
+        signal_filters = wall_signal_filters_enabled()
+    if not signal_filters:
+        return True, ""
+
+    floor = wall_min_gamma_bn() if min_gamma_bn is None else min_gamma_bn
+    if floor > 0 and abs(wall_gamma) < floor:
+        return False, f"Wall |γ| {abs(wall_gamma):.3f} Bn below min {floor:.3f} Bn"
+
+    if block_short_gamma if block_short_gamma is not None else wall_block_short_gamma():
+        if "SHORT" in (regime or "").upper():
+            return False, f"Short-gamma regime blocked ({regime})"
+
+    drift = wall_min_drift_pts() if min_drift_pts is None else min_drift_pts
+    if drift > 0 and last_wall_strike is not None:
+        moved = abs(wall_strike - last_wall_strike)
+        if moved < drift:
+            return False, f"Wall drift {moved:.0f} pts < min {drift:.0f} pts"
+
+    return True, ""
 
 
 def compute_wall_gex_signal(
