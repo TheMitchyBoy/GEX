@@ -15,6 +15,7 @@ from gex_core.trading.webull_broker import (
     note_webull_error,
     parse_total_account_value,
     read_local_webull_token,
+    reset_webull_clients,
     webull_auth_status,
     webull_api_paused,
 )
@@ -157,6 +158,28 @@ def test_webull_auth_status_pending_banner(tmp_path, monkeypatch):
     assert auth["pending"] is True
     assert auth["pause_api"] is True
     assert "Webull 2FA" in auth["headline"]
+
+
+def test_webull_auth_status_invalid_token_banner(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    reset_webull_clients()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("abc123\n1700000000\nNORMAL\n", encoding="utf-8")
+
+    note_webull_error(
+        'HTTP Status: 401, Code: INVALID_TOKEN, Msg: 401 UNAUTHORIZED "permission denied", RequestID: x'
+    )
+
+    assert not token_file.exists()
+    auth = webull_auth_status()
+    assert auth["invalid_token"] is True
+    assert auth["show_banner"] is True
+    assert "401" in auth["headline"]
 
 
 def test_webull_auth_status_rate_limit_banner(monkeypatch):

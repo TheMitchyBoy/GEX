@@ -51,6 +51,27 @@ def clear_webull_error_state() -> None:
     _LAST_WEBULL_ERROR.clear()
 
 
+def reset_webull_clients() -> None:
+    """Drop cached SDK clients so the next call re-initializes auth."""
+    global _client, _trade_client, _data_client
+    _client = None
+    _trade_client = None
+    _data_client = None
+
+
+def invalidate_local_webull_token() -> bool:
+    """Remove a stale on-disk token so Webull can issue a fresh one."""
+    path = _token_file_path()
+    try:
+        if path.is_file():
+            path.unlink()
+            logger.info("Removed stale Webull token file at %s", path)
+            return True
+    except OSError as exc:
+        logger.warning("Failed to remove Webull token file %s: %s", path, exc)
+    return False
+
+
 def _token_file_path() -> Path:
     env_dir = os.environ.get("WEBULL_OPENAPI_TOKEN_DIR", "").strip()
     base = Path(env_dir).expanduser() if env_dir else Path("conf")
@@ -83,18 +104,55 @@ def _is_rate_limited_message(message: str) -> bool:
     return "429" in upper or "TOO_MANY_REQUESTS" in upper or "TOO MANY REQUESTS" in upper
 
 
-def note_webull_error(exc: Exception | str) -> None:
-    """Remember recent Webull failures for dashboard auth/rate-limit banners."""
-    message = str(exc)
+def _is_invalid_token_message(message: str) -> bool:
     upper = message.upper()
-    pending = "STATUS:PENDING" in upper or "STATUS NOT VERIFIED" in upper or "ERROR_INIT_TOKEN" in upper
-    rate_limited = _is_rate_limited_message(message)
+    return (
+        "INVALID_TOKEN" in upper
+        or ("HTTP STATUS: 401" in upper and "UNAUTHORIZED" in upper)
+        or ("CODE: INVALID_TOKEN" in upper)
+        or ("PERMISSION DENIED" in upper and "401" in upper)
+    )
+
+
+def _classify_webull_error(exc: Exception | str | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(exc, dict):
+        code = str(exc.get("code") or exc.get("error_code") or "").upper()
+        msg = str(exc.get("msg") or exc.get("message") or exc.get("error_msg") or "")
+        message = f"Code: {code}, Msg: {msg}".strip(", ")
+    else:
+        message = str(exc)
+        code = ""
+        msg = message
+        error_code = getattr(exc, "error_code", None)
+        if error_code:
+            code = str(error_code).upper()
+        error_msg = getattr(exc, "error_msg", None)
+        if error_msg:
+            msg = str(error_msg)
+        http_status = getattr(exc, "http_status", None)
+        if http_status and not message.startswith("HTTP Status:"):
+            message = f"HTTP Status: {http_status}, Code: {code}, Msg: {msg}"
+
+    upper = message.upper()
+    return {
+        "message": message,
+        "pending": "STATUS:PENDING" in upper or "STATUS NOT VERIFIED" in upper or "ERROR_INIT_TOKEN" in upper,
+        "rate_limited": _is_rate_limited_message(message),
+        "invalid_token": _is_invalid_token_message(message) or code == "INVALID_TOKEN",
+    }
+
+
+def note_webull_error(exc: Exception | str | dict[str, Any]) -> None:
+    """Remember recent Webull failures for dashboard auth/rate-limit banners."""
+    flags = _classify_webull_error(exc)
+    if flags["invalid_token"]:
+        invalidate_local_webull_token()
+        reset_webull_clients()
     _LAST_WEBULL_ERROR.update(
         {
             "at": time.monotonic(),
-            "message": message,
-            "pending": pending or _LAST_WEBULL_ERROR.get("pending", False),
-            "rate_limited": rate_limited,
+            **flags,
+            "pending": flags["pending"] or _LAST_WEBULL_ERROR.get("pending", False),
         }
     )
 
@@ -128,6 +186,10 @@ def webull_auth_status() -> dict[str, Any]:
     if recent_active and recent.get("pending"):
         pending = True
 
+    invalid_token = bool(recent.get("invalid_token")) and recent_active
+    if invalid_token:
+        expired = True
+
     if webull_use_uat():
         return {
             "required": False,
@@ -137,9 +199,18 @@ def webull_auth_status() -> dict[str, Any]:
         }
 
     needs_setup = not local.get("has_token") and not token_status
-    show_banner = pending or expired or rate_limited or needs_setup
+    show_banner = pending or expired or rate_limited or needs_setup or invalid_token
 
-    if rate_limited:
+    if invalid_token:
+        headline = "Webull token rejected (401) — re-authenticate"
+        detail = (
+            "Webull returned INVALID_TOKEN / permission denied. The stale token file was cleared. "
+            "Disarm, wait 30 seconds, then trigger one live call and verify the new SMS code in the "
+            "Webull app (Menu → Messages → OpenAPI Notifications). "
+            "Also confirm GEX_WEBULL_APP_KEY, GEX_WEBULL_APP_SECRET, and GEX_WEBULL_ACCOUNT_ID "
+            "match your production OpenAPI account (not UAT)."
+        )
+    elif rate_limited:
         headline = "Webull rate limit (429) — pause API calls"
         detail = (
             "Disarm the trader and wait about 30 seconds. "
@@ -170,25 +241,31 @@ def webull_auth_status() -> dict[str, Any]:
 
     pause_api = pending or rate_limited
 
+    verify_steps = [
+        "Disarm the trader on this dashboard",
+        "Wait ~30 seconds (avoid 429 rate limits)",
+        "Open the Webull mobile app (same account as your API keys)",
+        "Menu → Messages → OpenAPI Notifications",
+        "Enter the SMS code and tap Confirm",
+        "Wait until this banner clears, then Arm again",
+    ]
+    if invalid_token:
+        verify_steps.insert(2, "Confirm API keys and account ID env vars are correct for production")
+
     return {
         "required": True,
         "show_banner": show_banner,
         "pause_api": pause_api,
         "pending": pending,
         "expired": expired,
+        "invalid_token": invalid_token,
         "rate_limited": rate_limited,
         "needs_setup": needs_setup,
         "token_status": token_status,
         "token_path": local.get("token_path"),
         "headline": headline,
         "message": detail,
-        "verify_steps": [
-            "Disarm the trader on this dashboard",
-            "Open the Webull mobile app (same account as your API keys)",
-            "Menu → Messages → OpenAPI Notifications",
-            "Enter the SMS code and tap Confirm",
-            "Wait until status clears, then Arm again",
-        ],
+        "verify_steps": verify_steps,
         "last_error": recent.get("message") if recent_active else None,
     }
 
@@ -264,6 +341,7 @@ def fetch_total_account_value(*, force_refresh: bool = False) -> float | None:
     try:
         body = fetch_account_balance(account_id=aid)
         if not _is_ok(body):
+            note_webull_error(body)
             logger.warning("Webull balance request rejected: %s", body)
             return cached[1] if cached else None
         value = parse_total_account_value(_balance_payload(body))
