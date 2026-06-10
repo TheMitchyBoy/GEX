@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -34,7 +34,7 @@ from gex_core.trading.config import (
     trader_session_only,
 )
 from gex_core.trading.exits import build_exit_profile
-from gex_core.trading.low_gex_signals import compute_low_gex_signal
+from gex_core.trading.low_gex_signals import WallTarget, compute_wall_gex_signal
 from gex_core.trading.paper_broker import estimate_entry_premium
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
 
@@ -70,13 +70,14 @@ def _flatten_for_reentry(
         state.account.record_equity(ts, state.open_positions, mark_spot)
 
 
-def _maybe_enter_low_gex(
+def _maybe_enter_wall_gex(
     state: BacktestState,
     *,
     idx: int,
     ts: str,
     row: dict,
     max_open: int,
+    target: WallTarget = "min",
     reenter_each_bar: bool = False,
 ) -> None:
     if not export_ts_is_trading_day(ts):
@@ -88,7 +89,7 @@ def _maybe_enter_low_gex(
     if not isinstance(exposure, pd.Series):
         exposure = None
 
-    pack = compute_low_gex_signal(exposure, spot=spot)
+    pack = compute_wall_gex_signal(exposure, spot=spot, target=target)
     if not pack.get("available"):
         skip = str(pack.get("reason", ""))
         if "from spot" in skip:
@@ -161,7 +162,7 @@ def _maybe_enter_low_gex(
             strike=exec_strike,
             entry_spot=exec_spot,
             entry_premium=premium,
-            signal_type="min_gamma_strike",
+            signal_type=str(rec.get("signal_type") or ("max_gamma_strike" if target == "max" else "min_gamma_strike")),
             signal_gamma=float(rec["gamma_bn"]),
             gamma_delta=0.0,
             ai_confidence=confidence,
@@ -175,9 +176,10 @@ def _maybe_enter_low_gex(
         state.account.record_equity(ts, state.open_positions, exec_spot)
 
 
-def backtest_low_gex_trader(
+def backtest_wall_gex_trader(
     ticker: str,
     *,
+    target: WallTarget = "min",
     export_dir=EXPORT_DIR,
     lookback_days: int | None = 7,
     max_snapshots: int | None = 500,
@@ -189,7 +191,7 @@ def backtest_low_gex_trader(
     history: list[dict] | None = None,
     reenter_each_bar: bool | None = None,
 ) -> dict[str, Any]:
-    """Simulate low-GEX wall trades over export snapshot history."""
+    """Simulate min/max GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
     stop_loss = stop_loss if stop_loss is not None else stop_loss_pct()
     take_profit = take_profit if take_profit is not None else take_profit_pct()
@@ -251,12 +253,13 @@ def backtest_low_gex_trader(
             )
         else:
             _flatten_for_reentry(state, idx=idx, ts=ts, signal_spot=spot, row=row)
-        _maybe_enter_low_gex(
+        _maybe_enter_wall_gex(
             state,
             idx=idx,
             ts=ts,
             row=row,
             max_open=max_open,
+            target=target,
             reenter_each_bar=rotate,
         )
 
@@ -295,6 +298,75 @@ def backtest_low_gex_trader(
         take_profit=take_profit,
         weekend_snapshots_excluded=weekend_snapshots_excluded,
     )
-    result["strategy"] = "low_gex"
+    result["strategy"] = "low_gex" if target == "min" else "high_gex"
+    result["wall_target"] = target
     result["reenter_each_bar"] = rotate
     return result
+
+
+def backtest_low_gex_trader(
+    ticker: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return backtest_wall_gex_trader(ticker, target="min", **kwargs)
+
+
+def backtest_high_gex_trader(
+    ticker: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return backtest_wall_gex_trader(ticker, target="max", **kwargs)
+
+
+def compare_wall_gex_backtest(
+    ticker: str,
+    *,
+    lookback_days: int = 7,
+    starting_capital: float = 500.0,
+    reenter_each_bar: bool = True,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Run min vs max wall GEX backtests on the same history window."""
+    dedupe = kwargs.get("dedupe_identical_strikes")
+    if dedupe is None:
+        dedupe = not reenter_each_bar
+    history = _build_history_impl(
+        ticker.upper(),
+        EXPORT_DIR,
+        lookback_days=lookback_days,
+        max_snapshots=kwargs.get("max_snapshots", 5000),
+        dedupe_identical_strikes=dedupe,
+    )
+    shared = {
+        "history": history,
+        "lookback_days": lookback_days,
+        "starting_capital": starting_capital,
+        "reenter_each_bar": reenter_each_bar,
+        **{k: v for k, v in kwargs.items() if k not in ("max_snapshots", "dedupe_identical_strikes")},
+    }
+    low = backtest_wall_gex_trader(ticker, target="min", **shared)
+    high = backtest_wall_gex_trader(ticker, target="max", **shared)
+    return {
+        "ticker": ticker.upper(),
+        "lookback_days": lookback_days,
+        "snapshots": low.get("snapshots", 0),
+        "date_from": low.get("date_from"),
+        "date_to": low.get("date_to"),
+        "reenter_each_bar": reenter_each_bar,
+        "low_gex": low,
+        "high_gex": high,
+        "comparison": {
+            "low_trades": low.get("total_trades", 0),
+            "high_trades": high.get("total_trades", 0),
+            "low_win_rate": low.get("win_rate"),
+            "high_win_rate": high.get("win_rate"),
+            "low_pnl_usd": low.get("total_pnl_usd"),
+            "high_pnl_usd": high.get("total_pnl_usd"),
+            "low_return_pct": (low.get("account") or {}).get("return_pct"),
+            "high_return_pct": (high.get("account") or {}).get("return_pct"),
+            "low_max_dd": (low.get("account") or {}).get("max_drawdown_pct"),
+            "high_max_dd": (high.get("account") or {}).get("max_drawdown_pct"),
+            "low_skipped_distance": low.get("skipped_strike_distance", 0),
+            "high_skipped_distance": high.get("skipped_strike_distance", 0),
+        },
+    }

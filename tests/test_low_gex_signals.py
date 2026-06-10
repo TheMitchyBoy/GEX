@@ -18,6 +18,21 @@ def test_low_gex_below_spot_buys_puts():
     assert rec["gamma_bn"] == -2.0
 
 
+def test_high_gex_targets_max_positive_strike():
+    from gex_core.trading.low_gex_signals import compute_high_gex_signal
+
+    exposure = pd.Series(
+        [-1.0, 0.5, 2.5, 1.0],
+        index=[7440.0, 7450.0, 7460.0, 7470.0],
+    )
+    pack = compute_high_gex_signal(exposure, spot=7460.0)
+    assert pack["available"] is True
+    rec = pack["recommended"]
+    assert rec["strike"] == 7460.0
+    assert rec["gamma_bn"] == 2.5
+    assert rec["option_type"] == "call"
+
+
 def test_low_gex_above_spot_buys_calls():
     exposure = pd.Series(
         [0.5, 1.0, -1.5, -0.2],
