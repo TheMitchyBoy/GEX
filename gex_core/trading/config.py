@@ -212,9 +212,9 @@ def wall_stop_loss_pct() -> float:
 
 def wall_take_profit_pct() -> float:
     try:
-        return max(0.05, float(os.environ.get("GEX_WALL_TAKE_PROFIT_PCT", "0.20")))
+        return max(0.05, float(os.environ.get("GEX_WALL_TAKE_PROFIT_PCT", "0.22")))
     except (TypeError, ValueError):
-        return 0.20
+        return 0.22
 
 
 def wall_intraday_session() -> bool:

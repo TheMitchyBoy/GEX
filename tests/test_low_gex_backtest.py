@@ -85,7 +85,7 @@ def test_backtest_low_gex_default_sl_tp(monkeypatch):
     ]
     result = backtest_low_gex_trader("SPX", history=history, starting_capital=5000.0, lookback_days=None)
     assert result["stop_loss_pct"] == 0.03
-    assert result["take_profit_pct"] == 0.20
+    assert result["take_profit_pct"] == 0.22
     assert result.get("max_hold_bars") == 8
 
 
