@@ -529,14 +529,62 @@ def health_ready():
     return jsonify(status), code
 
 
+def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
+    from gex_core.trading.low_gex_engine import run_low_gex_trade, wall_gex_status
+
+    ticker = ticker.upper()
+    status = wall_gex_status(ticker)
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
+    last_cycle: dict[str, Any] = {}
+    exposure, _ = _strategy_exposure_from_context(ctx)
+    if spot and exposure is not None:
+        try:
+            last_cycle = run_low_gex_trade(
+                ticker=ticker,
+                spot=float(spot),
+                exposure=exposure,
+                execute=False,
+            )
+        except Exception:
+            logger.exception("Wall GEX signal preview failed for %s", ticker)
+    return render_template(
+        "wall_gex.html",
+        ticker=ticker,
+        spot=spot,
+        status=status,
+        last_cycle=last_cycle,
+    )
+
+
 @APP.route("/")
 def index():
+    return _render_wall_gex_dashboard(PRIMARY_TICKER)
+
+
+@APP.route("/gamma")
+@APP.route("/periscope")
+def gamma_dashboard():
     return _render_periscope_dashboard(PRIMARY_TICKER)
 
 
 @APP.route("/ticker/<ticker>")
 @APP.route("/ticker/<ticker>/")
 def ticker_page(ticker):
+    ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        return _spx_redirect()
+    return _render_wall_gex_dashboard(ticker)
+
+
+@APP.route("/ticker/<ticker>/gamma")
+def ticker_gamma_page(ticker):
     ticker = ticker.upper()
     if not is_supported_ticker(ticker):
         return _spx_redirect()
@@ -794,6 +842,83 @@ def api_trader_suggestions():
 
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
     return jsonify({"ticker": ticker, "suggestions": build_suggestions(ticker)})
+
+
+@APP.get("/api/wall-gex/status")
+def api_wall_gex_status():
+    from gex_core.trading.low_gex_engine import run_low_gex_trade, wall_gex_status
+
+    ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    status = wall_gex_status(ticker)
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
+    last_cycle: dict[str, Any] = {}
+    exposure, _ = _strategy_exposure_from_context(ctx)
+    if spot and exposure is not None:
+        try:
+            last_cycle = run_low_gex_trade(
+                ticker=ticker,
+                spot=float(spot),
+                exposure=exposure,
+                execute=False,
+            )
+        except Exception as exc:
+            last_cycle = {"ran": False, "reason": str(exc)}
+    return jsonify({"ticker": ticker, "spot": spot, "status": status, "last_cycle": last_cycle})
+
+
+@APP.post("/api/wall-gex/arm")
+def api_wall_gex_arm():
+    from gex_core.trading.config import live_trading_allowed, require_live_confirm
+    from gex_core.trading.engine import arm_trader
+    from gex_core.trading.low_gex_engine import wall_gex_status
+
+    payload = request.get_json(silent=True) or {}
+    armed = bool(payload.get("armed", True))
+    if armed and live_trading_allowed() and require_live_confirm() and not payload.get("live_confirm"):
+        return jsonify(
+            {
+                "error": "Live Webull trading requires live_confirm: true in the request body.",
+                "live_mode": True,
+            }
+        ), 400
+    arm_trader(armed)
+    ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
+    return jsonify({"armed": armed, "status": wall_gex_status(ticker)})
+
+
+@APP.post("/api/wall-gex/run")
+def api_wall_gex_run():
+    """Manual wall GEX cycle (signal, exits, optional entry)."""
+    from gex_core.trading.low_gex_engine import run_wall_gex_cycle
+
+    payload = request.get_json(silent=True) or {}
+    ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
+    if not spot:
+        return jsonify({"error": "No spot price available"}), 503
+    exposure, _ = _strategy_exposure_from_context(ctx)
+    result = run_wall_gex_cycle(
+        ticker=ticker,
+        spot=float(spot),
+        exposure=exposure,
+        execute=True,
+        force=True,
+    )
+    return jsonify(result)
 
 
 @APP.get("/trade")
@@ -1410,6 +1535,35 @@ def _resolve_trader_spot(ticker: str, fallback: float | None) -> float | None:
     return None
 
 
+def _run_wall_gex_trader(ticker: str) -> dict[str, Any] | None:
+    """Evaluate wall GEX signal and manage paper/live option trades."""
+    from gex_core.trading.config import wall_gex_auto_enabled
+    from gex_core.trading.journal import is_trader_armed
+    from gex_core.trading.low_gex_engine import run_wall_gex_cycle
+
+    if not wall_gex_auto_enabled() or not is_trader_armed():
+        return None
+    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        exposure="gamma",
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
+    if not spot:
+        return None
+    exposure, _ = _strategy_exposure_from_context(ctx)
+    if exposure is None:
+        return None
+    return run_wall_gex_cycle(
+        ticker=ticker,
+        spot=float(spot),
+        exposure=exposure,
+        execute=True,
+    )
+
+
 def _run_auto_trader(ticker: str) -> dict[str, Any] | None:
     """Evaluate gamma signals and manage paper option trades."""
     from gex_core.trading.config import auto_trader_enabled
@@ -1502,6 +1656,19 @@ def _scheduled_trader_tick():
             logger.exception("Auto-trader tick failed for %s", ticker)
 
 
+def _scheduled_wall_gex_tick():
+    """Wall GEX trader loop — exits on live spot, entries on lowest-γ wall."""
+    from gex_core.trading.config import wall_gex_auto_enabled, wall_gex_cycle_seconds
+
+    if not wall_gex_auto_enabled() or wall_gex_cycle_seconds() <= 0:
+        return
+    for ticker in REFRESH_TICKERS:
+        try:
+            _run_wall_gex_trader(ticker)
+        except Exception:
+            logger.exception("Wall GEX tick failed for %s", ticker)
+
+
 def _acquire_scheduler_lock() -> bool:
     _scheduler_lock_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -1518,7 +1685,7 @@ def _acquire_scheduler_lock() -> bool:
 
 def start_background_refresh():
     global _scheduler
-    from gex_core.trading.config import auto_trader_enabled, trader_cycle_seconds
+    from gex_core.trading.config import auto_trader_enabled, trader_cycle_seconds, wall_gex_auto_enabled, wall_gex_cycle_seconds
 
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1557,6 +1724,19 @@ def start_background_refresh():
             coalesce=True,
         )
         logger.info("Auto-trader high-frequency loop every %ss", cycle_sec)
+
+    wall_cycle_sec = wall_gex_cycle_seconds()
+    if wall_gex_auto_enabled() and wall_cycle_sec > 0:
+        _scheduler.add_job(
+            _scheduled_wall_gex_tick,
+            trigger="interval",
+            seconds=wall_cycle_sec,
+            id="gex_wall_gex_tick",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("Wall GEX trader loop every %ss", wall_cycle_sec)
 
     if any(get_latest_ts(ticker) is None for ticker in REFRESH_TICKERS):
         _scheduler.add_job(

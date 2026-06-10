@@ -4,15 +4,24 @@ def test_ticker_page_returns_200_with_history():
     client = APP.test_client()
     response = client.get("/ticker/SPX")
     assert response.status_code == 200
-    assert b"Gamma Magnet Strategy" in response.data
-    assert b"GEX Assistant" in response.data
+    assert b"Wall GEX Trader" in response.data
 
 
-def test_index_renders_periscope_dashboard():
+def test_index_renders_wall_gex_dashboard():
     from web_app import APP
 
     client = APP.test_client()
     response = client.get("/")
+    assert response.status_code == 200
+    assert b"Wall GEX Trader" in response.data
+    assert b"/api/wall-gex/status" in response.data
+
+
+def test_gamma_dashboard_renders_periscope():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/gamma")
     assert response.status_code == 200
     assert b"Gamma Magnet Strategy" in response.data
     assert b"strategyChart" in response.data
@@ -115,8 +124,7 @@ def test_post_refresh_failure_with_history_degrades_to_stale(monkeypatch):
     assert response.status_code == 302
     follow = client.get(response.headers["Location"])
     assert follow.status_code == 200
-    assert b"Showing last saved snapshot" in follow.data
-    assert b"check service logs" not in follow.data
+    assert b"Wall GEX Trader" in follow.data
 
 
 def test_classify_uw_error_categories():
@@ -181,7 +189,8 @@ def test_post_refresh_without_uw_key_skips_fetch(monkeypatch):
     assert response.status_code == 302
     assert calls == {"csv": 0, "uw": 0}
     follow = client.get(response.headers["Location"])
-    assert b"last saved snapshot" in follow.data or b"Live data isn't configured" in follow.data
+    assert follow.status_code == 200
+    assert b"Wall GEX Trader" in follow.data
 
 
 def test_live_uw_failure_shows_stale_banner_on_latest_slice(monkeypatch):
@@ -194,7 +203,7 @@ def test_live_uw_failure_shows_stale_banner_on_latest_slice(monkeypatch):
     monkeypatch.setattr(web_app, "_uw_failure_reason", lambda *_a, **_k: "rate_limited")
 
     client = web_app.APP.test_client()
-    response = client.get("/ticker/SPX/")
+    response = client.get("/ticker/SPX/gamma")
     assert response.status_code == 200
     assert b"Showing last saved snapshot" in response.data
     assert b"rate-limiting" in response.data
@@ -206,7 +215,7 @@ def test_persistent_banner_when_uw_not_configured(monkeypatch):
     monkeypatch.setenv("UW_API_KEY", "")
     monkeypatch.setattr(web_app, "uw_api_configured", lambda: False)
     client = web_app.APP.test_client()
-    response = client.get("/ticker/SPX/")
+    response = client.get("/ticker/SPX/gamma")
     assert response.status_code == 200
     assert b"UW_API_KEY" in response.data
 

@@ -32,6 +32,7 @@ def test_run_low_gex_trade_paper_execute():
             spot=7460.0,
             exposure=exposure,
             execute=True,
+            force=True,
         )
     assert result["action"] == "opened"
     assert result["trade_id"] == 42
@@ -52,6 +53,7 @@ def test_run_low_gex_trade_skips_late_session_entry(monkeypatch):
             spot=7460.0,
             exposure=exposure,
             execute=True,
+            force=True,
         )
     assert result["action"] == "skipped"
     assert "entry window" in result.get("reason", "").lower()
