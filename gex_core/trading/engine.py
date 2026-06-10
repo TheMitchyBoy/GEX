@@ -114,6 +114,7 @@ def _exit_profile_from_meta(meta: dict[str, Any], pos: dict[str, Any]) -> ExitPr
             time_stop_bars=int(saved.get("time_stop_bars", 6)),
             full_take_profit=float(saved.get("full_take_profit", take_profit_pct())),
             stop_loss=float(stop_loss) if stop_loss is not None else None,
+            max_hold_bars=int(saved["max_hold_bars"]) if saved.get("max_hold_bars") is not None else None,
         )
     return build_exit_profile(
         ai_confidence=float(pos.get("ai_confidence") or 0.5),

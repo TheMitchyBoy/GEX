@@ -113,6 +113,25 @@ def test_backtest_low_gex_wall_shift_closes_on_new_wall(monkeypatch):
     assert result.get("by_exit_reason", {}).get("wall_shift", 0) >= 1
 
 
+def test_backtest_low_gex_max_hold_exits(monkeypatch):
+    _disable_wall_session_filters(monkeypatch)
+    monkeypatch.setenv("GEX_WALL_MAX_HOLD_BARS", "1")
+    history = [
+        _rth("180000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _rth("180500", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _rth("181000", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+    ]
+    for row in history:
+        row["interval_minutes"] = 5
+    result = backtest_low_gex_trader(
+        "SPX",
+        history=history,
+        starting_capital=5000.0,
+        lookback_days=None,
+    )
+    assert result.get("by_exit_reason", {}).get("max_hold", 0) >= 1
+
+
 def test_backtest_low_gex_stop_loss_and_take_profit(monkeypatch):
     _disable_wall_session_filters(monkeypatch)
     history = [

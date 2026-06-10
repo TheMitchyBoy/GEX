@@ -38,6 +38,7 @@ from gex_core.trading.config import (
     wall_intraday_session,
     wall_reenter_on_shift,
     wall_reentry_after_stop,
+    wall_max_hold_bars,
     wall_stop_loss_pct,
     wall_take_profit_pct,
 )
@@ -205,7 +206,13 @@ def _maybe_enter_wall_gex(
 
     sl = stop_loss if stop_loss is not None else wall_stop_loss_pct()
     tp = take_profit if take_profit is not None else wall_take_profit_pct()
-    profile = build_simple_exit_profile(stop_loss=sl, take_profit=tp)
+    hold_bars = wall_max_hold_bars()
+    profile = build_simple_exit_profile(
+        stop_loss=sl,
+        take_profit=tp,
+        time_stop_bars=hold_bars,
+        max_hold_bars=hold_bars,
+    )
     state.open_positions.append(
         _OpenPosition(
             entry_idx=idx,
@@ -375,6 +382,7 @@ def backtest_wall_gex_trader(
     result["intraday_session"] = intraday
     result["entry_time_filter"] = time_filter
     result["off_hours_snapshots_excluded"] = off_hours_snapshots_excluded
+    result["max_hold_bars"] = wall_max_hold_bars()
     return result
 
 

@@ -46,18 +46,30 @@ class ExitProfile:
     time_stop_bars: int = 6
     full_take_profit: float = 0.35
     stop_loss: float | None = None
+    max_hold_bars: int | None = None
 
 
-def build_simple_exit_profile(*, stop_loss: float, take_profit: float) -> ExitProfile:
+def build_simple_exit_profile(
+    *,
+    stop_loss: float,
+    take_profit: float,
+    time_stop_bars: int | None = None,
+    max_hold_bars: int | None = None,
+) -> ExitProfile:
     """Fixed stop-loss / take-profit only — no partials, trails, or magnet exits."""
+    from gex_core.trading.config import max_hold_bars as default_max_hold_bars
+
+    hold = max_hold_bars if max_hold_bars is not None else default_max_hold_bars()
+    stale = time_stop_bars if time_stop_bars is not None else hold
     return ExitProfile(
         hold_for_target=True,
         partial_take_profit=None,
         trail_trigger=1.0,
         trail_floor=0.0,
-        time_stop_bars=max_hold_bars(),
+        time_stop_bars=stale,
         full_take_profit=take_profit,
         stop_loss=stop_loss,
+        max_hold_bars=hold,
     )
 
 
@@ -271,7 +283,8 @@ def evaluate_exit(
     ):
         return "trailing_stop", max(pnl_pct, profile.trail_floor)
 
-    if bars_held >= max_hold_bars():
+    hold_cap = profile.max_hold_bars if profile.max_hold_bars is not None else max_hold_bars()
+    if bars_held >= hold_cap:
         return "max_hold", pnl_pct
 
     if bars_held >= profile.time_stop_bars and pnl_pct < time_stop_min_pnl_pct():

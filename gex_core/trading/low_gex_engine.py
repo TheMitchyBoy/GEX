@@ -18,6 +18,7 @@ from gex_core.trading.config import (
     signal_ticker,
     wall_entry_time_filter,
     wall_intraday_session,
+    wall_max_hold_bars,
     wall_stop_loss_pct,
     wall_take_profit_pct,
     webull_underlying,
@@ -206,9 +207,12 @@ def run_low_gex_trade(
         else None
     )
 
+    hold_bars = wall_max_hold_bars()
     exit_profile = build_simple_exit_profile(
         stop_loss=wall_stop_loss_pct(),
         take_profit=wall_take_profit_pct(),
+        time_stop_bars=hold_bars,
+        max_hold_bars=hold_bars,
     )
     profile_meta = {
         "hold_for_target": exit_profile.hold_for_target,
@@ -218,6 +222,7 @@ def run_low_gex_trade(
         "time_stop_bars": exit_profile.time_stop_bars,
         "full_take_profit": exit_profile.full_take_profit,
         "stop_loss": exit_profile.stop_loss,
+        "max_hold_bars": exit_profile.max_hold_bars,
     }
 
     premium_est = estimate_entry_premium(exec_spot, exec_strike)

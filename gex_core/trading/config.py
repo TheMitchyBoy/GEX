@@ -227,6 +227,24 @@ def wall_entry_time_filter() -> bool:
     return _flag("GEX_WALL_ENTRY_TIME_FILTER", "1")
 
 
+def wall_max_hold_bars() -> int:
+    """Hard max hold for wall GEX trades (bars); default 8 ≈ 40 min on 5-min snapshots."""
+    explicit = os.environ.get("GEX_WALL_MAX_HOLD_BARS", "").strip()
+    if explicit:
+        try:
+            return max(1, int(explicit))
+        except (TypeError, ValueError):
+            pass
+    minutes = os.environ.get("GEX_WALL_MAX_HOLD_MINUTES", "").strip()
+    if minutes:
+        try:
+            bar = max(1.0, low_gex_bar_minutes())
+            return max(1, int(round(float(minutes) / bar)))
+        except (TypeError, ValueError):
+            pass
+    return 8
+
+
 def wall_reenter_on_shift() -> bool:
     """Close and reopen when the target GEX wall strike moves."""
     return _flag("GEX_WALL_REENTER_ON_SHIFT", "1")
