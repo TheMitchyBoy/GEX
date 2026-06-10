@@ -9,7 +9,11 @@ import pandas as pd
 from gex_core.exports import EXPORT_DIR
 from gex_core.features import safe_float
 from gex_core.history import _build_history_impl
-from gex_core.market_time import export_ts_is_trading_day, filter_trading_history
+from gex_core.market_time import (
+    export_ts_entry_window_ok,
+    export_ts_is_trading_day,
+    filter_trading_history,
+)
 from gex_core.trading.backtest import (
     AccountLedger,
     BacktestState,
@@ -30,6 +34,8 @@ from gex_core.trading.config import (
     max_entries_per_cycle,
     max_open_positions,
     trader_session_only,
+    wall_entry_time_filter,
+    wall_intraday_session,
     wall_reenter_on_shift,
     wall_reentry_after_stop,
     wall_stop_loss_pct,
@@ -118,6 +124,7 @@ def _maybe_enter_wall_gex(
     reenter_each_bar: bool = False,
     reenter_on_shift: bool | None = None,
     reentry_after_stop: bool | None = None,
+    entry_time_filter: bool | None = None,
     stop_loss: float | None = None,
     take_profit: float | None = None,
 ) -> None:
@@ -129,6 +136,11 @@ def _maybe_enter_wall_gex(
     exposure = row.get("strike")
     if not isinstance(exposure, pd.Series):
         exposure = None
+
+    time_filter = wall_entry_time_filter() if entry_time_filter is None else entry_time_filter
+    if time_filter and not export_ts_entry_window_ok(ts):
+        state.skipped_filters += 1
+        return
 
     pack = compute_wall_gex_signal(exposure, spot=spot, target=target)
     if not pack.get("available"):
@@ -232,6 +244,8 @@ def backtest_wall_gex_trader(
     reenter_each_bar: bool | None = None,
     reenter_on_shift: bool | None = None,
     reentry_after_stop: bool | None = None,
+    intraday_session: bool | None = None,
+    entry_time_filter: bool | None = None,
 ) -> dict[str, Any]:
     """Simulate min/max GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
@@ -241,6 +255,8 @@ def backtest_wall_gex_trader(
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
     shift = wall_reenter_on_shift() if reenter_on_shift is None else reenter_on_shift
     after_stop = wall_reentry_after_stop() if reentry_after_stop is None else reentry_after_stop
+    intraday = wall_intraday_session() if intraday_session is None else intraday_session
+    time_filter = wall_entry_time_filter() if entry_time_filter is None else entry_time_filter
     if rotate:
         max_open = max(max_open, max_entries_per_cycle())
 
@@ -254,11 +270,14 @@ def backtest_wall_gex_trader(
         )
 
     raw_len = len(history)
-    weekend_snapshots_excluded = 0
-    if trader_session_only():
-        filtered = filter_trading_history(history, session_only=True)
-        weekend_snapshots_excluded = raw_len - len(filtered)
-        history = filtered
+    weekday_len = len(filter_trading_history(history, session_only=True, intraday_only=False))
+    history = filter_trading_history(
+        history,
+        session_only=trader_session_only(),
+        intraday_only=intraday,
+    )
+    weekend_snapshots_excluded = (raw_len - weekday_len) if trader_session_only() else 0
+    off_hours_snapshots_excluded = (weekday_len - len(history)) if intraday else 0
 
     if len(history) < 2:
         return {
@@ -308,6 +327,7 @@ def backtest_wall_gex_trader(
             reenter_each_bar=rotate,
             reenter_on_shift=shift,
             reentry_after_stop=after_stop,
+            entry_time_filter=time_filter,
             stop_loss=stop_loss,
             take_profit=take_profit,
         )
@@ -352,6 +372,9 @@ def backtest_wall_gex_trader(
     result["reenter_each_bar"] = rotate
     result["reenter_on_shift"] = shift
     result["reentry_after_stop"] = after_stop
+    result["intraday_session"] = intraday
+    result["entry_time_filter"] = time_filter
+    result["off_hours_snapshots_excluded"] = off_hours_snapshots_excluded
     return result
 
 

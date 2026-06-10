@@ -4,6 +4,10 @@ import pandas as pd
 
 from gex_core.trading.low_gex_backtest import backtest_low_gex_trader
 
+# Export keys are UTC; 18:00 UTC ≈ 14:00 ET (inside RTH entry window).
+_DAY = "2026-06-02"
+_IN = "180000"
+
 
 def _row(ts: str, spot: float, strikes: dict[float, float]) -> dict:
     return {
@@ -14,12 +18,22 @@ def _row(ts: str, spot: float, strikes: dict[float, float]) -> dict:
     }
 
 
-def test_backtest_low_gex_trader_runs_on_synthetic_history():
+def _rth(hhmmss: str, spot: float, strikes: dict[float, float]) -> dict:
+    return _row(f"{_DAY}_{hhmmss}", spot, strikes)
+
+
+def _disable_wall_session_filters(monkeypatch):
+    monkeypatch.setenv("GEX_WALL_INTRADAY_SESSION", "0")
+    monkeypatch.setenv("GEX_WALL_ENTRY_TIME_FILTER", "0")
+
+
+def test_backtest_low_gex_trader_runs_on_synthetic_history(monkeypatch):
+    _disable_wall_session_filters(monkeypatch)
     history = [
-        _row("2026-06-02_100000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
-        _row("2026-06-02_101000", 7455.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
-        _row("2026-06-02_102000", 7448.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
-        _row("2026-06-02_103000", 7442.0, {7440.0: -2.0, 7460.0: -0.2, 7480.0: 0.2}),
+        _rth("180000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _rth("180500", 7455.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _rth("181000", 7448.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
+        _rth("181500", 7442.0, {7440.0: -2.0, 7460.0: -0.2, 7480.0: 0.2}),
     ]
     result = backtest_low_gex_trader(
         "SPX",
@@ -31,12 +45,13 @@ def test_backtest_low_gex_trader_runs_on_synthetic_history():
     assert result["snapshots"] == 4
 
 
-def test_backtest_low_gex_reenter_each_bar_opens_every_snapshot():
+def test_backtest_low_gex_reenter_each_bar_opens_every_snapshot(monkeypatch):
+    _disable_wall_session_filters(monkeypatch)
     history = [
-        _row("2026-06-02_100000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
-        _row("2026-06-02_100500", 7455.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
-        _row("2026-06-02_101000", 7448.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
-        _row("2026-06-02_101500", 7442.0, {7440.0: -2.0, 7460.0: -0.2, 7480.0: 0.2}),
+        _rth("180000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _rth("180500", 7455.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _rth("181000", 7448.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
+        _rth("181500", 7442.0, {7440.0: -2.0, 7460.0: -0.2, 7480.0: 0.2}),
     ]
     for row in history:
         row["interval_minutes"] = 5
@@ -52,22 +67,41 @@ def test_backtest_low_gex_reenter_each_bar_opens_every_snapshot():
 
 
 def test_backtest_low_gex_default_sl_tp(monkeypatch):
+    _disable_wall_session_filters(monkeypatch)
     monkeypatch.delenv("GEX_WALL_STOP_LOSS_PCT", raising=False)
     monkeypatch.delenv("GEX_WALL_TAKE_PROFIT_PCT", raising=False)
     history = [
-        _row("2026-06-02_100000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
-        _row("2026-06-02_101000", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _rth("180000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _rth("180500", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
     ]
     result = backtest_low_gex_trader("SPX", history=history, starting_capital=5000.0, lookback_days=None)
     assert result["stop_loss_pct"] == 0.03
     assert result["take_profit_pct"] == 0.20
 
 
-def test_backtest_low_gex_wall_shift_closes_on_new_wall():
+def test_backtest_low_gex_skips_late_session_entries():
     history = [
-        _row("2026-06-02_100000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
-        _row("2026-06-02_101000", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
-        _row("2026-06-02_102000", 7460.0, {7440.0: -0.2, 7460.0: -3.0, 7480.0: 0.5}),
+        _rth("193500", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _rth("194000", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+    ]
+    result = backtest_low_gex_trader(
+        "SPX",
+        history=history,
+        starting_capital=5000.0,
+        lookback_days=None,
+        intraday_session=True,
+        entry_time_filter=True,
+    )
+    assert result["total_trades"] == 0
+    assert result.get("skipped_filters", 0) >= 1
+
+
+def test_backtest_low_gex_wall_shift_closes_on_new_wall(monkeypatch):
+    _disable_wall_session_filters(monkeypatch)
+    history = [
+        _rth("180000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _rth("180500", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _rth("181000", 7460.0, {7440.0: -0.2, 7460.0: -3.0, 7480.0: 0.5}),
     ]
     result = backtest_low_gex_trader(
         "SPX",
@@ -79,11 +113,12 @@ def test_backtest_low_gex_wall_shift_closes_on_new_wall():
     assert result.get("by_exit_reason", {}).get("wall_shift", 0) >= 1
 
 
-def test_backtest_low_gex_stop_loss_and_take_profit():
+def test_backtest_low_gex_stop_loss_and_take_profit(monkeypatch):
+    _disable_wall_session_filters(monkeypatch)
     history = [
-        _row("2026-06-02_100000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
-        _row("2026-06-02_101000", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
-        _row("2026-06-02_102000", 7700.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
+        _rth("180000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _rth("180500", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _rth("181000", 7700.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
     ]
     result = backtest_low_gex_trader(
         "SPX",

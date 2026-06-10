@@ -217,6 +217,16 @@ def wall_take_profit_pct() -> float:
         return 0.20
 
 
+def wall_intraday_session() -> bool:
+    """Keep only regular-session export snapshots in wall GEX backtests."""
+    return _flag("GEX_WALL_INTRADAY_SESSION", "1")
+
+
+def wall_entry_time_filter() -> bool:
+    """Skip wall entries outside the entry window (after open / before close)."""
+    return _flag("GEX_WALL_ENTRY_TIME_FILTER", "1")
+
+
 def wall_reenter_on_shift() -> bool:
     """Close and reopen when the target GEX wall strike moves."""
     return _flag("GEX_WALL_REENTER_ON_SHIFT", "1")
