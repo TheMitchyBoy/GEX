@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 from plotly.utils import PlotlyJSONEncoder
 
 from gex_core.charts import _bar_width, _strike_axis_layout
-from gex_core.features import safe_float, select_dense_atm_strike_series
+from gex_core.features import parse_gamma_flip_value, safe_float, select_dense_atm_strike_series
 from gex_core.trading.advisor import advise_entry
 from gex_core.trading.config import (
     max_strike_distance_pct,
@@ -88,7 +88,7 @@ def build_strategy_state(
     market = MarketContext(
         spot=spot_val,
         prev_spot=prev_spot,
-        gamma_flip=safe_float(snap.get("gamma_flip"), 0.0) or None,
+        gamma_flip=parse_gamma_flip_value(snap.get("gamma_flip")),
         regime=str(snap.get("regime") or ""),
         is_cpi_day=bool(snap.get("is_cpi_day")),
         is_nfp_day=bool(snap.get("is_nfp_day")),
@@ -232,7 +232,7 @@ def build_strategy_chart(
             col=1,
         )
 
-    flip = safe_float(levels.get("gamma_flip"), 0.0)
+    flip = safe_float(parse_gamma_flip_value(levels.get("gamma_flip")), 0.0)
     if flip > 0:
         fig.add_hline(y=flip, line_dash="dot", line_color=_BLUE, opacity=0.7, row=1, col=1)
         fig.add_annotation(x=0, y=flip, text=" γ-flip", showarrow=False, xanchor="left", font=dict(size=10, color=_BLUE), row=1, col=1)

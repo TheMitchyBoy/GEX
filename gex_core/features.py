@@ -56,14 +56,11 @@ def resolve_gamma_flip(
 ) -> float | None:
     """Canonical gamma flip: UW magnet profile near ATM, then profile fallbacks."""
     if greek_exposure_df is not None and not greek_exposure_df.empty:
-        flip = gamma_flip_from_uw_greek(
-            greek_exposure_df,
-            spot,
-            gex_by_strike=gex_by_strike,
-            cumulative_gex=cumulative_gex,
-        )
+        flip = gamma_flip_from_uw_greek(greek_exposure_df, spot)
         if flip is not None:
             return flip
+        # Greek-exposure is authoritative — do not fall back to spot-OI profiles.
+        return None
     if greek_strike is not None and not greek_strike.empty:
         flip = gamma_flip_from_profile(greek_strike, spot)
         if flip is not None:
@@ -269,10 +266,7 @@ def gamma_flip_from_uw_greek(
     flip_series = magnet_gamma_from_call_put(greek_df, spot)
     if flip_series.empty and gex_by_strike is not None and not gex_by_strike.empty:
         flip_series = pd.Series(gex_by_strike, dtype=float).sort_index()
-    gamma_flip = gamma_flip_from_profile(flip_series, spot)
-    if gamma_flip is None and cumulative_gex is not None and not cumulative_gex.empty:
-        gamma_flip = estimate_gamma_flip(cumulative_gex)
-    return gamma_flip
+    return gamma_flip_from_profile(flip_series, spot)
 
 
 def strike_center_of_mass(strike: pd.Series, spot: float | None = None) -> float:

@@ -24,8 +24,10 @@ from gex_core.market_time import (
 from gex_core.intraday_backfill import (
     minute_row_total_gex_bn,
     sample_intraday_rows,
+    scale_strike_profile,
     uw_time_to_export_ts,
 )
+from gex_core.features import magnet_gamma_from_call_put
 from gex_core.spot_exposure import spot_exposure_net_series
 from gex_core.storage import (
     list_indexed_dates,
@@ -76,38 +78,41 @@ def _snapshot_from_strike(
     greek_strike: pd.Series | None = None,
     greek_exposure_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
-    cumulative = strike.cumsum()
-    call_wall = float(strike.idxmax()) if len(strike) else None
-    put_wall = float(strike.idxmin()) if len(strike) else None
-    flip_series = (
-        greek_strike.sort_index()
-        if greek_strike is not None and not greek_strike.empty
-        else strike
-    )
+    profile = strike
+    if isinstance(greek_exposure_df, pd.DataFrame) and not greek_exposure_df.empty:
+        magnet = magnet_gamma_from_call_put(greek_exposure_df, spot)
+        if not magnet.empty:
+            profile = magnet.sort_index()
+    elif greek_strike is not None and not greek_strike.empty:
+        profile = greek_strike.sort_index()
+
+    cumulative = profile.cumsum()
+    call_wall = float(profile.idxmax()) if len(profile) else None
+    put_wall = float(profile.idxmin()) if len(profile) else None
     metrics: dict[str, Any] = {
         "ts": ts,
         "ts_label": ts_display_label(ts),
         "market_date": ts_market_date(ts),
         "ticker": ticker.upper(),
-        "strike": strike,
+        "strike": profile,
         "cumulative": cumulative,
         "surface_df": pd.DataFrame(),
         "total_gex": float(total_gex_bn),
-        "pos_gex": float(strike[strike > 0].sum()),
-        "neg_gex": float(strike[strike < 0].sum()),
+        "pos_gex": float(profile[profile > 0].sum()),
+        "neg_gex": float(profile[profile < 0].sum()),
         "call_wall": call_wall,
         "put_wall": put_wall,
         "gamma_flip": resolve_gamma_flip(
             spot=spot,
-            gex_by_strike=strike,
-            cumulative_gex=cumulative,
             greek_exposure_df=greek_exposure_df,
-            greek_strike=flip_series if greek_strike is not None else None,
+            greek_strike=greek_strike if greek_strike is not None and not greek_strike.empty else None,
+            gex_by_strike=profile if greek_exposure_df is None or greek_exposure_df.empty else None,
+            cumulative_gex=cumulative if greek_exposure_df is None or greek_exposure_df.empty else None,
         ),
         "regime": "LONG gamma" if total_gex_bn >= 0 else "SHORT gamma",
         "data_source": data_source,
         "spot": float(spot),
-        "uw_endpoint": "spot-exposures/strike",
+        "uw_endpoint": "greek-exposure/strike" if isinstance(greek_exposure_df, pd.DataFrame) and not greek_exposure_df.empty else "spot-exposures/strike",
     }
     if spot_exposures_df is not None and not spot_exposures_df.empty:
         metrics["spot_exposures_df"] = spot_exposures_df
@@ -123,24 +128,32 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
     agg = uw_entry["agg"]
     spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
     spot = safe_float(uw_entry.get("spot"), 0.0)
+    greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
+    greek_strike = pd.Series(dtype=float)
+    if isinstance(greek_df, pd.DataFrame) and not greek_df.empty and "net_gex" in greek_df.columns:
+        greek_strike = pd.Series(greek_df["net_gex"].values, index=greek_df["strike"].values, dtype=float).sort_index()
+
     if isinstance(spot_df, pd.DataFrame) and not spot_df.empty:
-        strike = spot_exposure_net_series(spot_df, "gamma")
+        spot_strike = spot_exposure_net_series(spot_df, "gamma")
         if spot <= 0 and "price" in spot_df.columns:
             spot = safe_float(spot_df["price"].dropna().iloc[0], 0.0)
     else:
         spot_df = None
+        spot_strike = pd.Series(dtype=float)
+
+    if not greek_strike.empty:
+        strike = greek_strike
+        total_gex = safe_float(agg.total_gex_bn, float(strike.sum()))
+    elif not spot_strike.empty:
+        strike = spot_strike
+        total_gex = safe_float(
+            uw_entry.get("spot_gamma_bn"),
+            safe_float(agg.total_gex_bn, float(strike.sum())),
+        )
+    else:
         strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
-    total_gex = safe_float(
-        uw_entry.get("spot_gamma_bn"),
-        safe_float(agg.total_gex_bn, float(strike.sum())),
-    )
+        total_gex = safe_float(agg.total_gex_bn, float(strike.sum()))
     active_ts = ts or market_now_export_ts()
-    greek_strike = pd.Series(dtype=float)
-    greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
-    if isinstance(greek_df, pd.DataFrame) and not greek_df.empty and "net_gex" in greek_df.columns:
-        greek_strike = pd.Series(greek_df["net_gex"].values, index=greek_df["strike"].values, dtype=float).sort_index()
-    elif not agg.gex_by_strike.empty:
-        greek_strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
 
     return _snapshot_from_strike(
         ticker,
@@ -223,10 +236,14 @@ def fetch_intraday_day_cache(
             continue
         spot = safe_float(row.get("price"), 0.0)
         total_gex_bn = minute_row_total_gex_bn(row)
+        if not greek_strike.empty:
+            strike = scale_strike_profile(greek_strike, total_gex_bn)
+        else:
+            strike = scale_strike_profile(base_strike, total_gex_bn)
         snapshots[ts] = _snapshot_from_strike(
             ticker,
             ts,
-            strike=base_strike,
+            strike=strike,
             spot=spot,
             total_gex_bn=total_gex_bn,
             spot_exposures_df=spot_df,

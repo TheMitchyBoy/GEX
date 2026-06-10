@@ -11,9 +11,10 @@ import pandas as pd
 
 from gex_core.env_bootstrap import uw_api_key
 from gex_core.features import (
-    gamma_flip_from_profile,
     greek_gamma_series_from_df,
     magnet_gamma_from_call_put,
+    parse_gamma_flip_value,
+    resolve_gamma_flip,
     safe_float,
     select_atm_strike_series,
     spot_covers_strike_grid,
@@ -596,22 +597,33 @@ def build_periscope_context(
         max_strikes=PERISCOPE_EXTENDED_MAX,
     )
 
-    gamma_flip = None
-    if not magnet_exposure.empty and spot > 0:
-        gamma_flip = gamma_flip_from_profile(magnet_exposure, spot)
-    elif not current_exposure.empty and spot > 0:
-        gamma_flip = gamma_flip_from_profile(current_exposure, spot)
-    if gamma_flip is None:
-        gamma_flip = selected.get("gamma_flip")
-    if gamma_flip is None and not gex_series.empty:
-        gamma_flip = gamma_flip_from_profile(gex_series, spot or None)
+    greek_strike = None
+    if isinstance(greek_df, pd.DataFrame) and not greek_df.empty and "net_gex" in greek_df.columns:
+        greek_strike = pd.Series(
+            pd.to_numeric(greek_df["net_gex"], errors="coerce").fillna(0.0).values,
+            index=pd.to_numeric(greek_df["strike"], errors="coerce").values,
+            dtype=float,
+        ).dropna()
+        greek_strike = greek_strike[~greek_strike.index.isna()].sort_index()
 
-    regime = selected.get("regime", "N/A")
+    gamma_flip = resolve_gamma_flip(
+        spot=spot if spot > 0 else None,
+        gex_by_strike=gex_series if not gex_series.empty else None,
+        cumulative_gex=gex_series.cumsum() if not gex_series.empty else None,
+        greek_exposure_df=greek_df,
+        greek_strike=greek_strike if greek_strike is not None and not greek_strike.empty else None,
+    )
+    if gamma_flip is None:
+        gamma_flip = parse_gamma_flip_value(selected.get("gamma_flip"))
+
     total_gex = safe_float(selected.get("total_gex"), 0.0)
-    if uw_entry and uw_entry.get("spot_gamma_bn") is not None:
-        if is_latest_slice:
-            total_gex = safe_float(uw_entry["spot_gamma_bn"], total_gex)
-            regime = "LONG gamma" if total_gex >= 0 else "SHORT gamma"
+    if total_gex == 0 and not magnet_exposure.empty:
+        total_gex = float(magnet_exposure.sum())
+    elif total_gex == 0 and not gex_series.empty:
+        total_gex = float(gex_series.sum())
+    regime = selected.get("regime", "N/A")
+    if total_gex != 0:
+        regime = "LONG gamma" if total_gex >= 0 else "SHORT gamma"
 
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
 

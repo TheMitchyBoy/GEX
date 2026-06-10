@@ -25,7 +25,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
-from gex_core.features import resolve_gamma_flip, safe_float
+from gex_core.features import parse_gamma_flip_value, resolve_gamma_flip, safe_float
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
@@ -381,6 +381,9 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
             refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
 
     selected = ctx.get("selected") or {}
+    gamma_flip = parse_gamma_flip_value(ctx.get("gamma_flip"))
+    if gamma_flip is not None:
+        selected = {**selected, "gamma_flip": gamma_flip}
     gex_series, prev_series = _strategy_exposure_from_context(ctx)
     spot = ctx.get("spot")
 
@@ -413,7 +416,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         spot=safe_float(spot, 0.0) or None,
         regime=ctx.get("regime", "N/A"),
         total_gex=safe_float(ctx.get("total_gex"), 0.0),
-        gamma_flip=ctx.get("gamma_flip"),
+        gamma_flip=gamma_flip,
         exposure=exposure,
     )
 
@@ -433,7 +436,7 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         spot=spot,
         regime=ctx.get("regime", "N/A"),
         total_gex=ctx.get("total_gex", 0.0),
-        gamma_flip=ctx.get("gamma_flip"),
+        gamma_flip=gamma_flip,
         selected_ts=ctx.get("selected_ts"),
         selected_date=ctx.get("selected_date"),
         selected_label=ctx.get("selected_label"),
