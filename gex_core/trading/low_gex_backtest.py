@@ -30,11 +30,10 @@ from gex_core.trading.config import (
     max_entries_per_cycle,
     max_open_positions,
     trader_session_only,
+    wall_stop_loss_pct,
+    wall_take_profit_pct,
 )
 from gex_core.trading.exits import build_simple_exit_profile
-
-WALL_DEFAULT_STOP_LOSS = 0.05
-WALL_DEFAULT_TAKE_PROFIT = 0.40
 from gex_core.trading.low_gex_signals import WallTarget, compute_wall_gex_signal
 from gex_core.trading.paper_broker import estimate_entry_premium
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
@@ -80,8 +79,8 @@ def _maybe_enter_wall_gex(
     max_open: int,
     target: WallTarget = "min",
     reenter_each_bar: bool = False,
-    stop_loss: float = WALL_DEFAULT_STOP_LOSS,
-    take_profit: float = WALL_DEFAULT_TAKE_PROFIT,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
 ) -> None:
     if not export_ts_is_trading_day(ts):
         state.skipped_weekends += 1
@@ -142,7 +141,9 @@ def _maybe_enter_wall_gex(
         state.skipped_entries += 1
         return
 
-    profile = build_simple_exit_profile(stop_loss=stop_loss, take_profit=take_profit)
+    sl = stop_loss if stop_loss is not None else wall_stop_loss_pct()
+    tp = take_profit if take_profit is not None else wall_take_profit_pct()
+    profile = build_simple_exit_profile(stop_loss=sl, take_profit=tp)
     state.open_positions.append(
         _OpenPosition(
             entry_idx=idx,
@@ -182,8 +183,8 @@ def backtest_wall_gex_trader(
 ) -> dict[str, Any]:
     """Simulate min/max GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
-    stop_loss = stop_loss if stop_loss is not None else WALL_DEFAULT_STOP_LOSS
-    take_profit = take_profit if take_profit is not None else WALL_DEFAULT_TAKE_PROFIT
+    stop_loss = stop_loss if stop_loss is not None else wall_stop_loss_pct()
+    take_profit = take_profit if take_profit is not None else wall_take_profit_pct()
     max_open = max_open if max_open is not None else max_open_positions()
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
     if rotate:

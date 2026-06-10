@@ -16,8 +16,11 @@ from gex_core.trading.config import (
     max_open_positions,
     paper_trading_only,
     signal_ticker,
+    wall_stop_loss_pct,
+    wall_take_profit_pct,
     webull_underlying,
 )
+from gex_core.trading.exits import build_simple_exit_profile
 from gex_core.trading.execution import execution_summary, map_execution_strike, resolve_execution_spot
 from gex_core.trading.journal import (
     close_trade,
@@ -178,6 +181,20 @@ def run_low_gex_trade(
         else None
     )
 
+    exit_profile = build_simple_exit_profile(
+        stop_loss=wall_stop_loss_pct(),
+        take_profit=wall_take_profit_pct(),
+    )
+    profile_meta = {
+        "hold_for_target": exit_profile.hold_for_target,
+        "partial_take_profit": exit_profile.partial_take_profit,
+        "trail_trigger": exit_profile.trail_trigger,
+        "trail_floor": exit_profile.trail_floor,
+        "time_stop_bars": exit_profile.time_stop_bars,
+        "full_take_profit": exit_profile.full_take_profit,
+        "stop_loss": exit_profile.stop_loss,
+    }
+
     premium_est = estimate_entry_premium(exec_spot, exec_strike)
     qty = resolve_contract_qty(
         confidence=0.65,
@@ -228,6 +245,9 @@ def run_low_gex_trade(
             "execution_map": exec_map,
             "signal": signal_pack,
             "order": order,
+            "peak_pnl_pct": 0.0,
+            "partial_taken": False,
+            "exit_profile": profile_meta,
         }
     else:
         premium = premium_est
@@ -239,6 +259,9 @@ def run_low_gex_trade(
             "expire_date": expire_date,
             "execution_map": exec_map,
             "signal": signal_pack,
+            "peak_pnl_pct": 0.0,
+            "partial_taken": False,
+            "exit_profile": profile_meta,
         }
 
     trade_id = open_trade(

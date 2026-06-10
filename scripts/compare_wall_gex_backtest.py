@@ -34,8 +34,8 @@ def main() -> None:
     parser.add_argument("--ticker", default="SPX")
     parser.add_argument("--lookback-days", type=int, default=7)
     parser.add_argument("--starting-capital", type=float, default=500.0)
-    parser.add_argument("--stop-loss", type=float, default=0.05, help="Stop loss fraction (default 5%%)")
-    parser.add_argument("--take-profit", type=float, default=0.40, help="Take profit fraction (default 40%%)")
+    parser.add_argument("--stop-loss", type=float, default=0.03, help="Stop loss fraction (default 3%%)")
+    parser.add_argument("--take-profit", type=float, default=0.20, help="Take profit fraction (default 20%%)")
     parser.add_argument(
         "--reenter-each-bar",
         action="store_true",

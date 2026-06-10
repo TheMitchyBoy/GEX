@@ -105,6 +105,7 @@ def _exit_state_from_meta(meta: dict[str, Any]) -> ExitState:
 def _exit_profile_from_meta(meta: dict[str, Any], pos: dict[str, Any]) -> ExitProfile:
     saved = meta.get("exit_profile") or {}
     if saved:
+        stop_loss = saved.get("stop_loss")
         return ExitProfile(
             hold_for_target=bool(saved.get("hold_for_target")),
             partial_take_profit=saved.get("partial_take_profit"),
@@ -112,6 +113,7 @@ def _exit_profile_from_meta(meta: dict[str, Any], pos: dict[str, Any]) -> ExitPr
             trail_floor=float(saved.get("trail_floor", 0.05)),
             time_stop_bars=int(saved.get("time_stop_bars", 6)),
             full_take_profit=float(saved.get("full_take_profit", take_profit_pct())),
+            stop_loss=float(stop_loss) if stop_loss is not None else None,
         )
     return build_exit_profile(
         ai_confidence=float(pos.get("ai_confidence") or 0.5),

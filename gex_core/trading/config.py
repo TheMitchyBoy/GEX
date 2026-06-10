@@ -203,6 +203,20 @@ def max_entries_per_cycle() -> int:
         return 1
 
 
+def wall_stop_loss_pct() -> float:
+    try:
+        return max(0.01, float(os.environ.get("GEX_WALL_STOP_LOSS_PCT", "0.03")))
+    except (TypeError, ValueError):
+        return 0.03
+
+
+def wall_take_profit_pct() -> float:
+    try:
+        return max(0.05, float(os.environ.get("GEX_WALL_TAKE_PROFIT_PCT", "0.20")))
+    except (TypeError, ValueError):
+        return 0.20
+
+
 def low_gex_reenter_each_bar() -> bool:
     """Close open low-GEX positions every bar and open fresh toward the current wall."""
     return _flag("GEX_LOW_GEX_REENTER_EACH_BAR", "0")
