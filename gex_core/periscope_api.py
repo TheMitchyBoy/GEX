@@ -28,7 +28,7 @@ from gex_core.intraday_backfill import (
     uw_time_to_export_ts,
 )
 from gex_core.features import magnet_gamma_from_call_put
-from gex_core.spot_exposure import spot_exposure_net_series
+from gex_core.spot_exposure import spot_exposure_net_series, spot_exposure_surface_df
 from gex_core.storage import (
     list_indexed_dates,
     list_indexed_timestamps_before_date,
@@ -79,7 +79,13 @@ def _snapshot_from_strike(
     greek_exposure_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     profile = strike
-    if isinstance(greek_exposure_df, pd.DataFrame) and not greek_exposure_df.empty:
+    if isinstance(spot_exposures_df, pd.DataFrame) and not spot_exposures_df.empty:
+        surface = spot_exposure_surface_df(spot_exposures_df, "gamma")
+        if not surface.empty:
+            magnet = magnet_gamma_from_call_put(surface, spot)
+            if not magnet.empty:
+                profile = magnet.sort_index()
+    elif isinstance(greek_exposure_df, pd.DataFrame) and not greek_exposure_df.empty:
         magnet = magnet_gamma_from_call_put(greek_exposure_df, spot)
         if not magnet.empty:
             profile = magnet.sort_index()
@@ -104,15 +110,16 @@ def _snapshot_from_strike(
         "put_wall": put_wall,
         "gamma_flip": resolve_gamma_flip(
             spot=spot,
+            gex_by_strike=strike if strike is not None and not strike.empty else None,
+            cumulative_gex=strike.cumsum() if strike is not None and not strike.empty else None,
             greek_exposure_df=greek_exposure_df,
             greek_strike=greek_strike if greek_strike is not None and not greek_strike.empty else None,
-            gex_by_strike=profile if greek_exposure_df is None or greek_exposure_df.empty else None,
-            cumulative_gex=cumulative if greek_exposure_df is None or greek_exposure_df.empty else None,
+            spot_exposure_df=spot_exposures_df,
         ),
         "regime": "LONG gamma" if total_gex_bn >= 0 else "SHORT gamma",
         "data_source": data_source,
         "spot": float(spot),
-        "uw_endpoint": "greek-exposure/strike" if isinstance(greek_exposure_df, pd.DataFrame) and not greek_exposure_df.empty else "spot-exposures/strike",
+        "uw_endpoint": "spot-exposures/strike",
     }
     if spot_exposures_df is not None and not spot_exposures_df.empty:
         metrics["spot_exposures_df"] = spot_exposures_df
@@ -141,15 +148,15 @@ def snapshot_from_uw_entry(ticker: str, uw_entry: dict[str, Any], ts: str | None
         spot_df = None
         spot_strike = pd.Series(dtype=float)
 
-    if not greek_strike.empty:
-        strike = greek_strike
-        total_gex = safe_float(agg.total_gex_bn, float(strike.sum()))
-    elif not spot_strike.empty:
+    if not spot_strike.empty:
         strike = spot_strike
         total_gex = safe_float(
             uw_entry.get("spot_gamma_bn"),
             safe_float(agg.total_gex_bn, float(strike.sum())),
         )
+    elif not greek_strike.empty:
+        strike = greek_strike
+        total_gex = safe_float(agg.total_gex_bn, float(strike.sum()))
     else:
         strike = pd.Series(agg.gex_by_strike, dtype=float).sort_index()
         total_gex = safe_float(agg.total_gex_bn, float(strike.sum()))

@@ -85,6 +85,36 @@ def spot_exposure_gamma_flip(
     )
 
 
+def spot_exposure_surface_df(
+    spot_df: pd.DataFrame | None,
+    exposure: str = "gamma",
+) -> pd.DataFrame:
+    """Strike table in pipeline units (Bn$ / %) for charts and CSV export."""
+    if spot_df is None or spot_df.empty or "strike" not in spot_df.columns:
+        return pd.DataFrame()
+
+    exposure = exposure.lower()
+    call_col, put_col = EXPOSURE_OI_COLUMNS.get(exposure, EXPOSURE_OI_COLUMNS["gamma"])
+    if call_col not in spot_df.columns or put_col not in spot_df.columns:
+        return pd.DataFrame()
+
+    frame = spot_df.copy()
+    frame["strike"] = pd.to_numeric(frame["strike"], errors="coerce")
+    calls = pd.to_numeric(frame[call_col], errors="coerce").fillna(0.0) / RAW_SCALE
+    puts = pd.to_numeric(frame[put_col], errors="coerce").fillna(0.0) / RAW_SCALE
+    net = normalize_net_exposure(frame, call_col=call_col, put_col=put_col) / RAW_SCALE
+    out = pd.DataFrame(
+        {
+            "strike": frame["strike"].values,
+            "call_gex": calls.values,
+            "put_gex": puts.values,
+            "net_gex": net.values,
+            "GEX": net.values,
+        }
+    )
+    return out.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
+
+
 def spot_exposure_walls(strike_series: pd.Series) -> tuple[float | None, float | None]:
     """Call/put walls as max/min net gamma strikes."""
     if strike_series is None or strike_series.empty:

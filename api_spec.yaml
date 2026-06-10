@@ -11,8 +11,8 @@ info:
   version: "2026-06-08"
   description: |
     Endpoints and field semantics consumed by this repository. Gamma charts and
-    magnet maps must use greek-exposure/strike (verified trade-level GEX), not
-    spot-exposures/strike OI profiles, except where noted for intraday totals.
+    magnet maps use spot-exposures/strike (UW Periscope OI format). Greek-exposure
+    is optional extended context for term structure and wider strike chains.
 
 servers:
   - url: https://api.unusualwhales.com
@@ -93,7 +93,7 @@ x-gex-scaling:
     api_unit: raw_usd
     pipeline_unit: billions_usd_per_one_percent
     divisor: 1000000000
-    notes: OI/vol/bid/ask columns are raw $. Use for ATM grid only; charts prefer greek-exposure.
+    notes: OI/vol/bid/ask columns are raw $. Primary chart and magnet source.
   spot_exposure_intraday:
     endpoint_family: spot-exposures
     api_unit: raw_usd
@@ -105,7 +105,7 @@ paths:
   /api/stock/{ticker}/greek-exposure/strike:
     get:
       operationId: greekExposureByStrike
-      summary: Full GEX chain by strike (primary chart source)
+      summary: Full GEX chain by strike (extended context; optional)
       parameters:
         - name: ticker
           in: path
@@ -162,7 +162,7 @@ paths:
   /api/stock/{ticker}/spot-exposures/strike:
     get:
       operationId: spotExposuresByStrike
-      summary: ATM spot GEX grid (~50 strikes); secondary to greek-exposure for charts
+      summary: ATM spot GEX grid (~50 strikes); primary chart and magnet source
       parameters:
         - name: ticker
           in: path
@@ -239,9 +239,9 @@ paths:
 x-gex-implementation:
   loader_module: gex_core.uw_loader
   client_id: "100001"
-  chart_gamma_source: greek-exposure/strike
-  magnet_gamma_source: greek-exposure/strike
-  gamma_flip_source: greek-exposure/strike
+  chart_gamma_source: spot-exposures/strike
+  magnet_gamma_source: spot-exposures/strike
+  gamma_flip_source: spot-exposures/strike
   gamma_flip_method: magnet_profile_atm_window
   intraday_total_gex_source: spot-exposures
   live_price_source: uw_price_websocket
@@ -253,5 +253,5 @@ x-gex-implementation:
     Only the UW price websocket (and SSE /api/spot-stream reading that cache) should
     update sub-second.     Gamma/GEX REST endpoints refresh on the scheduler cadence
     (GEX_REFRESH_INTERVAL_MINUTES, default 10m), not every tick.
-    Gamma flip uses magnet_gamma_from_call_put on greek-exposure/strike inside
+    Gamma flip uses magnet_gamma_from_call_put on spot-exposures/strike inside
     an ATM window (±6% around spot); never the full-chain cumulative zero-cross.

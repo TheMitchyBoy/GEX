@@ -41,8 +41,8 @@ def test_implementation_rules_match_loader():
     rules = implementation_rules()
     assert rules["loader_module"] == "gex_core.uw_loader"
     assert rules["client_id"] == _CLIENT_ID
-    assert rules["chart_gamma_source"] == "greek-exposure/strike"
-    assert rules["gamma_flip_source"] == "greek-exposure/strike"
+    assert rules["chart_gamma_source"] == "spot-exposures/strike"
+    assert rules["gamma_flip_source"] == "spot-exposures/strike"
     assert rules["gamma_flip_method"] == "magnet_profile_atm_window"
     assert set(rules["retryable_http_status"]) == set(_RETRYABLE_STATUS)
 
@@ -54,7 +54,7 @@ def test_spec_server_matches_loader_base_url():
     assert servers[0]["url"] == _BASE_URL
 
 
-def test_snapshot_gamma_flip_prefers_greek_strike():
+def test_snapshot_gamma_flip_prefers_spot_strike():
     import pandas as pd
 
     from gex_core.features import enrich_snapshot_metrics
@@ -73,8 +73,6 @@ def test_snapshot_gamma_flip_prefers_greek_strike():
     )
     flip = metrics["gamma_flip"]
     assert flip is not None
-    # Greek chain crosses near 7450; OI profile would flip much lower.
-    assert 7440.0 < float(flip) < 7455.0
     spot_flip = enrich_snapshot_metrics(
         {
             "strike": spot_oi,
@@ -84,4 +82,15 @@ def test_snapshot_gamma_flip_prefers_greek_strike():
             "put_wall": 7440.0,
         }
     )["gamma_flip"]
-    assert float(flip) != float(spot_flip)
+    assert float(flip) == float(spot_flip)
+    greek_flip = enrich_snapshot_metrics(
+        {
+            "strike": pd.Series(dtype=float),
+            "greek_strike": greek,
+            "cumulative": greek.cumsum(),
+            "spot": 7460.0,
+            "call_wall": 7460.0,
+            "put_wall": 7440.0,
+        }
+    )["gamma_flip"]
+    assert float(flip) != float(greek_flip)

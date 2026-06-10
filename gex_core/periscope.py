@@ -327,7 +327,7 @@ def _magnet_net_fallback_series(
         if not series.empty:
             return series.sort_index()
 
-    if exposure == "gamma" and not gex_series.empty and not _snapshot_strike_is_spot_oi(snapshot):
+    if exposure == "gamma" and not gex_series.empty:
         return gex_series.sort_index()
 
     return pd.Series(dtype=float)
@@ -360,6 +360,21 @@ def _resolve_magnet_greek_df(
     return None
 
 
+def _resolve_spot_exposure_df(
+    *,
+    uw_entry: dict | None,
+    snapshot: dict[str, Any],
+) -> pd.DataFrame | None:
+    if uw_entry and uw_entry.get("agg") is not None:
+        spot_df = uw_entry["agg"].gex_by_strike.attrs.get("spot_exposures_df")
+        if isinstance(spot_df, pd.DataFrame) and not spot_df.empty:
+            return spot_df
+    spot_df = snapshot.get("spot_exposures_df")
+    if isinstance(spot_df, pd.DataFrame) and not spot_df.empty:
+        return spot_df
+    return None
+
+
 def _magnet_exposure_series(
     *,
     exposure: str,
@@ -369,10 +384,24 @@ def _magnet_exposure_series(
     snapshot: dict[str, Any],
     gex_series: pd.Series,
 ) -> pd.Series:
-    """Greek-exposure profile for the magnet map — never spot-exposures OI when greek exists."""
-    exposure = exposure.lower()
-    resolved_df = _resolve_magnet_greek_df(uw_entry=uw_entry, greek_df=greek_df, snapshot=snapshot)
+    """Magnet map profile — primary source is spot-exposures/strike OI."""
+    from gex_core.spot_exposure import spot_exposure_surface_df
 
+    exposure = exposure.lower()
+    spot_df = _resolve_spot_exposure_df(uw_entry=uw_entry, snapshot=snapshot)
+    if isinstance(spot_df, pd.DataFrame) and not spot_df.empty:
+        surface = spot_exposure_surface_df(spot_df, exposure)
+        if exposure == "gamma" and not surface.empty:
+            series = magnet_gamma_from_call_put(surface, spot)
+            if not series.empty:
+                return series.sort_index()
+        if not surface.empty and "net_gex" in surface.columns:
+            return pd.Series(
+                pd.to_numeric(surface.set_index("strike")["net_gex"], errors="coerce"),
+                dtype=float,
+            ).dropna().sort_index()
+
+    resolved_df = _resolve_magnet_greek_df(uw_entry=uw_entry, greek_df=greek_df, snapshot=snapshot)
     if exposure == "gamma" and isinstance(resolved_df, pd.DataFrame) and not resolved_df.empty:
         series = magnet_gamma_from_call_put(resolved_df, spot)
         if not series.empty:
@@ -387,20 +416,6 @@ def _magnet_exposure_series(
     )
 
 
-def _prefer_denser_exposure(spot_series: pd.Series, greek_series: pd.Series, spot: float) -> pd.Series | None:
-    """Prefer the greek chain when it has materially more strikes near spot."""
-    spot_val = safe_float(spot, 0.0)
-    if spot_val <= 0 or spot_series.empty or greek_series.empty:
-        return None
-    band = spot_val * 0.025
-    lo, hi = spot_val - band, spot_val + band
-    spot_n = int(((spot_series.index >= lo) & (spot_series.index <= hi)).sum())
-    greek_n = int(((greek_series.index >= lo) & (greek_series.index <= hi)).sum())
-    if greek_n >= max(spot_n + 8, int(spot_n * 1.35)):
-        return greek_series.sort_index()
-    return None
-
-
 def _exposure_series(
     spot_df: pd.DataFrame | None,
     greek_df: pd.DataFrame | None,
@@ -409,7 +424,7 @@ def _exposure_series(
     *,
     spot: float | None = None,
 ) -> pd.Series:
-    """Per-strike exposure — prefer UW spot-exposures when they bracket spot."""
+    """Per-strike exposure — primary source is spot-exposures/strike."""
     exposure = exposure.lower()
     spot_val = safe_float(spot, 0.0)
     spot_series = spot_exposure_net_series(spot_df, exposure)
@@ -417,9 +432,6 @@ def _exposure_series(
 
     if spot_val > 0 and not spot_covers_strike_grid(spot_series, spot_val) and not greek_series.empty:
         return greek_series.sort_index()
-    denser = _prefer_denser_exposure(spot_series, greek_series, spot_val)
-    if denser is not None:
-        return denser
     if not spot_series.empty:
         return spot_series.sort_index()
     if not greek_series.empty:
@@ -612,6 +624,7 @@ def build_periscope_context(
         cumulative_gex=gex_series.cumsum() if not gex_series.empty else None,
         greek_exposure_df=greek_df,
         greek_strike=greek_strike if greek_strike is not None and not greek_strike.empty else None,
+        spot_exposure_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
     )
     if gamma_flip is None:
         gamma_flip = parse_gamma_flip_value(selected.get("gamma_flip"))

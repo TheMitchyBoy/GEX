@@ -43,7 +43,7 @@ def write_snapshot_export(
             total_gex_bn=float(summary.get("total_gex_bn_per_pct", 0.0)),
             regime=str(summary.get("net_gamma_regime", "N/A")),
             data_quality=summary.get("data_quality"),
-            uw_endpoint=str(summary.get("uw_endpoint", "greek-exposure/strike")),
+            uw_endpoint=str(summary.get("uw_endpoint", "spot-exposures/strike")),
         )
         summary = {**meta, **summary}
 

@@ -6,14 +6,13 @@ which uses verified trade-level data rather than open-interest assumptions.
 
 Endpoints used
 --------------
-  GET /api/stock/{ticker}/greek-exposure/strike
-      774 strikes, all expirations combined.  Returns call_gex, put_gex,
-      call_delta, put_delta, call_charm, put_charm, call_vanna, put_vanna.
-      Values are in millions of dollars (M$); divide by 1e3 for Bn$/%.
-
   GET /api/stock/{ticker}/spot-exposures/strike
-      ~50 ATM strikes.  Used for the current spot price (``price`` field)
-      and intraday granularity (OI vs volume vs bid/ask gamma).
+      ~50 ATM strikes (primary GEX source).  Returns call_gamma_oi, put_gamma_oi,
+      and related OI/vol/bid/ask columns.  Raw dollars per 1% move; divide by 1e9
+      for Bn$/%.
+
+  GET /api/stock/{ticker}/greek-exposure/strike
+      Full chain (~700+ strikes).  Optional extended context; values in M$ (÷1e3).
 
 Authentication
 --------------
@@ -518,10 +517,11 @@ def fetch_uw_gex(
 
     Notes
     -----
-    UW computes GEX from verified transaction data (buy/sell flags) rather
-    than open-interest alone, so values may differ from CBOE-based estimates.
+    Primary strike GEX uses ``spot-exposures/strike`` (OI-based, UW Periscope format).
+    Greek-exposure is fetched optionally for extended charm/vanna context only.
     """
-    df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
+    from gex_core.spot_exposure import spot_exposure_net_series, spot_exposure_surface_df
+
     spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=date)
     spot = 0.0
     if not spot_df.empty and "price" in spot_df.columns:
@@ -531,54 +531,62 @@ def fetch_uw_gex(
     if spot <= 0:
         spot = fetch_uw_best_spot_price(ticker, api_key=api_key, date=date)
     elif date is None:
-        # Live session: prefer stock-state over spot-exposures strike ``price``.
         state_price = fetch_uw_stock_state_price(ticker, api_key=api_key)
         if state_price > 0:
             spot = state_price
     logger.info("UW spot price for %s: %.2f", ticker, spot)
 
-    gex_by_expiration = fetch_uw_greek_exposure_by_expiration(ticker, api_key=api_key, date=date)
-
-    gex_by_strike = pd.Series(
-        df["net_gex"].values,
-        index=df["strike"].values,
-        name="GEX",
-        dtype=float,
-    )
+    gex_by_strike = spot_exposure_net_series(spot_df, "gamma")
+    gex_by_strike.name = "GEX"
     gex_by_strike.index.name = "strike"
-    gex_by_strike = gex_by_strike.sort_index()
+
+    greek_df = pd.DataFrame()
+    if gex_by_strike.empty:
+        greek_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
+        gex_by_strike = pd.Series(
+            greek_df["net_gex"].values,
+            index=greek_df["strike"].values,
+            name="GEX",
+            dtype=float,
+        )
+        gex_by_strike.index.name = "strike"
+        gex_by_strike = gex_by_strike.sort_index()
+    else:
+        try:
+            greek_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
+        except Exception:
+            logger.debug("Optional greek-exposure fetch failed for %s", ticker, exc_info=True)
+
+    gex_by_expiration = fetch_uw_greek_exposure_by_expiration(ticker, api_key=api_key, date=date)
 
     cumulative_gex = gex_by_strike.cumsum()
     total_gex_bn = float(gex_by_strike.sum())
-    market_date = df.attrs.get("market_date")
+    market_date = None
+    if not spot_df.empty and spot_df.attrs.get("market_date"):
+        market_date = spot_df.attrs["market_date"]
+    elif not greek_df.empty and greek_df.attrs.get("market_date"):
+        market_date = greek_df.attrs["market_date"]
     if market_date:
         gex_by_strike.attrs["market_date"] = market_date
         cumulative_gex.attrs["market_date"] = market_date
         if not gex_by_expiration.empty:
             gex_by_expiration.attrs["market_date"] = market_date
 
-    surface_data = pd.DataFrame()
-    if not df.empty and {"strike", "net_gex"}.issubset(df.columns):
+    surface_data = spot_exposure_surface_df(spot_df, "gamma")
+    if surface_data.empty and not greek_df.empty and {"strike", "net_gex"}.issubset(greek_df.columns):
         surface_cols = ["strike", "net_gex"]
-        if "call_gex" in df.columns:
+        if "call_gex" in greek_df.columns:
             surface_cols.append("call_gex")
-        if "put_gex" in df.columns:
+        if "put_gex" in greek_df.columns:
             surface_cols.append("put_gex")
-        surface_data = df[surface_cols].rename(columns={"net_gex": "GEX"}).copy()
-        if "call_charm" in df.columns:
-            surface_data["charm"] = pd.to_numeric(df["call_charm"], errors="coerce").fillna(0.0) + pd.to_numeric(
-                df["put_charm"], errors="coerce"
-            ).fillna(0.0)
-        if "call_vanna" in df.columns:
-            surface_data["vanna"] = pd.to_numeric(df["call_vanna"], errors="coerce").fillna(0.0) + pd.to_numeric(
-                df["put_vanna"], errors="coerce"
-            ).fillna(0.0)
+        surface_data = greek_df[surface_cols].rename(columns={"net_gex": "GEX"}).copy()
 
-    gex_by_strike.attrs["greek_exposure_df"] = df
     gex_by_strike.attrs["spot_exposures_df"] = spot_df
+    gex_by_strike.attrs["greek_exposure_df"] = greek_df if not greek_df.empty else None
+    gex_by_strike.attrs["uw_endpoint"] = "spot-exposures/strike"
 
     logger.info(
-        "UW GEX for %s: total=%.3f Bn$, strikes=%d, gamma_flip near zero-crossing",
+        "UW GEX for %s: total=%.3f Bn$, strikes=%d (spot-exposures/strike)",
         ticker, total_gex_bn, len(gex_by_strike),
     )
 

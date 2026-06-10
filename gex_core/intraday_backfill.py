@@ -124,8 +124,12 @@ def _build_summary(
         cross_asset=cross_asset if cross_asset is not None else fetch_cross_asset_returns(),
     )
     from gex_core.features import resolve_gamma_flip
+    from gex_core.spot_exposure import spot_exposure_net_series
 
-    if greek_df is not None and not greek_df.empty and "strike" in greek_df.columns:
+    if spot_df is not None and not spot_df.empty:
+        strike = spot_exposure_net_series(spot_df, "gamma")
+        cumulative = strike.cumsum()
+    elif greek_df is not None and not greek_df.empty and "strike" in greek_df.columns:
         strike = pd.Series(
             pd.to_numeric(greek_df["net_gex"], errors="coerce").fillna(0.0).values,
             index=pd.to_numeric(greek_df["strike"], errors="coerce").values,
@@ -141,6 +145,7 @@ def _build_summary(
         gex_by_strike=strike if not strike.empty else None,
         cumulative_gex=cumulative if not cumulative.empty else None,
         greek_exposure_df=greek_df,
+        spot_exposure_df=spot_df,
     )
     if flip is not None:
         summary["gamma_flip"] = float(flip)
@@ -173,7 +178,7 @@ def export_live_strike_snapshot(
         market_date=market_date,
         spot=spot,
         total_gex_bn=agg.total_gex_bn,
-        uw_endpoint="greek-exposure/strike",
+        uw_endpoint="spot-exposures/strike",
         granularity=f"{interval}min",
         greek_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         spot_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
@@ -328,7 +333,7 @@ def backfill_daily_strike_snapshots(
         market_date=market_date,
         spot=spot,
         total_gex_bn=agg.total_gex_bn,
-        uw_endpoint="greek-exposure/strike",
+        uw_endpoint="spot-exposures/strike",
         granularity="eod",
         greek_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
     )

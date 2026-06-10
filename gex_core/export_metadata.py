@@ -35,7 +35,7 @@ def build_export_metadata(
     total_gex_bn: float,
     regime: str,
     data_quality: dict[str, Any] | None = None,
-    uw_endpoint: str = "greek-exposure/strike",
+    uw_endpoint: str = "spot-exposures/strike",
 ) -> dict[str, Any]:
     """Metadata block merged into ``{TICKER}_summary_{ts}.json``."""
     return {

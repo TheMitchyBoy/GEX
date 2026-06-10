@@ -240,14 +240,15 @@ def test_spot_stream_does_not_poll_uw_rest(monkeypatch):
         assert any(b"5012.5" in chunk for chunk in chunks)
 
 
-def test_refresh_uw_data_gamma_flip_uses_greek_exposure(monkeypatch):
-    """Live UW cache must not derive gamma flip from spot-exposures OI."""
+def test_refresh_uw_data_gamma_flip_uses_spot_exposure(monkeypatch):
+    """Live UW cache derives gamma flip from spot-exposures/strike."""
     from unittest.mock import patch
 
     import pandas as pd
 
     import web_app
     from gex_core.pipeline import GexAggregates
+    from gex_core.spot_exposure import spot_exposure_net_series
 
     monkeypatch.setenv("UW_API_KEY", "test-key")
     monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
@@ -263,15 +264,16 @@ def test_refresh_uw_data_gamma_flip_uses_greek_exposure(monkeypatch):
     )
     spot_df = pd.DataFrame(
         {
-            "strike": [7440.0, 7450.0, 7460.0],
-            "call_gamma_oi": [1e9, 1e9, 2e9],
-            "put_gamma_oi": [-3e9, -3e9, -2e9],
+            "strike": [7440.0, 7450.0, 7460.0, 7480.0],
+            "call_gamma_oi": [1e9, 2e9, 3e9, 2e9],
+            "put_gamma_oi": [-3e9, -1.5e9, -1e9, -1e9],
         }
     )
     spot_df["net_gamma_oi"] = spot_df["call_gamma_oi"] + spot_df["put_gamma_oi"]
-    gex_by_strike = pd.Series(greek_df["net_gex"].values, index=greek_df["strike"].values)
+    gex_by_strike = spot_exposure_net_series(spot_df, "gamma")
     gex_by_strike.attrs["greek_exposure_df"] = greek_df
     gex_by_strike.attrs["spot_exposures_df"] = spot_df
+    gex_by_strike.attrs["uw_endpoint"] = "spot-exposures/strike"
     agg = GexAggregates(
         gex_by_strike=gex_by_strike,
         gex_by_expiration=pd.Series(dtype=float),
@@ -289,4 +291,4 @@ def test_refresh_uw_data_gamma_flip_uses_greek_exposure(monkeypatch):
 
     assert entry is not None
     flip = float(entry["gamma_flip"])
-    assert 7440.0 < flip < 7455.0
+    assert 7450.0 < flip < 7475.0

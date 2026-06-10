@@ -83,17 +83,18 @@ def main() -> None:
     _section("Chart mapping cheat sheet")
     print(
         """
-Primary gamma-by-strike chart (use this, not spot-OI):
+Primary gamma-by-strike chart (UW Periscope format):
+  endpoint : spot-exposures/strike
+  x        : strike
+  y        : net_gamma_oi = call_gamma_oi + put_gamma_oi  [raw $ -> /1e9 for Bn$]
+  magnet   : magnet(call_gamma_oi, put_gamma_oi) scaled to Bn$
+  spot     : price column
+
+Extended full chain (optional context):
   endpoint : greek-exposure/strike
   x        : strike
   y        : net_gex  OR magnet(call_gex, put_gex)  [Bn$ / %]
   scale    : divide API values by 1e3 (M$ -> Bn$)
-
-ATM grid / spot price only:
-  endpoint : spot-exposures/strike
-  x        : strike
-  y        : net_gamma_oi = call_gamma_oi + put_gamma_oi  [raw $ -> /1e9 for Bn$]
-  spot     : price column
 
 Intraday total GEX banner:
   endpoint : spot-exposures

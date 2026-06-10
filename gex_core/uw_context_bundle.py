@@ -329,7 +329,10 @@ def build_uw_context_bundle(
     # Surface data (charm/vanna by strike when available)
     surface_records: list[dict[str, Any]] = []
     if not agg.surface_data.empty:
-        surface_window = _strike_window_df(agg.surface_data.rename(columns={"GEX": "net_gex"}), spot, sort_by_abs="net_gex")
+        surface = agg.surface_data.copy()
+        if "net_gex" not in surface.columns and "GEX" in surface.columns:
+            surface = surface.rename(columns={"GEX": "net_gex"})
+        surface_window = _strike_window_df(surface, spot, sort_by_abs="net_gex")
         surface_cols = [c for c in ("strike", "net_gex", "charm", "vanna") if c in surface_window.columns]
         surface_records = _df_to_records(surface_window, surface_cols)
 

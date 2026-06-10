@@ -163,11 +163,13 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
 
         spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
         greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
+        spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
         gamma_flip = resolve_gamma_flip(
             spot=spot,
             gex_by_strike=agg.gex_by_strike,
             cumulative_gex=agg.cumulative_gex,
             greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+            spot_exposure_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
         )
         spot_gamma_bn = fetch_spot_gamma_aggregate_bn(ticker, api_key=uw_api_key())
         analysis = analyze_dealer_gamma(
@@ -283,7 +285,7 @@ def _prediction_public_view(prediction: dict | None) -> dict | None:
 
 
 def _strategy_exposure_from_context(ctx: dict) -> tuple[pd.Series | None, pd.Series | None]:
-    """Greek-exposure profile for magnets (shows +γ below spot); falls back to spot-exposures."""
+    """Spot-exposures/strike profile for magnets; greek-exposure is extended fallback."""
     exposure = ctx.get("magnet_exposure_series")
     if exposure is None or (isinstance(exposure, pd.Series) and exposure.empty):
         exposure = ctx.get("exposure_series")

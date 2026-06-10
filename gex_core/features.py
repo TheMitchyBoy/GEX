@@ -53,20 +53,27 @@ def resolve_gamma_flip(
     cumulative_gex: pd.Series | None = None,
     greek_exposure_df: pd.DataFrame | None = None,
     greek_strike: pd.Series | None = None,
+    spot_exposure_df: pd.DataFrame | None = None,
 ) -> float | None:
-    """Canonical gamma flip: UW magnet profile near ATM, then profile fallbacks."""
-    if greek_exposure_df is not None and not greek_exposure_df.empty:
-        flip = gamma_flip_from_uw_greek(greek_exposure_df, spot)
-        if flip is not None:
-            return flip
-        # Greek-exposure is authoritative — do not fall back to spot-OI profiles.
-        return None
-    if greek_strike is not None and not greek_strike.empty:
-        flip = gamma_flip_from_profile(greek_strike, spot)
-        if flip is not None:
-            return flip
+    """Canonical gamma flip: spot-exposures/strike magnet profile near ATM, then fallbacks."""
+    from gex_core.spot_exposure import spot_exposure_surface_df
+
+    if spot_exposure_df is not None and not spot_exposure_df.empty:
+        surface = spot_exposure_surface_df(spot_exposure_df, "gamma")
+        if not surface.empty:
+            flip = gamma_flip_from_uw_greek(surface, spot, gex_by_strike=gex_by_strike)
+            if flip is not None:
+                return flip
     if gex_by_strike is not None and not gex_by_strike.empty:
         flip = gamma_flip_from_profile(gex_by_strike, spot)
+        if flip is not None:
+            return flip
+    if greek_exposure_df is not None and not greek_exposure_df.empty:
+        flip = gamma_flip_from_uw_greek(greek_exposure_df, spot, gex_by_strike=gex_by_strike)
+        if flip is not None:
+            return flip
+    if greek_strike is not None and not greek_strike.empty:
+        flip = gamma_flip_from_profile(greek_strike, spot)
         if flip is not None:
             return flip
     if cumulative_gex is not None and not cumulative_gex.empty:
@@ -81,25 +88,33 @@ def estimate_gamma_flip_detailed(
     cumulative_gex: pd.Series | None = None,
     greek_exposure_df: pd.DataFrame | None = None,
     greek_strike: pd.Series | None = None,
+    spot_exposure_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Gamma flip strike with confidence from the ATM-local profile."""
+    from gex_core.spot_exposure import spot_exposure_surface_df
+
     flip = resolve_gamma_flip(
         spot=spot,
         gex_by_strike=gex_by_strike,
         cumulative_gex=cumulative_gex,
         greek_exposure_df=greek_exposure_df,
         greek_strike=greek_strike,
+        spot_exposure_df=spot_exposure_df,
     )
     if flip is None:
         return {"flip_strike": None, "confidence": "none", "message": "no zero-crossing"}
 
     profile = pd.Series(dtype=float)
-    if greek_exposure_df is not None and not greek_exposure_df.empty:
+    if spot_exposure_df is not None and not spot_exposure_df.empty:
+        surface = spot_exposure_surface_df(spot_exposure_df, "gamma")
+        if not surface.empty:
+            profile = magnet_gamma_from_call_put(surface, spot)
+    if profile.empty and gex_by_strike is not None and not gex_by_strike.empty:
+        profile = pd.Series(gex_by_strike, dtype=float).sort_index()
+    if profile.empty and greek_exposure_df is not None and not greek_exposure_df.empty:
         profile = magnet_gamma_from_call_put(greek_exposure_df, spot)
     if profile.empty and greek_strike is not None and not greek_strike.empty:
         profile = pd.Series(greek_strike, dtype=float).sort_index()
-    if profile.empty and gex_by_strike is not None and not gex_by_strike.empty:
-        profile = pd.Series(gex_by_strike, dtype=float).sort_index()
     if profile.empty and cumulative_gex is not None and not cumulative_gex.empty:
         profile = cumulative_gex.diff().dropna()
         if profile.empty:
@@ -262,7 +277,7 @@ def gamma_flip_from_uw_greek(
     gex_by_strike: pd.Series | None = None,
     cumulative_gex: pd.Series | None = None,
 ) -> float | None:
-    """ATM gamma flip from UW greek-exposure (magnet profile when call/put cancel)."""
+    """ATM gamma flip from call/put surface (magnet profile when legs cancel)."""
     flip_series = magnet_gamma_from_call_put(greek_df, spot)
     if flip_series.empty and gex_by_strike is not None and not gex_by_strike.empty:
         flip_series = pd.Series(gex_by_strike, dtype=float).sort_index()
@@ -684,8 +699,11 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     put_wall = safe_float(metrics.get("put_wall"), 0.0)
     greek_strike = metrics.get("greek_strike")
     greek_df = metrics.get("greek_exposure_df")
+    spot_df = metrics.get("spot_exposures_df")
     if not isinstance(greek_df, pd.DataFrame):
         greek_df = None
+    if not isinstance(spot_df, pd.DataFrame):
+        spot_df = None
     strike_for_flip = pd.Series(strike, dtype=float).sort_index() if len(strike) else pd.Series(dtype=float)
     gamma_flip = resolve_gamma_flip(
         spot=spot if spot > 0 else None,
@@ -693,6 +711,7 @@ def enrich_snapshot_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         cumulative_gex=pd.Series(cumulative, dtype=float).sort_index() if len(cumulative) else None,
         greek_exposure_df=greek_df,
         greek_strike=greek_strike if isinstance(greek_strike, pd.Series) else None,
+        spot_exposure_df=spot_df,
     )
     if gamma_flip is None:
         gamma_flip = parse_gamma_flip_value(metrics.get("gamma_flip"))

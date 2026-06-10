@@ -1,4 +1,4 @@
-"""Magnet map uses greek exposure (shows +γ below spot), not spot-exposures OI only."""
+"""Magnet map uses spot-exposures/strike (UW Periscope OI format)."""
 
 from unittest.mock import patch
 
@@ -9,7 +9,7 @@ from gex_core.periscope import _greek_exposure_from_df, build_periscope_context
 from gex_core.spot_exposure import spot_exposure_net_series
 
 
-def test_magnet_exposure_prefers_greek_over_spot_oi():
+def test_magnet_exposure_prefers_spot_oi_over_greek():
     spot_df = pd.DataFrame(
         {
             "strike": [7560.0, 7570.0, 7580.0, 7590.0, 7600.0],
@@ -64,10 +64,9 @@ def test_magnet_exposure_prefers_greek_over_spot_oi():
 
     spot_series = ctx["exposure_series"]
     magnet = ctx["magnet_exposure_series"]
-    below_spot = magnet[magnet.index < 7580.0]
     assert (spot_series[spot_series.index < 7580.0] > 0).sum() == 0
-    assert (below_spot > 0).sum() >= 1
-    assert float(magnet.loc[7570.0]) == 2.5
+    assert float(magnet.loc[7570.0]) == -1.0
+    assert float(magnet.loc[7570.0]) != 2.5
 
 
 def test_greek_exposure_from_df_reads_gex_column():
@@ -77,7 +76,7 @@ def test_greek_exposure_from_df_reads_gex_column():
     assert float(series.loc[7510.0]) == -2.0
 
 
-def test_magnet_uses_greek_strike_without_uw_entry():
+def test_magnet_uses_spot_oi_without_uw_entry():
     spot_df = pd.DataFrame(
         {
             "strike": [7440.0, 7450.0, 7460.0, 7470.0, 7480.0],
@@ -117,9 +116,8 @@ def test_magnet_uses_greek_strike_without_uw_entry():
         )
 
     magnet = ctx["magnet_exposure_series"]
-    assert (magnet[magnet.index < 7460.0] > 0).sum() >= 1
-    assert float(magnet.loc[7450.0]) == 2.5
     assert (ctx["exposure_series"][ctx["exposure_series"].index < 7460.0] > 0).sum() == 0
+    assert float(magnet.loc[7450.0]) == -2.0
 
 
 def test_magnet_uses_surface_data_when_greek_df_missing():
@@ -161,7 +159,7 @@ def test_magnet_uses_surface_data_when_greek_df_missing():
         )
 
     magnet = ctx["magnet_exposure_series"]
-    assert float(magnet.loc[7450.0]) == 2.5
+    assert float(magnet.loc[7450.0]) == -2.0
 
 
 def test_magnet_gamma_shows_dominant_call_when_net_cancels_at_7430():
@@ -179,8 +177,8 @@ def test_magnet_gamma_shows_dominant_call_when_net_cancels_at_7430():
     assert float(magnet.loc[7460.0]) == 1.206460
 
 
-def test_magnet_never_falls_back_to_spot_oi_when_greek_missing():
-    """Intraday API snapshots without greek must not feed spot OI into the magnet map."""
+def test_magnet_uses_spot_oi_when_greek_fetch_available():
+    """Spot-exposures/strike is primary even when greek-exposure is cached."""
     spot_df = pd.DataFrame(
         {
             "strike": [7540.0, 7550.0, 7560.0, 7570.0, 7580.0],
@@ -220,10 +218,8 @@ def test_magnet_never_falls_back_to_spot_oi_when_greek_missing():
         ctx = build_periscope_context(ticker="SPX", selected_ts="2026-06-08_151806", uw_entry=None)
 
     magnet = ctx["magnet_exposure_series"]
-    below = magnet[magnet.index < 7580.0]
-    assert (below > 0).sum() >= 2
-    assert float(magnet.loc[7560.0]) == 0.24
-    assert float(magnet.loc[7570.0]) == 0.76
+    assert float(magnet.loc[7560.0]) == -0.5
+    assert float(magnet.loc[7570.0]) == 2.0
 
 
 def test_magnet_context_uses_call_gex_for_cancelled_7430():

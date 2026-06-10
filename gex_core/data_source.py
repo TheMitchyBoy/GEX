@@ -67,5 +67,5 @@ def fetch_gex_data(
         option_data=None,
         greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         spot_exposures_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
-        note="Unusual Whales greek-exposure by strike",
+        note="Unusual Whales spot-exposures by strike",
     )

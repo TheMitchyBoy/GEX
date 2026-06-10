@@ -164,6 +164,7 @@ def _run_uw(
         print(f"  {color_text('SHORT', ANSI_RED):<12} {strike:<10.0f} {gex:.3f}")
 
     greek_df = gex_by_strike.attrs.get("greek_exposure_df") if hasattr(gex_by_strike, "attrs") else None
+    spot_df = gex_by_strike.attrs.get("spot_exposures_df") if hasattr(gex_by_strike, "attrs") else None
     from gex_core.features import estimate_gamma_flip_detailed, resolve_gamma_flip
 
     gamma_flip_detail = estimate_gamma_flip_detailed(
@@ -171,12 +172,14 @@ def _run_uw(
         gex_by_strike=gex_by_strike,
         cumulative_gex=cumulative_gex,
         greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+        spot_exposure_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
     )
     gamma_flip_strike = resolve_gamma_flip(
         spot=spot_price,
         gex_by_strike=gex_by_strike,
         cumulative_gex=cumulative_gex,
         greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+        spot_exposure_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
     )
     print_gamma_flip_estimate(gamma_flip_detail)
 
@@ -305,7 +308,7 @@ def _run_uw(
             else None,
             "gamma_flip": gamma_flip_strike,
             "gamma_flip_detail": gamma_flip_detail,
-            "uw_endpoint": "greek-exposure/strike",
+            "uw_endpoint": "spot-exposures/strike",
         }
         from gex_core.snapshot_export import write_snapshot_export
 
