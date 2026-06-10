@@ -6,12 +6,15 @@ import logging
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from gex_core.trading.config import (
+    live_trading_allowed,
     webull_account_id,
     webull_app_key,
     webull_app_secret,
+    webull_configured,
     webull_data_endpoint,
     webull_equity_cache_seconds,
     webull_fill_poll_sec,
@@ -20,6 +23,7 @@ from gex_core.trading.config import (
     webull_option_category,
     webull_region,
     webull_trade_endpoint,
+    webull_use_uat,
 )
 from gex_core.trading.execution import build_webull_option_symbol
 from gex_core.trading.paper_broker import estimate_entry_premium, estimate_option_pnl_pct
@@ -33,11 +37,160 @@ _data_client = None
 _FILLED = frozenset({"FILLED", "PARTIAL FILLED", "PARTIAL_FILLED", 4, 5, "4", "5"})
 _TERMINAL_BAD = frozenset({"CANCELLED", "FAILED", "REJECTED", 2, 3, "2", "3"})
 _EQUITY_CACHE: dict[str, tuple[float, float]] = {}
+_LAST_WEBULL_ERROR: dict[str, Any] = {}
+_RATE_LIMIT_COOLDOWN_SEC = 45
 
 
 def clear_webull_equity_cache() -> None:
     """Drop cached Webull net-liquidation values (for tests)."""
     _EQUITY_CACHE.clear()
+
+
+def clear_webull_error_state() -> None:
+    """Reset cached Webull auth/rate-limit state (for tests)."""
+    _LAST_WEBULL_ERROR.clear()
+
+
+def _token_file_path() -> Path:
+    env_dir = os.environ.get("WEBULL_OPENAPI_TOKEN_DIR", "").strip()
+    base = Path(env_dir).expanduser() if env_dir else Path("conf")
+    return base.resolve() / "token.txt"
+
+
+def read_local_webull_token() -> dict[str, Any]:
+    """Read cached Webull OpenAPI token metadata from disk."""
+    path = _token_file_path()
+    if not path.is_file():
+        return {"has_token": False, "token_status": None, "token_path": str(path)}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        logger.debug("Webull token file read failed: %s", exc)
+        return {"has_token": False, "token_status": None, "token_path": str(path), "error": str(exc)}
+    token = lines[0].strip() if len(lines) > 0 else ""
+    status = lines[2].strip().upper() if len(lines) > 2 else ""
+    if not token:
+        return {"has_token": False, "token_status": status or None, "token_path": str(path)}
+    return {
+        "has_token": True,
+        "token_status": status or None,
+        "token_path": str(path),
+    }
+
+
+def _is_rate_limited_message(message: str) -> bool:
+    upper = message.upper()
+    return "429" in upper or "TOO_MANY_REQUESTS" in upper or "TOO MANY REQUESTS" in upper
+
+
+def note_webull_error(exc: Exception | str) -> None:
+    """Remember recent Webull failures for dashboard auth/rate-limit banners."""
+    message = str(exc)
+    upper = message.upper()
+    pending = "STATUS:PENDING" in upper or "STATUS NOT VERIFIED" in upper or "ERROR_INIT_TOKEN" in upper
+    rate_limited = _is_rate_limited_message(message)
+    _LAST_WEBULL_ERROR.update(
+        {
+            "at": time.monotonic(),
+            "message": message,
+            "pending": pending or _LAST_WEBULL_ERROR.get("pending", False),
+            "rate_limited": rate_limited,
+        }
+    )
+
+
+def webull_api_paused() -> bool:
+    """Skip live Webull calls while 2FA is pending or we are in a 429 cooldown."""
+    auth = webull_auth_status()
+    return bool(auth.get("pause_api"))
+
+
+def webull_auth_status() -> dict[str, Any]:
+    """Dashboard payload for Webull OpenAPI 2FA and rate-limit guidance."""
+    if not webull_configured():
+        return {"required": False}
+    if not live_trading_allowed():
+        return {"required": False, "paper_mode": True}
+
+    local = read_local_webull_token()
+    token_status = (local.get("token_status") or "").upper() or None
+    pending = token_status == "PENDING"
+    expired = token_status in {"EXPIRED", "INVALID"}
+
+    recent = _LAST_WEBULL_ERROR
+    recent_age = time.monotonic() - float(recent.get("at") or 0.0) if recent.get("at") else None
+    recent_active = recent_age is not None and recent_age < 600
+    rate_limited = (
+        bool(recent.get("rate_limited"))
+        and recent_age is not None
+        and recent_age < _RATE_LIMIT_COOLDOWN_SEC
+    )
+    if recent_active and recent.get("pending"):
+        pending = True
+
+    if webull_use_uat():
+        return {
+            "required": False,
+            "uat": True,
+            "token_status": token_status,
+            "message": "UAT sandbox — 2FA verification is not required.",
+        }
+
+    needs_setup = not local.get("has_token") and not token_status
+    show_banner = pending or expired or rate_limited or needs_setup
+
+    if rate_limited:
+        headline = "Webull rate limit (429) — pause API calls"
+        detail = (
+            "Disarm the trader and wait about 30 seconds. "
+            "If you received an SMS code, verify once in the Webull app "
+            "(Menu → Messages → OpenAPI Notifications)."
+        )
+    elif pending:
+        headline = "Webull 2FA — verify in the mobile app"
+        detail = (
+            "Open the Webull app on your phone, go to Menu → Messages → OpenAPI Notifications, "
+            "tap the latest message, and enter the SMS code. Disarm until verification completes."
+        )
+    elif expired:
+        headline = "Webull token expired — re-verify in the app"
+        detail = (
+            "Your OpenAPI token is no longer valid. Disarm, trigger one login attempt, "
+            "then verify the new SMS code in the Webull app."
+        )
+    elif needs_setup:
+        headline = "Webull live auth required"
+        detail = (
+            "The first live API call sends an SMS code. Verify it in the Webull app "
+            "(Menu → Messages → OpenAPI Notifications) before arming auto-trading."
+        )
+    else:
+        headline = ""
+        detail = ""
+
+    pause_api = pending or rate_limited
+
+    return {
+        "required": True,
+        "show_banner": show_banner,
+        "pause_api": pause_api,
+        "pending": pending,
+        "expired": expired,
+        "rate_limited": rate_limited,
+        "needs_setup": needs_setup,
+        "token_status": token_status,
+        "token_path": local.get("token_path"),
+        "headline": headline,
+        "message": detail,
+        "verify_steps": [
+            "Disarm the trader on this dashboard",
+            "Open the Webull mobile app (same account as your API keys)",
+            "Menu → Messages → OpenAPI Notifications",
+            "Enter the SMS code and tap Confirm",
+            "Wait until status clears, then Arm again",
+        ],
+        "last_error": recent.get("message") if recent_active else None,
+    }
 
 
 def _safe_float(value: Any) -> float | None:
@@ -118,6 +271,7 @@ def fetch_total_account_value(*, force_refresh: bool = False) -> float | None:
             _EQUITY_CACHE[aid] = (now, value)
             return value
     except Exception as exc:
+        note_webull_error(exc)
         logger.warning("Webull account balance fetch failed: %s", _format_webull_error(exc))
     return cached[1] if cached else None
 
@@ -150,6 +304,9 @@ def _ensure_client():
     global _client, _trade_client
     if _trade_client is not None:
         return _trade_client
+    if webull_api_paused():
+        auth = webull_auth_status()
+        raise EnvironmentError(auth.get("headline") or "Webull API paused — complete 2FA in the mobile app.")
     from webull.core.client import ApiClient
     from webull.trade.trade_client import TradeClient
 
@@ -161,6 +318,7 @@ def _ensure_client():
         _configure_api_client(_client, region=region)
         _trade_client = TradeClient(_client)
     except Exception as exc:
+        note_webull_error(exc)
         raise EnvironmentError(_format_webull_error(exc)) from exc
     return _trade_client
 

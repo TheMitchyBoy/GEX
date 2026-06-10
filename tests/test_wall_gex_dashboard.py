@@ -15,6 +15,7 @@ def test_wall_gex_status_defaults():
     assert status["max_hold_bars"] == 8
     assert "open_positions" in status
     assert "performance" in status
+    assert "webull_auth" in status
 
 
 def test_run_low_gex_trade_requires_arm_when_execute():

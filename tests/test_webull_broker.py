@@ -9,9 +9,14 @@ from gex_core.trading.webull_broker import (
     _order_status,
     build_option_order,
     clear_webull_equity_cache,
+    clear_webull_error_state,
     fetch_total_account_value,
     limit_price_for_buy,
+    note_webull_error,
     parse_total_account_value,
+    read_local_webull_token,
+    webull_auth_status,
+    webull_api_paused,
 )
 
 
@@ -128,6 +133,44 @@ def test_webull_trade_endpoint_uat(monkeypatch):
     monkeypatch.delenv("GEX_WEBULL_ENDPOINT", raising=False)
     assert webull_trade_endpoint() == "us-openapi-alb.uat.webullbroker.com"
     assert webull_data_endpoint() == "us-broker-api.uat.webullbroker.com"
+
+
+def test_read_local_webull_token_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    payload = read_local_webull_token()
+    assert payload["has_token"] is False
+    assert payload["token_status"] is None
+
+
+def test_webull_auth_status_pending_banner(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("abc123\n1700000000\nPENDING\n", encoding="utf-8")
+
+    auth = webull_auth_status()
+    assert auth["show_banner"] is True
+    assert auth["pending"] is True
+    assert auth["pause_api"] is True
+    assert "Webull 2FA" in auth["headline"]
+
+
+def test_webull_auth_status_rate_limit_banner(monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    note_webull_error("HTTP Status: 429, Code: TOO_MANY_REQUESTS")
+
+    auth = webull_auth_status()
+    assert auth["rate_limited"] is True
+    assert auth["show_banner"] is True
+    assert webull_api_paused() is True
 
 
 def test_webull_trade_endpoint_migrates_deprecated_host(monkeypatch):

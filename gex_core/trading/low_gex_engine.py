@@ -84,6 +84,8 @@ def _wall_gex_performance(ticker: str) -> dict[str, Any]:
 
 def wall_gex_status(ticker: str = "SPX") -> dict[str, Any]:
     """Dashboard status payload for the wall GEX live trader."""
+    from gex_core.trading.webull_broker import webull_auth_status
+
     ticker = ticker.upper()
     return {
         "ticker": ticker,
@@ -111,6 +113,7 @@ def wall_gex_status(ticker: str = "SPX") -> dict[str, Any]:
             if is_wall_gex_trade(t)
         ][:20],
         "performance": _wall_gex_performance(ticker),
+        "webull_auth": webull_auth_status(),
     }
 
 
@@ -295,6 +298,16 @@ def run_low_gex_trade(
     if not force and not is_trader_armed():
         out["ran"] = False
         out["reason"] = "Trader disarmed — arm to run live entries"
+        return out
+
+    from gex_core.trading.config import live_trading_allowed
+    from gex_core.trading.webull_broker import webull_api_paused, webull_auth_status
+
+    if live_trading_allowed() and webull_api_paused():
+        auth = webull_auth_status()
+        out["ran"] = False
+        out["reason"] = auth.get("headline") or "Webull API paused — complete 2FA in the mobile app"
+        out["webull_auth"] = auth
         return out
 
     out["wall_shift_exits"] = _flatten_on_wall_shift(
