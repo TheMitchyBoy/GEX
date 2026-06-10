@@ -495,10 +495,6 @@
             <div class="kpi-value mono {{ 'regime-long' if 'LONG' in regime else 'regime-short' }}">{{ regime }}</div>
           </div>
           <div class="kpi-card">
-            <div class="kpi-label">γ-Flip</div>
-            <div class="kpi-value mono">{{ '%.0f'|format(gamma_flip) if gamma_flip else '—' }}</div>
-          </div>
-          <div class="kpi-card">
             <div class="kpi-label">Win Rate</div>
             <div class="kpi-value mono" id="kpiWinRate">{{ '%.0f'|format((perf.win_rate or 0) * 100) }}%</div>
           </div>
@@ -540,14 +536,13 @@
           <section class="uw-panel">
             <div class="uw-panel-head">
               <span>Strategy map</span>
-              <span class="small muted fw-normal">Magnets · spot · positions · equity</span>
+              <span class="small muted fw-normal">GEX · spot · positions · equity</span>
             </div>
             <div class="uw-panel-body"><div id="strategyChart"></div></div>
             <div class="chart-legend">
               <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> +γ</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> −γ</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--amber)"></span> Spot</span>
-              <span class="legend-item"><span class="legend-dot" style="background:var(--blue,#38bdf8)"></span> γ-flip</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> Signals</span>
             </div>
           </section>
@@ -709,7 +704,7 @@
             <div class="chat-panel">
               <div class="chat-messages" id="chatMessages"></div>
               <div class="chat-input-row">
-                <textarea id="chatInput" rows="2" placeholder="Ask about gamma magnets, entries, exits…"></textarea>
+                <textarea id="chatInput" rows="2" placeholder="Ask about gamma exposure, entries, exits…"></textarea>
                 <button class="btn btn-sm btn-primary btn-nav align-self-end" id="chatSend" type="button">Send</button>
               </div>
             </div>

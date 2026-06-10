@@ -1,15 +1,14 @@
-"""Magnet map uses spot-exposures/strike (UW Periscope OI format)."""
+"""Dashboard charts use raw spot-exposures/strike net gamma (no magnet transform)."""
 
 from unittest.mock import patch
 
 import pandas as pd
 
-from gex_core.features import magnet_gamma_from_call_put
 from gex_core.periscope import _greek_exposure_from_df, build_periscope_context
 from gex_core.spot_exposure import spot_exposure_net_series
 
 
-def test_magnet_exposure_prefers_spot_oi_over_greek():
+def test_exposure_series_uses_spot_oi_not_greek_magnet():
     spot_df = pd.DataFrame(
         {
             "strike": [7560.0, 7570.0, 7580.0, 7590.0, 7600.0],
@@ -62,11 +61,11 @@ def test_magnet_exposure_prefers_spot_oi_over_greek():
             uw_entry=uw_entry,
         )
 
-    spot_series = ctx["exposure_series"]
-    magnet = ctx["magnet_exposure_series"]
-    assert (spot_series[spot_series.index < 7580.0] > 0).sum() == 0
-    assert float(magnet.loc[7570.0]) == -1.0
-    assert float(magnet.loc[7570.0]) != 2.5
+    exposure = ctx["exposure_series"]
+    chart = ctx["magnet_exposure_series"]
+    assert float(exposure.loc[7570.0]) == -1.0
+    assert float(chart.loc[7570.0]) == -1.0
+    assert ctx["gamma_flip"] is None
 
 
 def test_greek_exposure_from_df_reads_gex_column():
@@ -76,7 +75,7 @@ def test_greek_exposure_from_df_reads_gex_column():
     assert float(series.loc[7510.0]) == -2.0
 
 
-def test_magnet_uses_spot_oi_without_uw_entry():
+def test_chart_series_matches_spot_oi_without_uw_entry():
     spot_df = pd.DataFrame(
         {
             "strike": [7440.0, 7450.0, 7460.0, 7470.0, 7480.0],
@@ -87,18 +86,12 @@ def test_magnet_uses_spot_oi_without_uw_entry():
     spot_df["net_gamma_oi"] = spot_df["call_gamma_oi"] + spot_df["put_gamma_oi"]
     spot_df["net_gamma_oi_bn"] = spot_df["net_gamma_oi"] / 1e9
     spot_strike = spot_exposure_net_series(spot_df, "gamma")
-    greek_strike = pd.Series(
-        [-1.0, 2.5, 1.0, 3.0, 2.0],
-        index=[7440.0, 7450.0, 7460.0, 7470.0, 7480.0],
-        dtype=float,
-    )
 
     snapshot = {
         "ts": "2026-06-08_151806",
         "spot": 7460.0,
         "strike": spot_strike,
         "spot_exposures_df": spot_df,
-        "greek_strike": greek_strike,
     }
 
     with (
@@ -115,135 +108,6 @@ def test_magnet_uses_spot_oi_without_uw_entry():
             uw_entry=None,
         )
 
-    magnet = ctx["magnet_exposure_series"]
-    assert (ctx["exposure_series"][ctx["exposure_series"].index < 7460.0] > 0).sum() == 0
-    assert float(magnet.loc[7450.0]) == -2.0
-
-
-def test_magnet_uses_surface_data_when_greek_df_missing():
-    surface = pd.DataFrame({"strike": [7440.0, 7450.0, 7460.0], "GEX": [-1.0, 2.5, 1.0]})
-    spot_df = pd.DataFrame(
-        {
-            "strike": [7440.0, 7450.0, 7460.0],
-            "call_gamma_oi": [1e9, 1e9, 2e9],
-            "put_gamma_oi": [-3e9, -3e9, -2.5e9],
-        }
-    )
-    spot_df["net_gamma_oi"] = spot_df["call_gamma_oi"] + spot_df["put_gamma_oi"]
-    spot_df["net_gamma_oi_bn"] = spot_df["net_gamma_oi"] / 1e9
-
-    class FakeAgg:
-        gex_by_strike = pd.Series(surface.set_index("strike")["GEX"])
-        surface_data = surface
-
-    FakeAgg.gex_by_strike.attrs = {"spot_exposures_df": spot_df}
-
-    snapshot = {
-        "ts": "2026-06-08_151806",
-        "spot": 7460.0,
-        "strike": spot_exposure_net_series(spot_df, "gamma"),
-        "spot_exposures_df": spot_df,
-    }
-
-    with (
-        patch("gex_core.periscope.list_periscope_timestamps", return_value=["2026-06-08_151806"]),
-        patch("gex_core.periscope.load_periscope_snapshot", return_value=snapshot),
-        patch("gex_core.periscope.periscope_price_points", return_value=[]),
-        patch("gex_core.periscope.list_periscope_dates", return_value=["2026-06-08"]),
-        patch("gex_core.periscope.uw_api_key", return_value="test"),
-    ):
-        ctx = build_periscope_context(
-            ticker="SPX",
-            selected_ts="2026-06-08_151806",
-            uw_entry={"spot": 7460.0, "agg": FakeAgg()},
-        )
-
-    magnet = ctx["magnet_exposure_series"]
-    assert float(magnet.loc[7450.0]) == -2.0
-
-
-def test_magnet_gamma_shows_dominant_call_when_net_cancels_at_7430():
-    greek_df = pd.DataFrame(
-        {
-            "strike": [7420.0, 7430.0, 7460.0],
-            "net_gex": [-1.226612, 0.006224, 1.206460],
-            "call_gex": [2.624939, 4.630437, 3.573736],
-            "put_gex": [-3.851552, -4.624214, -2.367276],
-        }
-    )
-    magnet = magnet_gamma_from_call_put(greek_df, spot=7460.8)
-    assert float(magnet.loc[7430.0]) == 4.630437
-    assert float(magnet.loc[7420.0]) < 0
-    assert float(magnet.loc[7460.0]) == 1.206460
-
-
-def test_magnet_uses_spot_oi_when_greek_fetch_available():
-    """Spot-exposures/strike is primary even when greek-exposure is cached."""
-    spot_df = pd.DataFrame(
-        {
-            "strike": [7540.0, 7550.0, 7560.0, 7570.0, 7580.0],
-            "call_gamma_oi": [1e9, 1e9, 2e9, 3e9, 2e9],
-            "put_gamma_oi": [-3e9, -3e9, -2.5e9, -1e9, -0.5e9],
-        }
-    )
-    spot_df["net_gamma_oi"] = spot_df["call_gamma_oi"] + spot_df["put_gamma_oi"]
-    spot_df["net_gamma_oi_bn"] = spot_df["net_gamma_oi"] / 1e9
-    spot_strike = spot_exposure_net_series(spot_df, "gamma")
-    greek_df = pd.DataFrame(
-        {
-            "strike": [7540.0, 7550.0, 7560.0, 7570.0, 7580.0, 7590.0],
-            "net_gex": [-1.0, -0.5, 0.24, 0.76, 1.0, 3.0],
-            "call_gex": [0.5, 0.5, 1.0, 2.5, 2.0, 3.0],
-            "put_gex": [-1.5, -1.0, -0.76, -1.74, -1.0, -0.5],
-        }
-    )
-
-    snapshot = {
-        "ts": "2026-06-08_151806",
-        "spot": 7580.0,
-        "strike": spot_strike,
-        "spot_exposures_df": spot_df,
-        "uw_endpoint": "spot-exposures/strike",
-    }
-
-    with (
-        patch("gex_core.periscope.list_periscope_timestamps", return_value=["2026-06-08_151806"]),
-        patch("gex_core.periscope.load_periscope_snapshot", return_value=snapshot),
-        patch("gex_core.periscope.periscope_price_points", return_value=[]),
-        patch("gex_core.periscope.list_periscope_dates", return_value=["2026-06-08"]),
-        patch("gex_core.periscope.uw_api_key", return_value="test"),
-        patch("gex_core.periscope.should_use_api_for_date", return_value=True),
-        patch("gex_core.periscope._fetch_greek_exposure_cached", return_value=greek_df),
-    ):
-        ctx = build_periscope_context(ticker="SPX", selected_ts="2026-06-08_151806", uw_entry=None)
-
-    magnet = ctx["magnet_exposure_series"]
-    assert float(magnet.loc[7560.0]) == -0.5
-    assert float(magnet.loc[7570.0]) == 2.0
-
-
-def test_magnet_context_uses_call_gex_for_cancelled_7430():
-    greek_df = pd.DataFrame(
-        {
-            "strike": [7420.0, 7430.0, 7460.0, 7480.0],
-            "net_gex": [-1.226612, 0.006224, 1.206460, 2.0],
-            "call_gex": [2.624939, 4.630437, 3.573736, 2.0],
-            "put_gex": [-3.851552, -4.624214, -2.367276, -1.0],
-        }
-    )
-    snapshot = {
-        "ts": "2026-06-08_151806",
-        "spot": 7460.8,
-        "strike": pd.Series(dtype=float),
-        "greek_exposure_df": greek_df,
-    }
-    with (
-        patch("gex_core.periscope.list_periscope_timestamps", return_value=["2026-06-08_151806"]),
-        patch("gex_core.periscope.load_periscope_snapshot", return_value=snapshot),
-        patch("gex_core.periscope.periscope_price_points", return_value=[]),
-        patch("gex_core.periscope.list_periscope_dates", return_value=["2026-06-08"]),
-        patch("gex_core.periscope.uw_api_key", return_value="test"),
-    ):
-        ctx = build_periscope_context(ticker="SPX", selected_ts="2026-06-08_151806")
-    magnet = ctx["magnet_exposure_series"]
-    assert float(magnet.loc[7430.0]) == 4.630437
+    assert float(ctx["exposure_series"].loc[7450.0]) == -2.0
+    assert float(ctx["magnet_exposure_series"].loc[7450.0]) == -2.0
+    assert ctx["gamma_flip"] is None

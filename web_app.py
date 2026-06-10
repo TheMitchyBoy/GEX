@@ -25,7 +25,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
-from gex_core.features import parse_gamma_flip_value, resolve_gamma_flip, safe_float
+from gex_core.features import parse_gamma_flip_value, safe_float
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
 from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
@@ -162,15 +162,7 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
         from gex_core.ai_analyst import analyze_dealer_gamma
 
         spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
-        greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
-        spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
-        gamma_flip = resolve_gamma_flip(
-            spot=spot,
-            gex_by_strike=agg.gex_by_strike,
-            cumulative_gex=agg.cumulative_gex,
-            greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
-            spot_exposure_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
-        )
+        gamma_flip = None
         spot_gamma_bn = fetch_spot_gamma_aggregate_bn(ticker, api_key=uw_api_key())
         analysis = analyze_dealer_gamma(
             ticker=ticker, spot=spot,
@@ -285,13 +277,9 @@ def _prediction_public_view(prediction: dict | None) -> dict | None:
 
 
 def _strategy_exposure_from_context(ctx: dict) -> tuple[pd.Series | None, pd.Series | None]:
-    """Spot-exposures/strike profile for magnets; greek-exposure is extended fallback."""
-    exposure = ctx.get("magnet_exposure_series")
-    if exposure is None or (isinstance(exposure, pd.Series) and exposure.empty):
-        exposure = ctx.get("exposure_series")
-    previous = ctx.get("previous_magnet_exposure")
-    if previous is None or (isinstance(previous, pd.Series) and previous.empty):
-        previous = ctx.get("previous_exposure")
+    """Spot-exposures/strike net gamma profile for charts."""
+    exposure = ctx.get("exposure_series")
+    previous = ctx.get("previous_exposure")
     return exposure, previous
 
 

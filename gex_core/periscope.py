@@ -13,8 +13,6 @@ from gex_core.env_bootstrap import uw_api_key
 from gex_core.features import (
     greek_gamma_series_from_df,
     magnet_gamma_from_call_put,
-    parse_gamma_flip_value,
-    resolve_gamma_flip,
     safe_float,
     select_atm_strike_series,
     spot_covers_strike_grid,
@@ -566,72 +564,19 @@ def build_periscope_context(
             exposure_profile, spot or 0.0, window_pct=0.045, max_strikes=PERISCOPE_PROFILE_MAX
         )
 
-    # Extended panel: wider greek-exposure chain when available.
-    greek_exposure = _magnet_exposure_series(
-        exposure=exposure,
-        spot=spot or None,
-        uw_entry=uw_entry,
-        greek_df=greek_df,
-        snapshot=selected,
-        gex_series=gex_series,
-    )
-    if not greek_exposure.empty:
-        magnet_exposure = greek_exposure
-    elif _snapshot_strike_is_spot_oi(selected):
-        magnet_exposure = _magnet_net_fallback_series(
-            exposure=exposure,
-            snapshot=selected,
-            uw_entry=uw_entry,
-            greek_df=greek_df,
-            gex_series=gex_series,
-        )
-    else:
-        magnet_exposure = current_exposure
+    magnet_exposure = current_exposure
     previous_magnet_exposure = previous_exposure
-    if previous_snapshot:
-        prev_greek = _magnet_exposure_series(
-            exposure=exposure,
-            spot=safe_float(previous_snapshot.get("spot"), spot) or None,
-            uw_entry=None,
-            greek_df=None,
-            snapshot=previous_snapshot,
-            gex_series=previous_snapshot.get("strike")
-            if isinstance(previous_snapshot.get("strike"), pd.Series)
-            else pd.Series(dtype=float),
-        )
-        if not prev_greek.empty:
-            previous_magnet_exposure = prev_greek
-    extended_source = greek_exposure if not greek_exposure.empty else current_exposure
     exposure_extended = _strike_window(
-        extended_source,
+        current_exposure,
         spot or 0.0,
         window_pct=0.085,
         max_strikes=PERISCOPE_EXTENDED_MAX,
     )
-
-    greek_strike = None
-    if isinstance(greek_df, pd.DataFrame) and not greek_df.empty and "net_gex" in greek_df.columns:
-        greek_strike = pd.Series(
-            pd.to_numeric(greek_df["net_gex"], errors="coerce").fillna(0.0).values,
-            index=pd.to_numeric(greek_df["strike"], errors="coerce").values,
-            dtype=float,
-        ).dropna()
-        greek_strike = greek_strike[~greek_strike.index.isna()].sort_index()
-
-    gamma_flip = resolve_gamma_flip(
-        spot=spot if spot > 0 else None,
-        gex_by_strike=gex_series if not gex_series.empty else None,
-        cumulative_gex=gex_series.cumsum() if not gex_series.empty else None,
-        greek_exposure_df=greek_df,
-        greek_strike=greek_strike if greek_strike is not None and not greek_strike.empty else None,
-        spot_exposure_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
-    )
-    if gamma_flip is None:
-        gamma_flip = parse_gamma_flip_value(selected.get("gamma_flip"))
+    gamma_flip = None
 
     total_gex = safe_float(selected.get("total_gex"), 0.0)
-    if total_gex == 0 and not magnet_exposure.empty:
-        total_gex = float(magnet_exposure.sum())
+    if total_gex == 0 and not current_exposure.empty:
+        total_gex = float(current_exposure.sum())
     elif total_gex == 0 and not gex_series.empty:
         total_gex = float(gex_series.sum())
     regime = selected.get("regime", "N/A")

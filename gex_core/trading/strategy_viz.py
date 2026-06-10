@@ -173,7 +173,7 @@ def build_strategy_chart(
     exposure: pd.Series | None,
     state: dict[str, Any],
 ) -> go.Figure:
-    """Two-row dashboard: magnet map + cumulative PnL."""
+    """Two-row dashboard: GEX by strike + cumulative PnL."""
     spot_val = safe_float(spot or state.get("spot"), 0.0)
     signals = state.get("signals") or {}
     performance = state.get("performance") or {}
@@ -186,7 +186,7 @@ def build_strategy_chart(
         cols=1,
         row_heights=[0.68, 0.32],
         vertical_spacing=0.06,
-        subplot_titles=("Magnet map · entry levels & open positions", "Cumulative PnL (recent trades)"),
+        subplot_titles=("GEX by strike · entry levels & open positions", "Cumulative PnL (recent trades)"),
     )
 
     window = _chart_exposure_window(
@@ -231,11 +231,6 @@ def build_strategy_chart(
             row=1,
             col=1,
         )
-
-    flip = safe_float(parse_gamma_flip_value(levels.get("gamma_flip")), 0.0)
-    if flip > 0:
-        fig.add_hline(y=flip, line_dash="dot", line_color=_BLUE, opacity=0.7, row=1, col=1)
-        fig.add_annotation(x=0, y=flip, text=" γ-flip", showarrow=False, xanchor="left", font=dict(size=10, color=_BLUE), row=1, col=1)
 
     for label, key, color, symbol in (
         ("Max +γ", "max_positive_gamma", _GREEN, "diamond"),

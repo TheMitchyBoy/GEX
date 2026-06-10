@@ -240,8 +240,8 @@ def test_spot_stream_does_not_poll_uw_rest(monkeypatch):
         assert any(b"5012.5" in chunk for chunk in chunks)
 
 
-def test_refresh_uw_data_gamma_flip_uses_spot_exposure(monkeypatch):
-    """Live UW cache derives gamma flip from spot-exposures/strike."""
+def test_refresh_uw_data_does_not_compute_gamma_flip(monkeypatch):
+    """Live UW cache skips gamma flip (not shown on dashboard)."""
     from unittest.mock import patch
 
     import pandas as pd
@@ -290,5 +290,4 @@ def test_refresh_uw_data_gamma_flip_uses_spot_exposure(monkeypatch):
         entry = web_app.refresh_uw_data("SPX", force=True)
 
     assert entry is not None
-    flip = float(entry["gamma_flip"])
-    assert 7450.0 < flip < 7475.0
+    assert entry["gamma_flip"] is None
