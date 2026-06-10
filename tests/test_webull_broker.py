@@ -128,3 +128,11 @@ def test_webull_trade_endpoint_uat(monkeypatch):
     monkeypatch.delenv("GEX_WEBULL_ENDPOINT", raising=False)
     assert webull_trade_endpoint() == "us-openapi-alb.uat.webullbroker.com"
     assert webull_data_endpoint() == "us-broker-api.uat.webullbroker.com"
+
+
+def test_webull_trade_endpoint_migrates_deprecated_host(monkeypatch):
+    monkeypatch.setenv("GEX_WEBULL_ENDPOINT", "us-openapi.webullbroker.com")
+    monkeypatch.setenv("GEX_WEBULL_DATA_ENDPOINT", "us-openapi.webullbroker.com")
+    monkeypatch.delenv("GEX_WEBULL_USE_UAT", raising=False)
+    assert webull_trade_endpoint() == "api.webull.com"
+    assert webull_data_endpoint() == "broker-api.webull.com"

@@ -399,11 +399,38 @@ def webull_use_uat() -> bool:
     return _flag("GEX_WEBULL_USE_UAT", "0")
 
 
+# Retired hostnames from older docs / examples (NXDOMAIN or wrong service).
+_DEPRECATED_WEBULL_TRADE_HOSTS = {
+    "us-openapi.webullbroker.com": "api.webull.com",
+    "openapi.webullbroker.com": "api.webull.com",
+}
+_DEPRECATED_WEBULL_DATA_HOSTS = {
+    "us-openapi.webullbroker.com": "broker-api.webull.com",
+    "openapi.webullbroker.com": "broker-api.webull.com",
+}
+
+
+def _normalize_webull_trade_host(host: str) -> str:
+    key = host.strip().lower()
+    if webull_use_uat():
+        return host.strip()
+    replacement = _DEPRECATED_WEBULL_TRADE_HOSTS.get(key)
+    return replacement if replacement else host.strip()
+
+
+def _normalize_webull_data_host(host: str) -> str:
+    key = host.strip().lower()
+    if webull_use_uat():
+        return host.strip()
+    replacement = _DEPRECATED_WEBULL_DATA_HOSTS.get(key)
+    return replacement if replacement else host.strip()
+
+
 def webull_trade_endpoint() -> str:
     """Trading API host (see https://developer.webull.com/apis/docs/sdk/)."""
     explicit = os.environ.get("GEX_WEBULL_ENDPOINT", "").strip()
     if explicit:
-        return explicit
+        return _normalize_webull_trade_host(explicit)
     if webull_use_uat():
         return "us-openapi-alb.uat.webullbroker.com"
     return "api.webull.com"
@@ -413,7 +440,7 @@ def webull_data_endpoint() -> str:
     """Market data API host (options quotes, snapshots)."""
     explicit = os.environ.get("GEX_WEBULL_DATA_ENDPOINT", "").strip()
     if explicit:
-        return explicit
+        return _normalize_webull_data_host(explicit)
     if webull_use_uat():
         return "us-broker-api.uat.webullbroker.com"
     return "broker-api.webull.com"
