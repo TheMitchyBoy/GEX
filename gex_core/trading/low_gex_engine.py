@@ -12,6 +12,7 @@ from gex_core.trading.broker import broker_mode_label, get_broker
 from gex_core.trading.config import (
     execution_ticker,
     live_trading_allowed,
+    low_gex_reenter_each_bar,
     max_open_positions,
     paper_trading_only,
     signal_ticker,
@@ -19,6 +20,7 @@ from gex_core.trading.config import (
 )
 from gex_core.trading.execution import execution_summary, map_execution_strike, resolve_execution_spot
 from gex_core.trading.journal import (
+    close_trade,
     get_account_equity,
     list_open_trades,
     open_trade,
@@ -26,7 +28,7 @@ from gex_core.trading.journal import (
     record_decision,
 )
 from gex_core.trading.low_gex_signals import compute_low_gex_signal
-from gex_core.trading.paper_broker import estimate_entry_premium
+from gex_core.trading.paper_broker import estimate_entry_premium, mark_to_market_premium, pnl_usd
 from gex_core.trading.sizing import resolve_contract_qty
 from gex_core.trading.webull_broker import limit_price_for_buy
 
@@ -35,6 +37,38 @@ logger = logging.getLogger(__name__)
 
 def _uses_execution_mapping() -> bool:
     return execution_ticker().upper() != signal_ticker().upper()
+
+
+def _flatten_open_positions(ticker: str, *, spot: float, reason: str = "bar_rotation") -> list[dict[str, Any]]:
+    """Close every open position at the current mark (5-min rotation mode)."""
+    from gex_core.trading.execution import resolve_execution_spot
+
+    broker = get_broker()
+    exec_spot = float(spot)
+    if _uses_execution_mapping():
+        mapped = resolve_execution_spot(signal_spot=spot)
+        if mapped is None or mapped <= 0:
+            return []
+        exec_spot = float(mapped)
+
+    closed: list[dict[str, Any]] = []
+    for pos in list_open_trades(ticker):
+        pnl_pct = broker.position_pnl_pct(pos, spot=exec_spot)
+        if pnl_pct is None:
+            pnl_pct = 0.0
+        qty = int(pos.get("qty") or 1)
+        entry_premium = float(pos["entry_premium"])
+        exit_premium = mark_to_market_premium(entry_premium, pnl_pct)
+        close_trade(
+            int(pos["id"]),
+            exit_spot=exec_spot,
+            exit_premium=exit_premium,
+            pnl_pct=pnl_pct,
+            pnl_usd=pnl_usd(entry_premium, exit_premium, qty),
+            exit_reason=reason,
+        )
+        closed.append({"trade_id": pos["id"], "pnl_pct": pnl_pct, "reason": reason})
+    return closed
 
 
 def _has_open_duplicate(ticker: str, *, strike: float, option_type: str) -> bool:
@@ -61,6 +95,7 @@ def run_low_gex_trade(
     exposure: pd.Series | None = None,
     execute: bool = False,
     session_check: bool = True,
+    reenter_each_bar: bool | None = None,
 ) -> dict[str, Any]:
     """Evaluate lowest-GEX signal and optionally open a position."""
     ticker = ticker.upper()
@@ -102,7 +137,11 @@ def run_low_gex_trade(
         out["action"] = "signal_only"
         return out
 
-    if len(list_open_trades(ticker)) >= max_open_positions():
+    rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
+    if rotate:
+        out["closed_for_rotation"] = _flatten_open_positions(ticker, spot=float(spot))
+
+    if not rotate and len(list_open_trades(ticker)) >= max_open_positions():
         out["ran"] = True
         out["action"] = "skipped"
         out["reason"] = "Max open positions reached"
@@ -124,7 +163,7 @@ def run_low_gex_trade(
         else trade_strike
     )
 
-    if _has_open_duplicate(ticker, strike=exec_strike, option_type=option_type):
+    if not rotate and _has_open_duplicate(ticker, strike=exec_strike, option_type=option_type):
         out["ran"] = True
         out["action"] = "skipped"
         out["reason"] = f"Already open at {exec_strike:.2f} {option_type}"

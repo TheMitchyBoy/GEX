@@ -203,6 +203,22 @@ def max_entries_per_cycle() -> int:
         return 1
 
 
+def low_gex_reenter_each_bar() -> bool:
+    """Close open low-GEX positions every bar and open fresh toward the current wall."""
+    return _flag("GEX_LOW_GEX_REENTER_EACH_BAR", "0")
+
+
+def low_gex_bar_minutes() -> float:
+    """Target bar cadence for low-GEX rotation (default 5 minutes)."""
+    explicit = os.environ.get("GEX_LOW_GEX_BAR_MINUTES", "").strip()
+    if explicit:
+        try:
+            return max(1.0, float(explicit))
+        except (TypeError, ValueError):
+            pass
+    return max(1.0, parse_env_minutes("GEX_BACKFILL_INTERVAL_MINUTES", 5.0))
+
+
 def min_gamma_delta() -> float:
     if clear_all_filters():
         return 0.0

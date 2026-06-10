@@ -14,6 +14,7 @@ from gex_core.trading.backtest import (
     AccountLedger,
     BacktestState,
     _OpenPosition,
+    _apply_backtest_exit,
     _check_exits,
     _close_position,
     _has_open_duplicate,
@@ -25,6 +26,7 @@ from gex_core.trading.backtest import (
     bars_between_timestamps,
 )
 from gex_core.trading.config import (
+    low_gex_reenter_each_bar,
     max_entries_per_cycle,
     max_open_positions,
     stop_loss_pct,
@@ -37,6 +39,37 @@ from gex_core.trading.paper_broker import estimate_entry_premium
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
 
 
+def _flatten_for_reentry(
+    state: BacktestState,
+    *,
+    idx: int,
+    ts: str,
+    signal_spot: float,
+    row: dict,
+) -> None:
+    """Close all open positions at the current mark before a new bar entry."""
+    mark_spot = _mark_spot(signal_spot)
+    if mark_spot is None or mark_spot <= 0 or not state.open_positions:
+        return
+    bar_minutes = _snapshot_bar_minutes(row)
+    for pos in list(state.open_positions):
+        pnl_pct = _position_pnl(pos, mark_spot)
+        bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
+        _apply_backtest_exit(
+            state,
+            pos,
+            idx=idx,
+            exit_ts=ts,
+            exit_spot=mark_spot,
+            pnl_pct=pnl_pct,
+            exit_reason="bar_rotation",
+            bars_held=bars_held,
+        )
+    state.open_positions.clear()
+    if state.account:
+        state.account.record_equity(ts, state.open_positions, mark_spot)
+
+
 def _maybe_enter_low_gex(
     state: BacktestState,
     *,
@@ -44,6 +77,7 @@ def _maybe_enter_low_gex(
     ts: str,
     row: dict,
     max_open: int,
+    reenter_each_bar: bool = False,
 ) -> None:
     if not export_ts_is_trading_day(ts):
         state.skipped_weekends += 1
@@ -79,7 +113,9 @@ def _maybe_enter_low_gex(
         return
     exec_strike, exec_spot, _ = trade_ctx
 
-    if _has_open_duplicate(state.open_positions, strike=exec_strike, option_type=option_type):
+    if not reenter_each_bar and _has_open_duplicate(
+        state.open_positions, strike=exec_strike, option_type=option_type
+    ):
         state.blocked_duplicate += 1
         return
 
@@ -151,12 +187,16 @@ def backtest_low_gex_trader(
     max_open: int | None = None,
     starting_capital: float | None = None,
     history: list[dict] | None = None,
+    reenter_each_bar: bool | None = None,
 ) -> dict[str, Any]:
     """Simulate low-GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
     stop_loss = stop_loss if stop_loss is not None else stop_loss_pct()
     take_profit = take_profit if take_profit is not None else take_profit_pct()
     max_open = max_open if max_open is not None else max_open_positions()
+    rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
+    if rotate:
+        max_open = max(max_open, max_entries_per_cycle())
 
     if history is None:
         history = _build_history_impl(
@@ -199,21 +239,25 @@ def backtest_low_gex_trader(
         if spot <= 0:
             continue
 
-        _check_exits(
-            state,
-            idx=idx,
-            ts=ts,
-            signal_spot=spot,
-            row=row,
-            prev_ts=str(history[idx - 1]["ts"]),
-            prev_signal_spot=safe_float(history[idx - 1].get("spot"), 0.0) or None,
-        )
+        if not rotate:
+            _check_exits(
+                state,
+                idx=idx,
+                ts=ts,
+                signal_spot=spot,
+                row=row,
+                prev_ts=str(history[idx - 1]["ts"]),
+                prev_signal_spot=safe_float(history[idx - 1].get("spot"), 0.0) or None,
+            )
+        else:
+            _flatten_for_reentry(state, idx=idx, ts=ts, signal_spot=spot, row=row)
         _maybe_enter_low_gex(
             state,
             idx=idx,
             ts=ts,
             row=row,
             max_open=max_open,
+            reenter_each_bar=rotate,
         )
 
     if state.open_positions:
@@ -252,4 +296,5 @@ def backtest_low_gex_trader(
         weekend_snapshots_excluded=weekend_snapshots_excluded,
     )
     result["strategy"] = "low_gex"
+    result["reenter_each_bar"] = rotate
     return result

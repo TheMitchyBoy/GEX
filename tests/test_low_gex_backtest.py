@@ -29,3 +29,23 @@ def test_backtest_low_gex_trader_runs_on_synthetic_history():
     )
     assert result["strategy"] == "low_gex"
     assert result["snapshots"] == 4
+
+
+def test_backtest_low_gex_reenter_each_bar_opens_every_snapshot():
+    history = [
+        _row("2026-06-02_100000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _row("2026-06-02_100500", 7455.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _row("2026-06-02_101000", 7448.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
+        _row("2026-06-02_101500", 7442.0, {7440.0: -2.0, 7460.0: -0.2, 7480.0: 0.2}),
+    ]
+    for row in history:
+        row["interval_minutes"] = 5
+    result = backtest_low_gex_trader(
+        "SPX",
+        history=history,
+        starting_capital=5000.0,
+        lookback_days=None,
+        reenter_each_bar=True,
+    )
+    assert result["total_trades"] == 3
+    assert result.get("by_exit_reason", {}).get("bar_rotation", 0) >= 2

@@ -31,6 +31,11 @@ def main() -> None:
     parser.add_argument("--stop-loss", type=float, default=None)
     parser.add_argument("--take-profit", type=float, default=None)
     parser.add_argument("--starting-capital", type=float, default=500.0)
+    parser.add_argument(
+        "--reenter-each-bar",
+        action="store_true",
+        help="Close prior position every bar and open fresh toward current lowest GEX",
+    )
     args = parser.parse_args()
 
     result = backtest_low_gex_trader(
@@ -41,6 +46,7 @@ def main() -> None:
         stop_loss=args.stop_loss,
         take_profit=args.take_profit,
         starting_capital=args.starting_capital,
+        reenter_each_bar=args.reenter_each_bar,
     )
 
     if args.json:
@@ -48,6 +54,8 @@ def main() -> None:
         return
 
     print(f"\n=== Low-GEX backtest · {result.get('ticker', args.ticker.upper())} ===")
+    if result.get("reenter_each_bar"):
+        print("mode: re-enter each bar (close + open toward lowest GEX)")
     if result.get("date_from") and result.get("date_to"):
         print(f"window: {result['date_from']} -> {result['date_to']}")
     if result.get("execution_ticker"):
