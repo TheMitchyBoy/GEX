@@ -3,241 +3,154 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Wall GEX Trader · {{ ticker }}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>Wall GEX · {{ ticker }}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
     <style>
       :root {
-        --bg: #05070c; --panel: rgba(12, 17, 28, 0.92); --border: rgba(148, 163, 184, 0.12);
-        --txt: #f1f5f9; --muted: #64748b; --label: #94a3b8;
-        --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --accent: #3b82f6;
-        --radius: 12px;
+        --bg: #05070c; --panel: #0c111c; --border: rgba(148, 163, 184, 0.14);
+        --txt: #f1f5f9; --muted: #64748b; --green: #22c55e; --red: #ef4444; --accent: #3b82f6;
       }
-      body { background: var(--bg); color: var(--txt); font-family: Inter, sans-serif; font-size: 0.875rem; min-height: 100vh; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; background: var(--bg); color: var(--txt);
+        font-family: Inter, system-ui, sans-serif; font-size: 0.9rem;
+        display: flex; align-items: center; justify-content: center; padding: 1.25rem;
+      }
+      .card {
+        width: min(420px, 100%); background: var(--panel); border: 1px solid var(--border);
+        border-radius: 14px; padding: 1.25rem 1.35rem;
+      }
+      h1 { margin: 0 0 0.25rem; font-size: 1.1rem; font-weight: 600; }
+      .sub { color: var(--muted); font-size: 0.78rem; margin-bottom: 1.1rem; }
       .mono { font-family: "JetBrains Mono", monospace; }
-      .muted { color: var(--muted); }
-      .page-wrap { max-width: 1100px; margin: 0 auto; padding: 1rem; }
-      .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 1rem; overflow: hidden; }
-      .panel-head { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); font-weight: 600; color: var(--label); display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-      .panel-body { padding: 1rem; }
-      .chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; border: 1px solid var(--border); color: var(--label); }
-      .chip.on { background: rgba(34,197,94,0.15); color: var(--green); border-color: rgba(34,197,94,0.35); }
-      .chip.off { background: rgba(100,116,139,0.15); color: var(--muted); }
-      .chip.live { background: rgba(239,68,68,0.12); color: var(--red); border-color: rgba(239,68,68,0.35); animation: pulse 2s ease-in-out infinite; }
-      @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.75} }
-      .kpi { background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem 0.75rem; height: 100%; }
-      .kpi .val { font-size: 1.15rem; font-weight: 600; }
+      .pnl-block { margin: 1rem 0 1.15rem; }
+      .pnl-label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; }
+      .pnl-value { font-size: 2rem; font-weight: 700; line-height: 1.1; margin-top: 0.15rem; }
+      .pnl-value.up { color: var(--green); }
+      .pnl-value.down { color: var(--red); }
+      .pnl-meta { color: var(--muted); font-size: 0.78rem; margin-top: 0.35rem; }
+      .status-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+      .chip {
+        font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+        padding: 0.22rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+      }
+      .chip.on { color: var(--green); border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.1); }
+      .chip.live { color: var(--red); border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.1); }
+      .info {
+        font-size: 0.8rem; color: var(--muted); line-height: 1.45;
+        border-top: 1px solid var(--border); padding-top: 0.85rem; margin-bottom: 1rem;
+      }
+      .info strong { color: var(--txt); font-weight: 600; }
+      .signal { color: var(--txt); font-size: 0.95rem; margin-bottom: 0.2rem; }
+      .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+      .btns .full { grid-column: 1 / -1; }
+      button {
+        border: none; border-radius: 8px; padding: 0.65rem 0.75rem; font-weight: 600;
+        font-size: 0.82rem; cursor: pointer; font-family: inherit;
+      }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .btn-arm { background: var(--green); color: #052e16; }
+      .btn-disarm { background: transparent; border: 1px solid var(--border); color: var(--txt); }
+      .btn-run { background: rgba(59,130,246,0.18); border: 1px solid rgba(59,130,246,0.35); color: #93c5fd; }
+      #status-msg { min-height: 1.1rem; font-size: 0.75rem; color: var(--muted); margin-top: 0.65rem; }
+      #status-msg.ok { color: var(--green); }
+      #status-msg.err { color: var(--red); }
       .type-call { color: var(--green); }
       .type-put { color: var(--red); }
-      .btn-arm { background: var(--green); border: none; color: #052e16; font-weight: 600; }
-      .btn-run { background: rgba(59,130,246,0.18); border: 1px solid rgba(59,130,246,0.4); color: #93c5fd; font-weight: 600; }
-      .btn-outline-muted { border-color: var(--border); color: var(--label); }
-      table { color: var(--txt); font-size: 0.8rem; }
-      .nav-link-custom { color: var(--label); text-decoration: none; font-size: 0.8rem; }
-      .nav-link-custom:hover { color: var(--accent); }
-      #status-msg { min-height: 1.25rem; font-size: 0.8rem; }
-      .signal-big { font-size: 1.5rem; font-weight: 700; }
-      .rules { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-      .rule-pill { font-size: 0.7rem; padding: 0.2rem 0.55rem; border-radius: 999px; background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25); color: #93c5fd; }
     </style>
   </head>
   <body>
-    <div class="page-wrap">
-      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
-        <div>
-          <h1 class="h4 mb-1">Wall GEX Trader</h1>
-          <div class="muted small">Trade toward the lowest net-γ strike · {{ status.signal_ticker }} → {{ status.execution_ticker }}</div>
-        </div>
-        <div class="d-flex gap-3 align-items-center flex-wrap">
-          <a class="nav-link-custom" href="{{ url_for('gamma_dashboard') }}">Gamma charts</a>
-          <a class="nav-link-custom" href="{{ url_for('webull_trade_dashboard') }}">Webull desk</a>
-          <span id="spot-chip" class="chip off">spot —</span>
+    <div class="card">
+      <h1>Wall GEX Trader</h1>
+      <div class="sub">{{ status.signal_ticker }} → {{ status.execution_ticker }}</div>
+
+      <div class="status-row">
+        <span id="arm-chip" class="chip {% if status.armed %}on{% endif %}">{% if status.armed %}Armed{% else %}Disarmed{% endif %}</span>
+        {% if status.live_mode %}<span class="chip live">Live</span>{% else %}<span class="chip">Paper</span>{% endif %}
+        {% if status.enabled %}<span class="chip on">Auto {{ status.cycle_seconds }}s</span>{% endif %}
+      </div>
+
+      <div class="pnl-block">
+        <div class="pnl-label">Session PnL</div>
+        <div class="pnl-value mono" id="pnl-value">—</div>
+        <div class="pnl-meta mono" id="pnl-meta">Account — · 0 trades</div>
+      </div>
+
+      <div class="info">
+        <div class="signal mono" id="signal-line">—</div>
+        <div id="info-line">
+          Spot <strong class="mono" id="info-spot">{{ '%.2f'|format(spot) if spot else '—' }}</strong>
+          · SL <strong>{{ '%.0f'|format(status.stop_loss_pct * 100) }}%</strong>
+          · TP <strong>{{ '%.0f'|format(status.take_profit_pct * 100) }}%</strong>
+          · hold <strong>{{ status.max_hold_bars }}</strong> bars
+          · open <strong id="info-open">{{ status.open_positions|length }}</strong>
         </div>
       </div>
 
-      <div class="d-flex flex-wrap gap-2 mb-3">
-        <span id="arm-chip" class="chip {% if status.armed %}on{% else %}off{% endif %}">{% if status.armed %}Armed{% else %}Disarmed{% endif %}</span>
-        {% if status.live_mode %}<span class="chip live">Webull Live</span>{% else %}<span class="chip">Paper</span>{% endif %}
-        {% if status.enabled %}<span class="chip on">Auto {{ status.cycle_seconds }}s</span>{% else %}<span class="chip off">Auto off</span>{% endif %}
+      <div class="btns">
+        <button class="btn-arm" id="btn-arm" type="button">Arm</button>
+        <button class="btn-disarm" id="btn-disarm" type="button">Disarm</button>
+        <button class="btn-run full" id="btn-run" type="button">Run cycle</button>
       </div>
-
-      <div class="row g-2 mb-3">
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Spot</div><div class="val mono" id="kpi-spot">{{ '%.2f'|format(spot) if spot else '—' }}</div></div></div>
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Account</div><div class="val mono" id="kpi-equity">${{ '%.0f'|format(status.account_equity) }}</div></div></div>
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Session PnL</div><div class="val mono" id="kpi-pnl">—</div></div></div>
-        <div class="col-6 col-md-3"><div class="kpi"><div class="muted small">Win rate</div><div class="val mono" id="kpi-wr">—</div></div></div>
-      </div>
-
-      <div class="panel mb-3">
-        <div class="panel-head">
-          <span>Live signal</span>
-          <div class="rules">
-            <span class="rule-pill">SL {{ '%.0f'|format(status.stop_loss_pct * 100) }}%</span>
-            <span class="rule-pill">TP {{ '%.0f'|format(status.take_profit_pct * 100) }}%</span>
-            <span class="rule-pill">Max hold {{ status.max_hold_bars }} bars</span>
-            {% if status.reenter_on_shift %}<span class="rule-pill">Wall shift</span>{% endif %}
-          </div>
-        </div>
-        <div class="panel-body">
-          <div id="signal-action" class="chip off mb-2">loading</div>
-          <div class="signal-big mono mb-1" id="signal-contract">—</div>
-          <div class="muted" id="signal-detail">Fetching gamma wall…</div>
-        </div>
-      </div>
-
-      <div class="panel mb-3">
-        <div class="panel-head">Controls</div>
-        <div class="panel-body">
-          <div class="d-flex flex-wrap gap-2 mb-2">
-            <button class="btn btn-sm btn-arm" id="btn-arm" type="button">Arm trader</button>
-            <button class="btn btn-sm btn-outline-muted" id="btn-disarm" type="button">Disarm</button>
-            <button class="btn btn-sm btn-run" id="btn-run" type="button">Run cycle now</button>
-            <button class="btn btn-sm btn-outline-muted" id="btn-refresh" type="button">↻ Refresh</button>
-          </div>
-          <div id="status-msg" class="muted"></div>
-        </div>
-      </div>
-
-      <div class="row g-3">
-        <div class="col-lg-6">
-          <div class="panel">
-            <div class="panel-head">Open positions <span class="muted" id="open-count">({{ status.open_positions|length }})</span></div>
-            <div class="panel-body p-0">
-              <div class="table-responsive">
-                <table class="table table-sm table-borderless mb-0">
-                  <thead><tr class="text-muted"><th>Contract</th><th>Qty</th><th>Entry</th><th>γ wall</th></tr></thead>
-                  <tbody id="open-body">
-                    {% for p in status.open_positions %}
-                    <tr>
-                      <td class="mono type-{{ p.option_type }}">{{ p.option_type|upper }} {{ '%.2f'|format(p.strike) }}</td>
-                      <td>{{ '%.0f'|format(p.qty or 1) }}</td>
-                      <td class="mono">${{ '%.2f'|format(p.entry_premium) }}</td>
-                      <td class="mono">{{ '%.0f'|format(p.signal_strike or p.strike) }}</td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="4" class="text-muted p-3">No open wall GEX positions</td></tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="col-lg-6">
-          <div class="panel">
-            <div class="panel-head">Recent trades</div>
-            <div class="panel-body p-0">
-              <div class="table-responsive">
-                <table class="table table-sm table-borderless mb-0">
-                  <thead><tr class="text-muted"><th>Exit</th><th>Contract</th><th>PnL</th><th>Reason</th></tr></thead>
-                  <tbody id="recent-body">
-                    {% for t in status.recent_trades if t.status == 'closed' %}
-                    <tr>
-                      <td class="mono small">{{ (t.exit_ts or '')[:16] }}</td>
-                      <td class="mono type-{{ t.option_type }}">{{ t.option_type|upper }} {{ '%.2f'|format(t.strike) }}</td>
-                      <td class="mono {% if (t.pnl_usd or 0) >= 0 %}type-call{% else %}type-put{% endif %}">${{ '%.2f'|format(t.pnl_usd or 0) }}</td>
-                      <td class="small muted">{{ t.exit_reason or '—' }}</td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="4" class="text-muted p-3">No closed trades yet</td></tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <div id="status-msg"></div>
     </div>
 
     <script>
       const TICKER = {{ ticker|tojson }};
       const LIVE_MODE = {{ status.live_mode|tojson }};
 
-      function fmtPct(v) {
-        if (v == null || Number.isNaN(v)) return '—';
-        return (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%';
-      }
       function fmtUsd(v) {
         if (v == null || Number.isNaN(v)) return '—';
-        const sign = v >= 0 ? '+' : '';
+        const sign = v >= 0 ? '+' : '-';
         return sign + '$' + Math.abs(v).toFixed(2);
       }
+
       function setMsg(text, tone) {
         const el = document.getElementById('status-msg');
         el.textContent = text || '';
-        el.style.color = tone === 'ok' ? '#22c55e' : tone === 'err' ? '#ef4444' : '#64748b';
+        el.className = tone || '';
       }
 
       function renderSignal(cycle) {
         const sig = cycle?.signal || {};
         const rec = cycle?.recommended || sig.recommended || {};
-        const action = cycle?.action || '—';
-        const actionEl = document.getElementById('signal-action');
-        actionEl.textContent = action.replace(/_/g, ' ');
-        actionEl.className = 'chip mb-2 ' + (action === 'opened' ? 'on' : action === 'signal_only' ? 'on' : 'off');
-        const ot = (rec.option_type || '').toUpperCase();
-        const strike = rec.strike != null ? Number(rec.strike).toFixed(2) : '—';
-        const wall = rec.wall_strike != null ? Number(rec.wall_strike).toFixed(0) : '—';
-        const gamma = rec.gamma_bn != null ? Number(rec.gamma_bn).toFixed(2) : '—';
-        const contract = document.getElementById('signal-contract');
-        contract.textContent = ot ? `${ot} ${strike}` : 'No signal';
-        contract.className = 'signal-big mono mb-1 type-' + (rec.option_type || '');
-        document.getElementById('signal-detail').textContent =
-          rec.rationale || cycle?.reason || (sig.available === false ? (sig.reason || 'No trade signal') : 'Ready');
-        if (rec.wall_strike != null) {
-          document.getElementById('signal-detail').textContent +=
-            ` · wall ${wall} · γ ${gamma} Bn`;
+        const line = document.getElementById('signal-line');
+        if (!rec.option_type) {
+          line.textContent = cycle?.reason || sig.reason || 'No signal';
+          line.className = 'signal mono';
+          return;
         }
+        const ot = rec.option_type.toUpperCase();
+        const strike = Number(rec.strike).toFixed(2);
+        const wall = rec.wall_strike != null ? Number(rec.wall_strike).toFixed(0) : '—';
+        line.textContent = `${ot} ${strike} · wall ${wall}`;
+        line.className = 'signal mono type-' + rec.option_type;
       }
 
       function renderStatus(payload) {
         const st = payload.status || payload;
         const perf = st.performance || {};
-        document.getElementById('kpi-equity').textContent = '$' + Math.round(st.account_equity || 0);
-        document.getElementById('kpi-pnl').textContent = fmtUsd(perf.total_pnl_usd);
-        document.getElementById('kpi-pnl').className = 'val mono ' + ((perf.total_pnl_usd || 0) >= 0 ? 'type-call' : 'type-put');
-        document.getElementById('kpi-wr').textContent = perf.total_trades ? (perf.win_rate * 100).toFixed(1) + '%' : '—';
+        const pnl = perf.total_pnl_usd || 0;
+        const pnlEl = document.getElementById('pnl-value');
+        pnlEl.textContent = fmtUsd(pnl);
+        pnlEl.className = 'pnl-value mono ' + (pnl >= 0 ? 'up' : 'down');
+        document.getElementById('pnl-meta').textContent =
+          `Account $${Math.round(st.account_equity || 0)} · ${perf.total_trades || 0} trades` +
+          (perf.total_trades ? ` · ${(perf.win_rate * 100).toFixed(0)}% win` : '');
         const armChip = document.getElementById('arm-chip');
         armChip.textContent = st.armed ? 'Armed' : 'Disarmed';
-        armChip.className = 'chip ' + (st.armed ? 'on' : 'off');
-        document.getElementById('open-count').textContent = '(' + (st.open_positions || []).length + ')';
-        const openBody = document.getElementById('open-body');
-        const opens = st.open_positions || [];
-        openBody.innerHTML = opens.length ? opens.map(p => `
-          <tr>
-            <td class="mono type-${p.option_type}">${(p.option_type || '').toUpperCase()} ${Number(p.strike).toFixed(2)}</td>
-            <td>${Number(p.qty || 1).toFixed(0)}</td>
-            <td class="mono">$${Number(p.entry_premium).toFixed(2)}</td>
-            <td class="mono">${Number(p.signal_strike || p.strike).toFixed(0)}</td>
-          </tr>`).join('') : '<tr><td colspan="4" class="text-muted p-3">No open wall GEX positions</td></tr>';
-        const recentBody = document.getElementById('recent-body');
-        const recent = (st.recent_trades || []).filter(t => t.status === 'closed').slice(0, 12);
-        recentBody.innerHTML = recent.length ? recent.map(t => `
-          <tr>
-            <td class="mono small">${(t.exit_ts || '').slice(0, 16)}</td>
-            <td class="mono type-${t.option_type}">${(t.option_type || '').toUpperCase()} ${Number(t.strike).toFixed(2)}</td>
-            <td class="mono ${(t.pnl_usd || 0) >= 0 ? 'type-call' : 'type-put'}">${fmtUsd(t.pnl_usd)}</td>
-            <td class="small muted">${t.exit_reason || '—'}</td>
-          </tr>`).join('') : '<tr><td colspan="4" class="text-muted p-3">No closed trades yet</td></tr>';
-      }
-
-      async function fetchStatus() {
-        const res = await fetch(`/api/wall-gex/status?ticker=${encodeURIComponent(TICKER)}`);
-        if (!res.ok) throw new Error('status ' + res.status);
-        return res.json();
+        armChip.className = 'chip' + (st.armed ? ' on' : '');
+        document.getElementById('info-open').textContent = (st.open_positions || []).length;
       }
 
       async function refresh() {
         try {
-          const data = await fetchStatus();
+          const res = await fetch(`/api/wall-gex/status?ticker=${encodeURIComponent(TICKER)}`);
+          if (!res.ok) throw new Error('status ' + res.status);
+          const data = await res.json();
           renderStatus(data);
           renderSignal(data.last_cycle || {});
-          if (data.spot) {
-            document.getElementById('kpi-spot').textContent = Number(data.spot).toFixed(2);
-            document.getElementById('spot-chip').textContent = 'SPX ' + Number(data.spot).toFixed(2);
-            document.getElementById('spot-chip').className = 'chip on';
-          }
+          if (data.spot) document.getElementById('info-spot').textContent = Number(data.spot).toFixed(2);
         } catch (e) {
           setMsg('Refresh failed: ' + e.message, 'err');
         }
@@ -257,20 +170,22 @@
       document.getElementById('btn-arm').addEventListener('click', async () => {
         try {
           const body = { armed: true, ticker: TICKER };
-          if (LIVE_MODE && !confirm('Arm LIVE Webull trading?')) return;
+          if (LIVE_MODE && !confirm('Arm LIVE trading?')) return;
           if (LIVE_MODE) body.live_confirm = true;
           const data = await postJson('/api/wall-gex/arm', body);
           renderStatus(data.status || data);
-          setMsg('Trader armed', 'ok');
+          setMsg('Armed', 'ok');
         } catch (e) { setMsg(e.message, 'err'); }
       });
+
       document.getElementById('btn-disarm').addEventListener('click', async () => {
         try {
           const data = await postJson('/api/wall-gex/arm', { armed: false, ticker: TICKER });
           renderStatus(data.status || data);
-          setMsg('Trader disarmed', 'ok');
+          setMsg('Disarmed', 'ok');
         } catch (e) { setMsg(e.message, 'err'); }
       });
+
       document.getElementById('btn-run').addEventListener('click', async () => {
         const btn = document.getElementById('btn-run');
         btn.disabled = true;
@@ -278,30 +193,13 @@
           const data = await postJson('/api/wall-gex/run', { ticker: TICKER });
           renderStatus(data.status || data);
           renderSignal(data);
-          setMsg(data.action ? `Cycle: ${data.action}${data.reason ? ' — ' + data.reason : ''}` : 'Cycle complete', data.action === 'opened' ? 'ok' : 'ok');
+          const note = data.action ? data.action.replace(/_/g, ' ') : 'done';
+          setMsg(data.reason ? `${note} — ${data.reason}` : note, 'ok');
         } catch (e) { setMsg(e.message, 'err'); }
         finally { btn.disabled = false; }
       });
-      document.getElementById('btn-refresh').addEventListener('click', refresh);
-
-      function startSpotStream() {
-        const es = new EventSource('/api/spot-stream');
-        es.onmessage = (ev) => {
-          try {
-            const data = JSON.parse(ev.data);
-            const px = data.price || data.spot;
-            if (px > 0) {
-              document.getElementById('kpi-spot').textContent = Number(px).toFixed(2);
-              document.getElementById('spot-chip').textContent = 'SPX ' + Number(px).toFixed(2);
-              document.getElementById('spot-chip').className = 'chip on';
-            }
-          } catch (_) {}
-        };
-        es.onerror = () => { es.close(); };
-      }
 
       refresh();
-      startSpotStream();
       setInterval(refresh, 30000);
     </script>
   </body>
