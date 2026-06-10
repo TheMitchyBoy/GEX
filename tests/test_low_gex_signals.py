@@ -1,0 +1,35 @@
+"""Low-GEX strike signal: call/put toward minimum gamma wall."""
+
+import pandas as pd
+
+from gex_core.trading.low_gex_signals import compute_low_gex_signal
+
+
+def test_low_gex_below_spot_buys_puts():
+    exposure = pd.Series(
+        [-2.0, -0.5, 0.3, 1.0],
+        index=[7440.0, 7450.0, 7460.0, 7470.0],
+    )
+    pack = compute_low_gex_signal(exposure, spot=7460.0)
+    assert pack["available"] is True
+    rec = pack["recommended"]
+    assert rec["option_type"] == "put"
+    assert rec["strike"] == 7440.0
+    assert rec["gamma_bn"] == -2.0
+
+
+def test_low_gex_above_spot_buys_calls():
+    exposure = pd.Series(
+        [0.5, 1.0, -1.5, -0.2],
+        index=[7440.0, 7450.0, 7470.0, 7480.0],
+    )
+    pack = compute_low_gex_signal(exposure, spot=7460.0)
+    assert pack["available"] is True
+    rec = pack["recommended"]
+    assert rec["option_type"] == "call"
+    assert rec["strike"] == 7470.0
+
+
+def test_low_gex_unavailable_without_data():
+    pack = compute_low_gex_signal(pd.Series(dtype=float), spot=5000.0)
+    assert pack["available"] is False
