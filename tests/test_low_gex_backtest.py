@@ -66,6 +66,14 @@ def test_backtest_low_gex_reenter_each_bar_opens_every_snapshot(monkeypatch):
     assert result.get("by_exit_reason", {}).get("bar_rotation", 0) >= 2
 
 
+def test_wall_max_hold_bars_defaults_to_eight(monkeypatch):
+    monkeypatch.delenv("GEX_WALL_MAX_HOLD_BARS", raising=False)
+    monkeypatch.delenv("GEX_WALL_MAX_HOLD_MINUTES", raising=False)
+    from gex_core.trading.config import wall_max_hold_bars
+
+    assert wall_max_hold_bars() == 8
+
+
 def test_backtest_low_gex_default_sl_tp(monkeypatch):
     _disable_wall_session_filters(monkeypatch)
     monkeypatch.delenv("GEX_WALL_STOP_LOSS_PCT", raising=False)
@@ -77,6 +85,7 @@ def test_backtest_low_gex_default_sl_tp(monkeypatch):
     result = backtest_low_gex_trader("SPX", history=history, starting_capital=5000.0, lookback_days=None)
     assert result["stop_loss_pct"] == 0.03
     assert result["take_profit_pct"] == 0.20
+    assert result.get("max_hold_bars") == 8
 
 
 def test_backtest_low_gex_skips_late_session_entries():

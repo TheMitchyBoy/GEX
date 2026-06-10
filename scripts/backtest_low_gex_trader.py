@@ -10,6 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import os
+
 from gex_core.trading.low_gex_backtest import backtest_low_gex_trader
 
 
@@ -32,11 +34,20 @@ def main() -> None:
     parser.add_argument("--take-profit", type=float, default=0.20, help="Take profit fraction (default 20%%)")
     parser.add_argument("--starting-capital", type=float, default=500.0)
     parser.add_argument(
+        "--max-hold-bars",
+        type=int,
+        default=None,
+        help="Max hold in bars before flat exit (default: GEX_WALL_MAX_HOLD_BARS=8)",
+    )
+    parser.add_argument(
         "--reenter-each-bar",
         action="store_true",
         help="Close prior position every bar and open fresh toward current lowest GEX",
     )
     args = parser.parse_args()
+
+    if args.max_hold_bars is not None:
+        os.environ["GEX_WALL_MAX_HOLD_BARS"] = str(args.max_hold_bars)
 
     result = backtest_low_gex_trader(
         args.ticker.upper(),
@@ -87,6 +98,8 @@ def main() -> None:
     if result.get("weekend_snapshots_excluded"):
         print(f"weekend snapshots excluded: {result['weekend_snapshots_excluded']}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")
+    if result.get("max_hold_bars"):
+        print(f"max hold: {result['max_hold_bars']} bars")
 
     account = result.get("account")
     if account:
