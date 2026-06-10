@@ -394,8 +394,34 @@ def webull_region() -> str:
     return os.environ.get("GEX_WEBULL_REGION", "us").strip().lower() or "us"
 
 
+def webull_use_uat() -> bool:
+    """Use Webull UAT/sandbox hosts (for integration testing)."""
+    return _flag("GEX_WEBULL_USE_UAT", "0")
+
+
+def webull_trade_endpoint() -> str:
+    """Trading API host (see https://developer.webull.com/apis/docs/sdk/)."""
+    explicit = os.environ.get("GEX_WEBULL_ENDPOINT", "").strip()
+    if explicit:
+        return explicit
+    if webull_use_uat():
+        return "us-openapi-alb.uat.webullbroker.com"
+    return "api.webull.com"
+
+
+def webull_data_endpoint() -> str:
+    """Market data API host (options quotes, snapshots)."""
+    explicit = os.environ.get("GEX_WEBULL_DATA_ENDPOINT", "").strip()
+    if explicit:
+        return explicit
+    if webull_use_uat():
+        return "us-broker-api.uat.webullbroker.com"
+    return "broker-api.webull.com"
+
+
 def webull_endpoint() -> str:
-    return os.environ.get("GEX_WEBULL_ENDPOINT", "us-openapi.webullbroker.com").strip()
+    """Alias for the trading API host."""
+    return webull_trade_endpoint()
 
 
 def signal_ticker() -> str:

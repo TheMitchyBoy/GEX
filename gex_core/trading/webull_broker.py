@@ -12,13 +12,14 @@ from gex_core.trading.config import (
     webull_account_id,
     webull_app_key,
     webull_app_secret,
-    webull_endpoint,
+    webull_data_endpoint,
     webull_equity_cache_seconds,
     webull_fill_poll_sec,
     webull_fill_timeout_sec,
     webull_limit_buffer_pct,
     webull_option_category,
     webull_region,
+    webull_trade_endpoint,
 )
 from gex_core.trading.execution import build_webull_option_symbol
 from gex_core.trading.paper_broker import estimate_entry_premium, estimate_option_pnl_pct
@@ -117,8 +118,32 @@ def fetch_total_account_value(*, force_refresh: bool = False) -> float | None:
             _EQUITY_CACHE[aid] = (now, value)
             return value
     except Exception as exc:
-        logger.warning("Webull account balance fetch failed: %s", exc)
+        logger.warning("Webull account balance fetch failed: %s", _format_webull_error(exc))
     return cached[1] if cached else None
+
+
+def _format_webull_error(exc: Exception) -> str:
+    msg = str(exc)
+    host = webull_trade_endpoint()
+    if "Name or service not known" in msg or "NameResolutionError" in msg or "NXDOMAIN" in msg:
+        return (
+            f"Cannot resolve Webull API host '{host}'. "
+            "Set GEX_WEBULL_ENDPOINT=api.webull.com (production) or "
+            "GEX_WEBULL_USE_UAT=1 for sandbox. Use GEX_TRADER_PAPER=1 to skip Webull."
+        )
+    if "Failed to establish a new connection" in msg or "Max retries exceeded" in msg:
+        return f"Cannot connect to Webull API at {host}: {msg}"
+    return msg
+
+
+def _configure_api_client(client, *, region: str) -> None:
+    from webull.core.common import api_type
+
+    trade_host = webull_trade_endpoint()
+    data_host = webull_data_endpoint()
+    client.add_endpoint(region, trade_host, api_type=api_type.DEFAULT)
+    if data_host and data_host != trade_host:
+        client.add_endpoint(region, data_host, api_type=api_type.QUOTES)
 
 
 def _ensure_client():
@@ -131,9 +156,12 @@ def _ensure_client():
     key = webull_app_key()
     secret = webull_app_secret()
     region = webull_region()
-    _client = ApiClient(key, secret, region)
-    _client.add_endpoint(region, webull_endpoint())
-    _trade_client = TradeClient(_client)
+    try:
+        _client = ApiClient(key, secret, region)
+        _configure_api_client(_client, region=region)
+        _trade_client = TradeClient(_client)
+    except Exception as exc:
+        raise EnvironmentError(_format_webull_error(exc)) from exc
     return _trade_client
 
 
@@ -305,9 +333,11 @@ def limit_price_for_buy(
     expire_date: str | None = None,
 ) -> float:
     """Quote-aware limit price with paper-estimate fallback."""
+    from gex_core.trading.config import live_trading_allowed
+
     buf = webull_limit_buffer_pct()
     quote: dict[str, float | None] = {}
-    if underlying and expire_date:
+    if live_trading_allowed() and underlying and expire_date:
         quote = fetch_option_quote(
             underlying=underlying,
             option_type=option_type,
