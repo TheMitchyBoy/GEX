@@ -506,6 +506,11 @@ def webull_configured() -> bool:
     return bool(webull_app_key() and webull_app_secret() and webull_account_id())
 
 
+def webull_2fa_disabled() -> bool:
+    """Set GEX_WEBULL_NO_2FA=1 when Webull OpenAPI 2FA/SMS is turned off."""
+    return _flag("GEX_WEBULL_NO_2FA", "0")
+
+
 def live_trading_allowed() -> bool:
     return (not paper_trading_only()) and webull_configured()
 

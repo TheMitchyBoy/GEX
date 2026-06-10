@@ -68,6 +68,13 @@
       .auth-banner ol { margin: 0.45rem 0 0; padding-left: 1.15rem; }
       .auth-banner li { margin: 0.15rem 0; }
       .auth-banner .token { color: #fcd34d; font-size: 0.7rem; margin-top: 0.35rem; }
+      .auth-banner .btn-reset {
+        margin-top: 0.65rem; width: 100%; border: 1px solid rgba(251, 191, 36, 0.45);
+        background: rgba(251, 191, 36, 0.16); color: #fef3c7; border-radius: 8px;
+        padding: 0.55rem 0.7rem; font-weight: 600; font-size: 0.78rem; cursor: pointer;
+        font-family: inherit;
+      }
+      .auth-banner .btn-reset:disabled { opacity: 0.55; cursor: not-allowed; }
     </style>
   </head>
   <body>
@@ -152,12 +159,39 @@
         }
         const steps = (auth.verify_steps || []).map((s) => `<li>${s}</li>`).join('');
         const token = auth.token_status ? `<div class="token">Token: ${auth.token_status}</div>` : '';
+        const resetLabel = auth.two_fa_required === false
+          ? 'Reset Webull connection'
+          : 'Delete token &amp; request new SMS';
+        const resetBtn = auth.required
+          ? `<button class="btn-reset" id="btn-reset-token" type="button">${resetLabel}</button>`
+          : '';
         el.className = 'auth-banner show';
         el.innerHTML =
           `<strong>${auth.headline || 'Webull verification required'}</strong>` +
           `<div>${auth.message || ''}</div>` +
           (steps ? `<ol>${steps}</ol>` : '') +
-          token;
+          token +
+          resetBtn;
+        const resetEl = document.getElementById('btn-reset-token');
+        if (resetEl) {
+          resetEl.addEventListener('click', resetWebullToken, { once: true });
+        }
+      }
+
+      async function resetWebullToken() {
+        const btn = document.getElementById('btn-reset-token');
+        if (btn) btn.disabled = true;
+        try {
+          const data = await postJson(API.reset_token, { ticker: TICKER, trigger_sms: true });
+          if (data.status) renderStatus({ status: data.status });
+          const err = data.probe_error || data.sms_error;
+          const okMsg = data.message || 'Webull connection reset';
+          const note = err ? `${okMsg} — ${err}` : okMsg;
+          setMsg(note, err ? 'err' : 'ok');
+        } catch (e) {
+          setMsg(e.message, 'err');
+          if (btn) btn.disabled = false;
+        }
       }
 
       function renderStatus(payload) {
