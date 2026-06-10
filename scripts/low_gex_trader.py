@@ -30,6 +30,8 @@ from gex_core.env_bootstrap import load_env_files
 
 load_env_files()
 
+os.environ.setdefault("GEX_WALL_SIGNAL_FILTERS", "0")
+
 from gex_core.trading.low_gex_engine import fetch_gex_exposure, run_low_gex_trade
 
 
@@ -118,6 +120,12 @@ def main() -> None:
         closed = result.get("closed_for_rotation") or []
         if closed:
             print(f"rotated: closed {len(closed)} position(s) before entry")
+
+        exits = result.get("exits") or {}
+        eod = exits.get("eod_exits") or []
+        regular = exits.get("exits") or []
+        if eod or regular:
+            print(f"exits: {len(regular)} stop/target | {len(eod)} eod flatten")
 
         action = result.get("action")
         if action == "signal_only":

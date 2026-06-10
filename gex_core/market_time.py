@@ -112,11 +112,19 @@ def export_ts_is_trading_session(ts: str) -> bool:
     return is_trader_session_active(now=parse_export_ts_market(ts))
 
 
-def filter_trading_history(history: list[dict], *, session_only: bool = True) -> list[dict]:
-    """Drop weekend snapshots from walk-forward history when session-only trading is enabled."""
-    if not session_only:
-        return list(history)
-    return [row for row in history if export_ts_is_trading_day(str(row.get("ts") or ""))]
+def filter_trading_history(
+    history: list[dict],
+    *,
+    session_only: bool = True,
+    intraday_only: bool = False,
+) -> list[dict]:
+    """Drop off-session snapshots from walk-forward history."""
+    rows = list(history)
+    if session_only:
+        rows = [row for row in rows if export_ts_is_trading_day(str(row.get("ts") or ""))]
+    if intraday_only:
+        rows = [row for row in rows if export_ts_is_trading_session(str(row.get("ts") or ""))]
+    return rows
 
 
 def is_trader_session_active(*, now: datetime | None = None) -> bool:

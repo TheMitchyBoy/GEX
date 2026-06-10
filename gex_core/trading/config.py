@@ -203,6 +203,81 @@ def max_entries_per_cycle() -> int:
         return 1
 
 
+def wall_stop_loss_pct() -> float:
+    try:
+        return max(0.01, float(os.environ.get("GEX_WALL_STOP_LOSS_PCT", "0.03")))
+    except (TypeError, ValueError):
+        return 0.03
+
+
+def wall_take_profit_pct() -> float:
+    try:
+        return max(0.05, float(os.environ.get("GEX_WALL_TAKE_PROFIT_PCT", "0.22")))
+    except (TypeError, ValueError):
+        return 0.22
+
+
+def wall_intraday_session() -> bool:
+    """Keep only regular-session export snapshots in wall GEX backtests."""
+    return _flag("GEX_WALL_INTRADAY_SESSION", "1")
+
+
+def wall_entry_time_filter() -> bool:
+    """Skip wall entries outside the entry window (after open / before close)."""
+    return _flag("GEX_WALL_ENTRY_TIME_FILTER", "1")
+
+
+def wall_signal_filters_enabled() -> bool:
+    """Quality gates: min |gamma|, regime, wall drift (off by default)."""
+    return _flag("GEX_WALL_SIGNAL_FILTERS", "0")
+
+
+def wall_min_gamma_bn() -> float:
+    """Skip walls with |net GEX| below this (Bn)."""
+    try:
+        return max(0.0, float(os.environ.get("GEX_WALL_MIN_GAMMA_BN", "0.5")))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def wall_block_short_gamma() -> bool:
+    """Skip entries when snapshot regime is short gamma."""
+    return _flag("GEX_WALL_BLOCK_SHORT_GAMMA", "0")
+
+
+def wall_min_drift_pts() -> float:
+    """Require wall strike to move at least this many points vs prior bar (0=off)."""
+    try:
+        return max(0.0, float(os.environ.get("GEX_WALL_MIN_DRIFT_PTS", "0")))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def wall_max_hold_bars() -> int:
+    """Hard max hold for wall GEX trades (bars); default 8 ≈ 40 min on 5-min snapshots."""
+    minutes = os.environ.get("GEX_WALL_MAX_HOLD_MINUTES", "").strip()
+    if minutes:
+        try:
+            bar = max(1.0, low_gex_bar_minutes())
+            return max(1, int(round(float(minutes) / bar)))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return max(1, int(os.environ.get("GEX_WALL_MAX_HOLD_BARS", "8")))
+    except (TypeError, ValueError):
+        return 8
+
+
+def wall_reenter_on_shift() -> bool:
+    """Close and reopen when the target GEX wall strike moves."""
+    return _flag("GEX_WALL_REENTER_ON_SHIFT", "1")
+
+
+def wall_reentry_after_stop() -> bool:
+    """Allow a fresh entry at the same strike after a stop-loss (no strike cooldown)."""
+    return _flag("GEX_WALL_REENTRY_AFTER_STOP", "1")
+
+
 def low_gex_reenter_each_bar() -> bool:
     """Close open low-GEX positions every bar and open fresh toward the current wall."""
     return _flag("GEX_LOW_GEX_REENTER_EACH_BAR", "0")

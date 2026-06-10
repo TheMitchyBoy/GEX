@@ -34,13 +34,14 @@ def main() -> None:
     parser.add_argument("--ticker", default="SPX")
     parser.add_argument("--lookback-days", type=int, default=7)
     parser.add_argument("--starting-capital", type=float, default=500.0)
+    parser.add_argument("--stop-loss", type=float, default=0.03, help="Stop loss fraction (default 3%%)")
+    parser.add_argument("--take-profit", type=float, default=0.22, help="Take profit fraction (default 22%%)")
     parser.add_argument(
         "--reenter-each-bar",
         action="store_true",
-        default=True,
-        help="Rotate position every bar (default on)",
+        help="Rotate position every bar (closes skip stop/target)",
     )
-    parser.add_argument("--no-reenter", action="store_true", help="Hold until exit instead of bar rotation")
+    parser.add_argument("--no-reenter", action="store_true", help="Hold until stop/target (default)")
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--dedupe",
@@ -49,11 +50,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    reenter = args.reenter_each_bar and not args.no_reenter
     result = compare_wall_gex_backtest(
         args.ticker.upper(),
         lookback_days=args.lookback_days,
         starting_capital=args.starting_capital,
-        reenter_each_bar=not args.no_reenter,
+        reenter_each_bar=reenter,
+        stop_loss=args.stop_loss,
+        take_profit=args.take_profit,
         dedupe_identical_strikes=args.dedupe,
     )
 
@@ -67,7 +71,10 @@ def main() -> None:
 
     print(f"\n=== Wall GEX comparison · {result['ticker']} ({result['lookback_days']}d) ===")
     print(f"window: {result.get('date_from')} -> {result.get('date_to')}")
-    print(f"snapshots: {result.get('snapshots')}  |  re-enter each bar: {result.get('reenter_each_bar')}")
+    print(
+        f"snapshots: {result.get('snapshots')}  |  re-enter each bar: {result.get('reenter_each_bar')}  |  "
+        f"stop/target: {-args.stop_loss:.0%} / {args.take_profit:.0%}"
+    )
     print()
     print(f"{'':24} {'LOWEST GEX':>14} {'HIGHEST GEX':>14}")
     print("-" * 54)

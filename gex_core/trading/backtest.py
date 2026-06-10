@@ -152,6 +152,10 @@ class BacktestState:
     skipped_no_execution_spot: int = 0
     skipped_weekends: int = 0
     skipped_low_confidence: int = 0
+    skipped_wall_weak_gamma: int = 0
+    skipped_wall_regime: int = 0
+    skipped_wall_drift: int = 0
+    last_wall_strike: float | None = None
     strike_cooldown: dict[tuple[float, str], str] = field(default_factory=dict)
     account: AccountLedger | None = None
 
@@ -404,6 +408,7 @@ def _check_exits(
     row: dict,
     prev_ts: str | None = None,
     prev_signal_spot: float | None = None,
+    apply_stop_cooldown: bool = True,
 ) -> None:
     mark_spot = _mark_spot(signal_spot)
     if mark_spot is None or mark_spot <= 0:
@@ -475,7 +480,7 @@ def _check_exits(
                 bars_held=bars_held,
                 sell_qty=sell_qty,
             )
-            if reason == "stop_loss":
+            if reason == "stop_loss" and apply_stop_cooldown:
                 key = (pos.signal_strike or pos.strike, pos.option_type.lower())
                 cooldown_bars = stop_cooldown_bars()
                 cooldown_minutes = cooldown_bars * bar_minutes

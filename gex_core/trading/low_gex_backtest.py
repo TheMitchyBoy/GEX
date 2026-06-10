@@ -9,7 +9,11 @@ import pandas as pd
 from gex_core.exports import EXPORT_DIR
 from gex_core.features import safe_float
 from gex_core.history import _build_history_impl
-from gex_core.market_time import export_ts_is_trading_day, filter_trading_history
+from gex_core.market_time import (
+    export_ts_entry_window_ok,
+    export_ts_is_trading_day,
+    filter_trading_history,
+)
 from gex_core.trading.backtest import (
     AccountLedger,
     BacktestState,
@@ -29,14 +33,59 @@ from gex_core.trading.config import (
     low_gex_reenter_each_bar,
     max_entries_per_cycle,
     max_open_positions,
-    stop_loss_pct,
-    take_profit_pct,
     trader_session_only,
+    wall_entry_time_filter,
+    wall_intraday_session,
+    wall_reenter_on_shift,
+    wall_reentry_after_stop,
+    wall_max_hold_bars,
+    wall_signal_filters_enabled,
+    wall_stop_loss_pct,
+    wall_take_profit_pct,
 )
-from gex_core.trading.exits import build_exit_profile
-from gex_core.trading.low_gex_signals import WallTarget, compute_wall_gex_signal
+from gex_core.trading.exits import build_simple_exit_profile
+from gex_core.trading.low_gex_signals import (
+    WallTarget,
+    compute_wall_gex_signal,
+    wall_entry_quality_ok,
+)
 from gex_core.trading.paper_broker import estimate_entry_premium
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
+
+
+def _flatten_on_wall_shift(
+    state: BacktestState,
+    *,
+    idx: int,
+    ts: str,
+    signal_spot: float,
+    row: dict,
+    wall_strike: float,
+) -> None:
+    """Close positions tied to a prior wall when the GEX wall strike moves."""
+    mark_spot = _mark_spot(signal_spot)
+    if mark_spot is None or mark_spot <= 0 or not state.open_positions:
+        return
+    bar_minutes = _snapshot_bar_minutes(row)
+    for pos in list(state.open_positions):
+        prior_wall = float(pos.magnet_strike or pos.signal_strike or 0.0)
+        if prior_wall <= 0 or abs(prior_wall - wall_strike) < 0.5:
+            continue
+        pnl_pct = _position_pnl(pos, mark_spot)
+        bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
+        _apply_backtest_exit(
+            state,
+            pos,
+            idx=idx,
+            exit_ts=ts,
+            exit_spot=mark_spot,
+            pnl_pct=pnl_pct,
+            exit_reason="wall_shift",
+            bars_held=bars_held,
+        )
+    state.open_positions = [p for p in state.open_positions if p.qty > 0]
+    if state.account:
+        state.account.record_equity(ts, state.open_positions, mark_spot)
 
 
 def _flatten_for_reentry(
@@ -79,6 +128,12 @@ def _maybe_enter_wall_gex(
     max_open: int,
     target: WallTarget = "min",
     reenter_each_bar: bool = False,
+    reenter_on_shift: bool | None = None,
+    reentry_after_stop: bool | None = None,
+    entry_time_filter: bool | None = None,
+    signal_filters: bool | None = None,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
 ) -> None:
     if not export_ts_is_trading_day(ts):
         state.skipped_weekends += 1
@@ -89,16 +144,40 @@ def _maybe_enter_wall_gex(
     if not isinstance(exposure, pd.Series):
         exposure = None
 
+    time_filter = wall_entry_time_filter() if entry_time_filter is None else entry_time_filter
+    if time_filter and not export_ts_entry_window_ok(ts):
+        state.skipped_filters += 1
+        return
+
     pack = compute_wall_gex_signal(exposure, spot=spot, target=target)
     if not pack.get("available"):
-        skip = str(pack.get("reason", ""))
-        if "from spot" in skip:
-            state.skipped_strike_distance += 1
-        else:
-            state.skipped_entries += 1
+        state.skipped_entries += 1
         return
 
     rec = pack["recommended"]
+    wall_strike = float(rec.get("wall_strike") or rec["strike"])
+    wall_gamma = float(rec["gamma_bn"])
+    regime = str(row.get("regime") or "")
+    quality_ok, quality_reason = wall_entry_quality_ok(
+        wall_strike=wall_strike,
+        wall_gamma=wall_gamma,
+        regime=regime,
+        last_wall_strike=state.last_wall_strike,
+        signal_filters=signal_filters,
+    )
+    state.last_wall_strike = wall_strike
+    if not quality_ok:
+        reason = quality_reason.lower()
+        if "below min" in reason or "|γ|" in quality_reason:
+            state.skipped_wall_weak_gamma += 1
+        elif "short-gamma" in reason:
+            state.skipped_wall_regime += 1
+        elif "drift" in reason:
+            state.skipped_wall_drift += 1
+        else:
+            state.skipped_filters += 1
+        return
+
     opened_this_cycle = 0
     if len(state.open_positions) >= max_open:
         return
@@ -107,12 +186,22 @@ def _maybe_enter_wall_gex(
 
     option_type = str(rec["option_type"])
     signal_strike = float(rec["strike"])
-    wall_strike = float(rec.get("wall_strike") or signal_strike)
     trade_ctx = _resolve_trade_context(signal_strike=signal_strike, signal_spot=spot)
     if trade_ctx is None:
         state.skipped_no_execution_spot += 1
         return
     exec_strike, exec_spot, _ = trade_ctx
+
+    shift = wall_reenter_on_shift() if reenter_on_shift is None else reenter_on_shift
+    if shift and not reenter_each_bar:
+        _flatten_on_wall_shift(
+            state,
+            idx=idx,
+            ts=ts,
+            signal_spot=spot,
+            row=row,
+            wall_strike=wall_strike,
+        )
 
     if not reenter_each_bar and _has_open_duplicate(
         state.open_positions, strike=exec_strike, option_type=option_type
@@ -143,16 +232,14 @@ def _maybe_enter_wall_gex(
         state.skipped_entries += 1
         return
 
-    regime = str(row.get("regime") or "")
-    expected_move = safe_float(row.get("expected_move_pct"), 0.0) or None
-    profile = build_exit_profile(
-        ai_confidence=confidence,
-        gamma_delta=0.0,
-        regime=regime,
-        entry_spot=exec_spot,
-        strike=exec_strike,
-        expected_move_pct=expected_move,
-        magnet_strike=wall_strike,
+    sl = stop_loss if stop_loss is not None else wall_stop_loss_pct()
+    tp = take_profit if take_profit is not None else wall_take_profit_pct()
+    hold_bars = wall_max_hold_bars()
+    profile = build_simple_exit_profile(
+        stop_loss=sl,
+        take_profit=tp,
+        time_stop_bars=hold_bars,
+        max_hold_bars=hold_bars,
     )
     state.open_positions.append(
         _OpenPosition(
@@ -190,13 +277,23 @@ def backtest_wall_gex_trader(
     starting_capital: float | None = None,
     history: list[dict] | None = None,
     reenter_each_bar: bool | None = None,
+    reenter_on_shift: bool | None = None,
+    reentry_after_stop: bool | None = None,
+    intraday_session: bool | None = None,
+    entry_time_filter: bool | None = None,
+    signal_filters: bool | None = None,
 ) -> dict[str, Any]:
     """Simulate min/max GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
-    stop_loss = stop_loss if stop_loss is not None else stop_loss_pct()
-    take_profit = take_profit if take_profit is not None else take_profit_pct()
+    stop_loss = stop_loss if stop_loss is not None else wall_stop_loss_pct()
+    take_profit = take_profit if take_profit is not None else wall_take_profit_pct()
     max_open = max_open if max_open is not None else max_open_positions()
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
+    shift = wall_reenter_on_shift() if reenter_on_shift is None else reenter_on_shift
+    after_stop = wall_reentry_after_stop() if reentry_after_stop is None else reentry_after_stop
+    intraday = wall_intraday_session() if intraday_session is None else intraday_session
+    time_filter = wall_entry_time_filter() if entry_time_filter is None else entry_time_filter
+    quality_filter = wall_signal_filters_enabled() if signal_filters is None else signal_filters
     if rotate:
         max_open = max(max_open, max_entries_per_cycle())
 
@@ -210,11 +307,14 @@ def backtest_wall_gex_trader(
         )
 
     raw_len = len(history)
-    weekend_snapshots_excluded = 0
-    if trader_session_only():
-        filtered = filter_trading_history(history, session_only=True)
-        weekend_snapshots_excluded = raw_len - len(filtered)
-        history = filtered
+    weekday_len = len(filter_trading_history(history, session_only=True, intraday_only=False))
+    history = filter_trading_history(
+        history,
+        session_only=trader_session_only(),
+        intraday_only=intraday,
+    )
+    weekend_snapshots_excluded = (raw_len - weekday_len) if trader_session_only() else 0
+    off_hours_snapshots_excluded = (weekday_len - len(history)) if intraday else 0
 
     if len(history) < 2:
         return {
@@ -250,6 +350,7 @@ def backtest_wall_gex_trader(
                 row=row,
                 prev_ts=str(history[idx - 1]["ts"]),
                 prev_signal_spot=safe_float(history[idx - 1].get("spot"), 0.0) or None,
+                apply_stop_cooldown=not after_stop,
             )
         else:
             _flatten_for_reentry(state, idx=idx, ts=ts, signal_spot=spot, row=row)
@@ -261,6 +362,12 @@ def backtest_wall_gex_trader(
             max_open=max_open,
             target=target,
             reenter_each_bar=rotate,
+            reenter_on_shift=shift,
+            reentry_after_stop=after_stop,
+            entry_time_filter=time_filter,
+            signal_filters=quality_filter,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
         )
 
     if state.open_positions:
@@ -301,6 +408,16 @@ def backtest_wall_gex_trader(
     result["strategy"] = "low_gex" if target == "min" else "high_gex"
     result["wall_target"] = target
     result["reenter_each_bar"] = rotate
+    result["reenter_on_shift"] = shift
+    result["reentry_after_stop"] = after_stop
+    result["intraday_session"] = intraday
+    result["entry_time_filter"] = time_filter
+    result["off_hours_snapshots_excluded"] = off_hours_snapshots_excluded
+    result["max_hold_bars"] = wall_max_hold_bars()
+    result["signal_filters"] = quality_filter
+    result["skipped_wall_weak_gamma"] = state.skipped_wall_weak_gamma
+    result["skipped_wall_regime"] = state.skipped_wall_regime
+    result["skipped_wall_drift"] = state.skipped_wall_drift
     return result
 
 
@@ -323,7 +440,7 @@ def compare_wall_gex_backtest(
     *,
     lookback_days: int = 7,
     starting_capital: float = 500.0,
-    reenter_each_bar: bool = True,
+    reenter_each_bar: bool = False,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Run min vs max wall GEX backtests on the same history window."""
