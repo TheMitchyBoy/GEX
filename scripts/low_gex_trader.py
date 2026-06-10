@@ -119,6 +119,12 @@ def main() -> None:
         if closed:
             print(f"rotated: closed {len(closed)} position(s) before entry")
 
+        exits = result.get("exits") or {}
+        eod = exits.get("eod_exits") or []
+        regular = exits.get("exits") or []
+        if eod or regular:
+            print(f"exits: {len(regular)} stop/target | {len(eod)} eod flatten")
+
         action = result.get("action")
         if action == "signal_only":
             print("\n(dry run — pass --execute to open a position)")

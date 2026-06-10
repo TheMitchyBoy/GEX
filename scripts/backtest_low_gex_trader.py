@@ -78,6 +78,12 @@ def main() -> None:
     print(f"skipped entries: {result['skipped_entries']}")
     print(f"blocked duplicates: {result.get('blocked_duplicate', 0)}")
     print(f"skipped strike distance: {result.get('skipped_strike_distance', 0)}")
+    if result.get("off_hours_snapshots_excluded"):
+        print(f"off-hours snapshots excluded: {result['off_hours_snapshots_excluded']}")
+    if result.get("intraday_session"):
+        print("intraday session filter: on")
+    if result.get("entry_time_filter"):
+        print(f"entry-time filter: on (skipped {result.get('skipped_filters', 0)})")
     if result.get("weekend_snapshots_excluded"):
         print(f"weekend snapshots excluded: {result['weekend_snapshots_excluded']}")
     print(f"stop / target: {_fmt_pct(-result['stop_loss_pct'])} / {_fmt_pct(result['take_profit_pct'])}")

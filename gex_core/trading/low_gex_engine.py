@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from gex_core.market_time import is_trader_session_active, market_today
+from gex_core.market_time import is_entry_window_active, is_trader_session_active, market_today
 from gex_core.trading.broker import broker_mode_label, get_broker
 from gex_core.trading.config import (
     execution_ticker,
@@ -16,6 +16,8 @@ from gex_core.trading.config import (
     max_open_positions,
     paper_trading_only,
     signal_ticker,
+    wall_entry_time_filter,
+    wall_intraday_session,
     wall_stop_loss_pct,
     wall_take_profit_pct,
     webull_underlying,
@@ -82,6 +84,16 @@ def _has_open_duplicate(ticker: str, *, strike: float, option_type: str) -> bool
     return False
 
 
+def manage_wall_gex_exits(ticker: str, *, spot: float) -> dict[str, list[dict[str, Any]]]:
+    """Apply EOD flatten and stop/target exits to open wall GEX positions."""
+    from gex_core.trading.engine import _check_exits, _flatten_eod
+
+    return {
+        "eod_exits": _flatten_eod(ticker.upper(), float(spot)),
+        "exits": _check_exits(ticker.upper(), float(spot)),
+    }
+
+
 def fetch_gex_exposure(ticker: str) -> tuple[float, pd.Series]:
     """Load spot and net gamma-by-strike from UW."""
     from gex_core.data_source import fetch_gex_data
@@ -99,6 +111,7 @@ def run_low_gex_trade(
     execute: bool = False,
     session_check: bool = True,
     reenter_each_bar: bool | None = None,
+    entry_time_filter: bool | None = None,
 ) -> dict[str, Any]:
     """Evaluate lowest-GEX signal and optionally open a position."""
     ticker = ticker.upper()
@@ -108,7 +121,7 @@ def run_low_gex_trade(
         "executed": False,
     }
 
-    if session_check and not is_trader_session_active():
+    if (session_check or wall_intraday_session()) and not is_trader_session_active():
         out["ran"] = False
         out["reason"] = "Outside market session"
         return out
@@ -122,6 +135,8 @@ def run_low_gex_trade(
             return out
 
     out["spot"] = float(spot)
+    out["exits"] = manage_wall_gex_exits(ticker, spot=float(spot))
+
     signal_pack = compute_low_gex_signal(exposure, spot=spot)
     out["signal"] = signal_pack
     if not signal_pack.get("available"):
@@ -135,9 +150,19 @@ def run_low_gex_trade(
     trade_strike = float(rec["strike"])
     out["recommended"] = rec
 
+    time_filter = wall_entry_time_filter() if entry_time_filter is None else entry_time_filter
+    if time_filter and not is_entry_window_active():
+        out["ran"] = True
+        out["action"] = "skipped" if execute else "signal_only"
+        out["reason"] = "Outside entry window (too close to session close)"
+        if not execute:
+            out["entry_window"] = False
+        return out
+
     if not execute:
         out["ran"] = True
         out["action"] = "signal_only"
+        out["entry_window"] = True
         return out
 
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
