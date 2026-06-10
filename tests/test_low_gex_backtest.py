@@ -49,3 +49,23 @@ def test_backtest_low_gex_reenter_each_bar_opens_every_snapshot():
     )
     assert result["total_trades"] == 3
     assert result.get("by_exit_reason", {}).get("bar_rotation", 0) >= 2
+
+
+def test_backtest_low_gex_stop_loss_and_take_profit():
+    history = [
+        _row("2026-06-02_100000", 7460.0, {7440.0: -2.0, 7460.0: 0.5, 7480.0: 1.0}),
+        _row("2026-06-02_101000", 7460.0, {7440.0: -2.5, 7460.0: 0.3, 7480.0: 0.8}),
+        _row("2026-06-02_102000", 7700.0, {7440.0: -3.0, 7460.0: 0.1, 7480.0: 0.5}),
+    ]
+    result = backtest_low_gex_trader(
+        "SPX",
+        history=history,
+        starting_capital=5000.0,
+        lookback_days=None,
+        stop_loss=0.05,
+        take_profit=0.40,
+        reenter_each_bar=False,
+    )
+    stop_trades = [t for t in result["trades"] if t["exit_reason"] == "stop_loss"]
+    assert stop_trades
+    assert stop_trades[0]["pnl_pct"] == -0.05

@@ -8,7 +8,6 @@ from typing import Any, Literal
 import pandas as pd
 
 from gex_core.features import select_atm_strike_series
-from gex_core.trading.config import max_strike_distance_pct
 from gex_core.trading.signals import _clean, _option_type_for_strike
 
 WallTarget = Literal["min", "max"]
@@ -74,21 +73,6 @@ def compute_wall_gex_signal(
         signal_type = "min_gamma_strike"
 
     option_type = _option_type_for_strike(wall_strike, spot_val)
-    dist = abs(wall_strike - spot_val) / spot_val
-    max_dist = max_strike_distance_pct()
-
-    if dist > max_dist:
-        return {
-            "available": False,
-            "reason": (
-                f"{label} GEX strike {wall_strike:.0f} is {dist:.1%} from spot "
-                f"(max {max_dist:.1%})"
-            ),
-            "spot": spot_val,
-            "wall_strike": wall_strike,
-            "gamma_bn": wall_gamma,
-            "target": target,
-        }
 
     sig = WallGexSignal(
         signal_type=signal_type,

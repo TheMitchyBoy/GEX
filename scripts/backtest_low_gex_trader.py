@@ -28,8 +28,8 @@ def main() -> None:
     parser.add_argument("--max-snapshots", type=int, default=500)
     parser.add_argument("--dedupe", action="store_true", help="Skip identical consecutive strike profiles")
     parser.add_argument("--json", action="store_true", help="Print full JSON result")
-    parser.add_argument("--stop-loss", type=float, default=None)
-    parser.add_argument("--take-profit", type=float, default=None)
+    parser.add_argument("--stop-loss", type=float, default=0.05, help="Stop loss fraction (default 5%%)")
+    parser.add_argument("--take-profit", type=float, default=0.40, help="Take profit fraction (default 40%%)")
     parser.add_argument("--starting-capital", type=float, default=500.0)
     parser.add_argument(
         "--reenter-each-bar",

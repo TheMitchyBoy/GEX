@@ -29,11 +29,12 @@ from gex_core.trading.config import (
     low_gex_reenter_each_bar,
     max_entries_per_cycle,
     max_open_positions,
-    stop_loss_pct,
-    take_profit_pct,
     trader_session_only,
 )
-from gex_core.trading.exits import build_exit_profile
+from gex_core.trading.exits import build_simple_exit_profile
+
+WALL_DEFAULT_STOP_LOSS = 0.05
+WALL_DEFAULT_TAKE_PROFIT = 0.40
 from gex_core.trading.low_gex_signals import WallTarget, compute_wall_gex_signal
 from gex_core.trading.paper_broker import estimate_entry_premium
 from gex_core.trading.sizing import affordable_qty, resolve_contract_qty
@@ -79,6 +80,8 @@ def _maybe_enter_wall_gex(
     max_open: int,
     target: WallTarget = "min",
     reenter_each_bar: bool = False,
+    stop_loss: float = WALL_DEFAULT_STOP_LOSS,
+    take_profit: float = WALL_DEFAULT_TAKE_PROFIT,
 ) -> None:
     if not export_ts_is_trading_day(ts):
         state.skipped_weekends += 1
@@ -91,11 +94,7 @@ def _maybe_enter_wall_gex(
 
     pack = compute_wall_gex_signal(exposure, spot=spot, target=target)
     if not pack.get("available"):
-        skip = str(pack.get("reason", ""))
-        if "from spot" in skip:
-            state.skipped_strike_distance += 1
-        else:
-            state.skipped_entries += 1
+        state.skipped_entries += 1
         return
 
     rec = pack["recommended"]
@@ -143,17 +142,7 @@ def _maybe_enter_wall_gex(
         state.skipped_entries += 1
         return
 
-    regime = str(row.get("regime") or "")
-    expected_move = safe_float(row.get("expected_move_pct"), 0.0) or None
-    profile = build_exit_profile(
-        ai_confidence=confidence,
-        gamma_delta=0.0,
-        regime=regime,
-        entry_spot=exec_spot,
-        strike=exec_strike,
-        expected_move_pct=expected_move,
-        magnet_strike=wall_strike,
-    )
+    profile = build_simple_exit_profile(stop_loss=stop_loss, take_profit=take_profit)
     state.open_positions.append(
         _OpenPosition(
             entry_idx=idx,
@@ -193,8 +182,8 @@ def backtest_wall_gex_trader(
 ) -> dict[str, Any]:
     """Simulate min/max GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
-    stop_loss = stop_loss if stop_loss is not None else stop_loss_pct()
-    take_profit = take_profit if take_profit is not None else take_profit_pct()
+    stop_loss = stop_loss if stop_loss is not None else WALL_DEFAULT_STOP_LOSS
+    take_profit = take_profit if take_profit is not None else WALL_DEFAULT_TAKE_PROFIT
     max_open = max_open if max_open is not None else max_open_positions()
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
     if rotate:
@@ -261,6 +250,8 @@ def backtest_wall_gex_trader(
             max_open=max_open,
             target=target,
             reenter_each_bar=rotate,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
         )
 
     if state.open_positions:
@@ -323,7 +314,7 @@ def compare_wall_gex_backtest(
     *,
     lookback_days: int = 7,
     starting_capital: float = 500.0,
-    reenter_each_bar: bool = True,
+    reenter_each_bar: bool = False,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Run min vs max wall GEX backtests on the same history window."""

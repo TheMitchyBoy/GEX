@@ -45,6 +45,20 @@ class ExitProfile:
     trail_floor: float = 0.05
     time_stop_bars: int = 6
     full_take_profit: float = 0.35
+    stop_loss: float | None = None
+
+
+def build_simple_exit_profile(*, stop_loss: float, take_profit: float) -> ExitProfile:
+    """Fixed stop-loss / take-profit only — no partials, trails, or magnet exits."""
+    return ExitProfile(
+        hold_for_target=True,
+        partial_take_profit=None,
+        trail_trigger=1.0,
+        trail_floor=0.0,
+        time_stop_bars=max_hold_bars(),
+        full_take_profit=take_profit,
+        stop_loss=stop_loss,
+    )
 
 
 def resolve_full_take_profit(profile: ExitProfile, *, expected_move_pct: float | None) -> float:
@@ -196,7 +210,11 @@ def evaluate_exit(
     """Return (exit_reason, exit_pnl_pct)."""
     profile = profile or ExitProfile()
     state.peak_pnl_pct = max(state.peak_pnl_pct, pnl_pct)
-    stop = effective_stop_loss(entry_spot=entry_spot, strike=strike)
+    stop = (
+        profile.stop_loss
+        if profile.stop_loss is not None
+        else effective_stop_loss(entry_spot=entry_spot, strike=strike)
+    )
     full_tp = profile.full_take_profit
     primary_magnet = magnet_primary if magnet_primary is not None else max_gamma_only()
     target_strike = magnet_strike if magnet_strike is not None else strike
