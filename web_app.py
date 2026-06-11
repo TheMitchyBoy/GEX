@@ -351,9 +351,32 @@ def _run_ticker_refresh(ticker: str) -> tuple[bool, str | None]:
     return ok, reason
 
 
-def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
+DEFAULT_DASHBOARD_STRIKE_WINDOW_PCT = 0.04
+NEAR_SPOT_STRIKE_WINDOW_PCT = 0.01
+
+
+def _dashboard_strike_window_pct(explicit: float | None = None) -> float:
+    """Strike band for the strategy chart (default ±4%; near-spot view uses ±1%)."""
+    if explicit is not None:
+        return max(0.005, min(0.25, float(explicit)))
+    raw = request.args.get("window_pct")
+    if raw is not None:
+        try:
+            return max(0.005, min(0.25, float(raw)))
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_DASHBOARD_STRIKE_WINDOW_PCT
+
+
+def _render_periscope_dashboard(
+    ticker: str = PRIMARY_TICKER,
+    *,
+    strike_window_pct: float | None = None,
+):
     """Periscope-style market maker exposure view (replaces the legacy command center)."""
     ticker = ticker.upper()
+    strike_window_pct = _dashboard_strike_window_pct(strike_window_pct)
+    near_spot_view = strike_window_pct <= NEAR_SPOT_STRIKE_WINDOW_PCT + 1e-9
     exposure = request.args.get("exposure", "gamma").lower()
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
@@ -415,6 +438,8 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
         snapshot=selected,
         prev_spot=prev_spot,
         uw_bundle=uw_bundle,
+        window_pct=strike_window_pct,
+        max_strikes=40 if near_spot_view else 65,
     )
     strategy_chart_json = strategy["chart_json"]
     strategy_state = strategy["state"]
@@ -437,11 +462,22 @@ def _render_periscope_dashboard(ticker: str = PRIMARY_TICKER):
 
     auto_trader = trader_status(ticker)
 
+    full_gamma_url = url_for("ticker_gamma_page", ticker=ticker) if ticker != PRIMARY_TICKER else url_for("gamma_dashboard")
+    near_gamma_url = (
+        url_for("ticker_gamma_near_page", ticker=ticker)
+        if ticker != PRIMARY_TICKER
+        else url_for("gamma_near_dashboard")
+    )
+
     return render_template(
         "periscope.html",
         ticker=ticker,
         exposure=exposure,
         spot=spot,
+        strike_window_pct=strike_window_pct,
+        near_spot_view=near_spot_view,
+        full_gamma_url=full_gamma_url,
+        near_gamma_url=near_gamma_url,
         regime=ctx.get("regime", "N/A"),
         total_gex=ctx.get("total_gex", 0.0),
         gamma_flip=gamma_flip,
@@ -613,6 +649,12 @@ def gamma_dashboard():
     return _render_periscope_dashboard(PRIMARY_TICKER)
 
 
+@APP.route("/gamma/near")
+@APP.route("/near")
+def gamma_near_dashboard():
+    return _render_periscope_dashboard(PRIMARY_TICKER, strike_window_pct=NEAR_SPOT_STRIKE_WINDOW_PCT)
+
+
 @APP.route("/ticker/<ticker>")
 @APP.route("/ticker/<ticker>/")
 def ticker_page(ticker):
@@ -628,6 +670,14 @@ def ticker_gamma_page(ticker):
     if not is_supported_ticker(ticker):
         return _spx_redirect()
     return _render_periscope_dashboard(ticker)
+
+
+@APP.route("/ticker/<ticker>/gamma/near")
+def ticker_gamma_near_page(ticker):
+    ticker = ticker.upper()
+    if not is_supported_ticker(ticker):
+        return _spx_redirect()
+    return _render_periscope_dashboard(ticker, strike_window_pct=NEAR_SPOT_STRIKE_WINDOW_PCT)
 
 
 @APP.post("/ticker/<ticker>/refresh")
@@ -863,6 +913,7 @@ def api_trader_strategy():
                 break
     uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     exposure, previous_exposure = _strategy_exposure_from_context(ctx)
+    window_pct = _dashboard_strike_window_pct()
     payload = build_strategy_dashboard(
         ticker=ticker,
         spot=ctx.get("spot"),
@@ -871,6 +922,8 @@ def api_trader_strategy():
         snapshot=ctx.get("selected"),
         prev_spot=prev_spot,
         uw_bundle=uw_bundle,
+        window_pct=window_pct,
+        max_strikes=40 if window_pct <= NEAR_SPOT_STRIKE_WINDOW_PCT + 1e-9 else 65,
     )
     return jsonify(payload)
 

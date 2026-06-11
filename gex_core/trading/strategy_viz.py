@@ -172,6 +172,8 @@ def build_strategy_chart(
     spot: float | None,
     exposure: pd.Series | None,
     state: dict[str, Any],
+    window_pct: float = 0.04,
+    max_strikes: int = 65,
 ) -> go.Figure:
     """Two-row dashboard: GEX by strike + cumulative PnL."""
     spot_val = safe_float(spot or state.get("spot"), 0.0)
@@ -181,17 +183,24 @@ def build_strategy_chart(
     levels = state.get("levels") or {}
     open_positions = state.get("open_positions") or []
 
+    strike_title = (
+        f"GEX by strike · ±{window_pct * 100:.1f}% of spot"
+        if window_pct < 0.04
+        else "GEX by strike · entry levels & open positions"
+    )
     fig = make_subplots(
         rows=2,
         cols=1,
         row_heights=[0.68, 0.32],
         vertical_spacing=0.06,
-        subplot_titles=("GEX by strike · entry levels & open positions", "Cumulative PnL (recent trades)"),
+        subplot_titles=(strike_title, "Cumulative PnL (recent trades)"),
     )
 
     window = _chart_exposure_window(
         exposure if isinstance(exposure, pd.Series) else pd.Series(dtype=float),
         spot_val,
+        window_pct=window_pct,
+        max_strikes=max_strikes,
     )
     x_range = _symmetric_x_range([float(v) for v in window.values]) if not window.empty else [-1.0, 1.0]
     if not window.empty and spot_val > 0:
@@ -354,6 +363,8 @@ def build_strategy_dashboard(
     snapshot: dict[str, Any] | None = None,
     prev_spot: float | None = None,
     uw_bundle: dict[str, Any] | None = None,
+    window_pct: float = 0.04,
+    max_strikes: int = 65,
 ) -> dict[str, Any]:
     state = build_strategy_state(
         ticker=ticker,
@@ -364,5 +375,15 @@ def build_strategy_dashboard(
         prev_spot=prev_spot,
         uw_bundle=uw_bundle,
     )
-    fig = build_strategy_chart(spot=spot, exposure=exposure, state=state)
-    return {"state": state, "chart_json": _encode(fig)}
+    fig = build_strategy_chart(
+        spot=spot,
+        exposure=exposure,
+        state=state,
+        window_pct=window_pct,
+        max_strikes=max_strikes,
+    )
+    return {
+        "state": state,
+        "chart_json": _encode(fig),
+        "window_pct": window_pct,
+    }

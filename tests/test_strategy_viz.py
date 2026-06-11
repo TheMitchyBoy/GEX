@@ -51,6 +51,17 @@ def test_build_strategy_state_with_signals(monkeypatch):
     assert "filters" in state
 
 
+def test_chart_exposure_window_one_percent_band():
+    spot = 6000.0
+    series = pd.Series(
+        {float(s): (1.0 if s == 6000 else -0.5) for s in range(5880, 6121, 5)},
+    )
+    window = _chart_exposure_window(series, spot, window_pct=0.01, max_strikes=40)
+    assert window.index.min() >= spot * 0.99 - 0.01
+    assert window.index.max() <= spot * 1.01 + 0.01
+    assert 6000.0 in window.index.astype(float).tolist()
+
+
 def test_build_strategy_dashboard_returns_chart(monkeypatch):
     monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: None)
     monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
@@ -71,3 +82,20 @@ def test_build_strategy_dashboard_returns_chart(monkeypatch):
     assert "state" in out
     fig = build_strategy_chart(spot=7385.0, exposure=cur, state=out["state"])
     assert len(fig.data) >= 1
+
+
+def test_build_strategy_dashboard_near_spot_window(monkeypatch):
+    monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: None)
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
+    cur = pd.Series([0.2, 1.5, 0.4, -0.2], index=[7300.0, 7380.0, 7390.0, 7500.0])
+    prev = pd.Series([0.1, 0.5, 0.35, -0.1], index=[7300.0, 7380.0, 7390.0, 7500.0])
+    out = build_strategy_dashboard(
+        ticker="SPX",
+        spot=7385.0,
+        exposure=cur,
+        previous_exposure=prev,
+        snapshot={"regime": "LONG gamma"},
+        window_pct=0.01,
+        max_strikes=40,
+    )
+    assert out["window_pct"] == 0.01

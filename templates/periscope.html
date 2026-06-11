@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SPX · Gamma Auto-Trader</title>
+    <title>{% if near_spot_view %}{{ ticker }} · Near-Spot Gamma (±1%){% else %}SPX · Gamma Auto-Trader{% endif %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -468,19 +468,25 @@
             <div class="d-flex gap-2 mb-2 flex-wrap">
               <span class="chip">Auto-Trader</span>
               <span class="chip">{{ ticker }}</span>
+              {% if near_spot_view %}<span class="chip pass">±{{ '%.1f'|format(strike_window_pct * 100) }}% strikes</span>{% endif %}
               {% if timeline.is_latest %}<span class="chip live-pulse" id="liveChip">Live</span>{% else %}<span class="chip">Replay</span>{% endif %}
               <span class="chip {% if advice.get('approve') %}pass{% elif sig.get('available') %}fail{% else %}pending{% endif %}" id="entryChip">
                 {% if advice.get('approve') %}Entry OK{% elif sig.get('available') %}No Entry{% else %}No Signal{% endif %}
               </span>
             </div>
-            <h1 class="h5 mb-1 fw-semibold">Gamma Magnet Strategy</h1>
-            <div class="small muted">{{ data_source }}</div>
+            <h1 class="h5 mb-1 fw-semibold">{% if near_spot_view %}Near-Spot Gamma{% else %}Gamma Magnet Strategy{% endif %}</h1>
+            <div class="small muted">{{ data_source }}{% if near_spot_view %} · strikes within ±{{ '%.1f'|format(strike_window_pct * 100) }}% of spot{% endif %}</div>
           </div>
           <div class="d-flex gap-2 align-items-center flex-wrap">
             <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">{% if auto_trader.armed %}Armed{% else %}Disarmed{% endif %}</span>
             {% if auto_trader.live_mode %}<span class="chip live-pulse" style="border-color:rgba(239,68,68,0.5);color:var(--red);">Webull Live</span>{% else %}<span class="chip">Paper</span>{% endif %}
             {% if auto_trader.enabled %}<span class="chip">Every {{ auto_trader.cycle_seconds or 30 }}s</span>{% endif %}
             {% if auto_trader.execution_ticker and auto_trader.execution_ticker != auto_trader.signal_ticker %}<span class="chip">{{ auto_trader.signal_ticker }} γ → {{ auto_trader.execution_ticker }}</span>{% endif %}
+            {% if near_spot_view %}
+            <a href="{{ full_gamma_url }}" class="chip text-decoration-none" style="color:#93c5fd;">Full view →</a>
+            {% else %}
+            <a href="{{ near_gamma_url }}" class="chip text-decoration-none" style="color:#93c5fd;">Near spot ±1% →</a>
+            {% endif %}
             <a href="{{ url_for('webull_trade_dashboard') }}" id="quickTradeLink" class="chip text-decoration-none" style="color:#93c5fd;">Quick Trade →</a>
             <span class="last-updated" id="lastUpdated"></span>
           </div>
@@ -720,6 +726,7 @@
       const chatWelcome = {{ chat_welcome|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
       const ticker = '{{ ticker }}';
+      const strikeWindowPct = {{ strike_window_pct|tojson }};
 
       const chartEl = document.getElementById('strategyChart');
 
@@ -869,10 +876,18 @@
         source.onerror = () => { source.close(); window.setTimeout(startSpotStream, 5000); };
       }
 
+      function strategyQueryParams() {
+        const params = new URLSearchParams(window.location.search);
+        if (strikeWindowPct && strikeWindowPct < 0.04) {
+          params.set('window_pct', String(strikeWindowPct));
+        }
+        return params;
+      }
+
       async function refreshStrategy() {
         const btn = document.getElementById('strategyRefreshBtn');
         btn?.classList.add('loading');
-        const params = new URLSearchParams(window.location.search);
+        const params = strategyQueryParams();
         const qs = params.toString() ? '?' + params.toString() : '';
         try {
           const res = await fetch('/api/trader/strategy' + qs);
@@ -901,7 +916,7 @@
       if (isLiveSlice) window.setInterval(refreshStrategy, 60000);
 
       function navigateTime({ ts = null, date = null } = {}) {
-        const params = new URLSearchParams();
+        const params = strategyQueryParams();
         if (ts) params.set('ts', ts);
         else if (date) params.set('date', date);
         window.location.href = '?' + params.toString();
