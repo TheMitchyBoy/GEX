@@ -78,7 +78,7 @@ def build_system_status(ticker: str | None = None, *, use_cache: bool = True) ->
         ),
         "index_db_present": db_path().exists(),
         "refresh_interval_minutes": DEFAULT_REFRESH_MINUTES,
-        "trader_cycle_seconds": int(os.environ.get("GEX_TRADER_CYCLE_SECONDS", "30")),
+        "trader_cycle_seconds": int(os.environ.get("GEX_TRADER_CYCLE_SECONDS", "15")),
         "auto_trader_enabled": os.environ.get("GEX_AUTO_TRADER", "").strip().lower() in {"1", "true", "yes"},
         "model_overlay_active": n_train is not None and n_train >= MIN_OVERLAY_TRAIN_ROWS,
         "model_training_rows": n_train,

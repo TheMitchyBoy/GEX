@@ -31,7 +31,7 @@ def main():
     parser.add_argument(
         "--interval-minutes",
         type=int,
-        default=int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10")),
+        default=int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "2")),
         help="Sample UW rows every N minutes during intraday backfill",
     )
     args = parser.parse_args()

@@ -29,7 +29,7 @@ def main() -> None:
     parser.add_argument(
         "--interval-minutes",
         type=int,
-        default=int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10")),
+        default=int(os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "2")),
         help="Sample UW 1-minute rows every N minutes (default 10)",
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing timestamps")

@@ -2,8 +2,8 @@ name: Intraday GEX Exports
 
 on:
   schedule:
-    # Weekdays: every 10 minutes during approximate US cash session (UTC)
-    - cron: "*/10 14-21 * * 1-5"
+    # Weekdays: every 2 minutes during approximate US cash session (UTC)
+    - cron: "*/2 14-21 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -26,10 +26,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run 10-minute GEX exports for SPX
+      - name: Run 2-minute GEX exports for SPX
         env:
           TICKERS: SPX
           UW_API_KEY: ${{ secrets.UW_API_KEY }}
+          GEX_REFRESH_INTERVAL_MINUTES: "2"
+          GEX_BACKFILL_INTERVAL_MINUTES: "2"
         run: |
           set -euo pipefail
           mkdir -p data/exports img

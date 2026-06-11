@@ -12,7 +12,8 @@ Environment variables control data quality, refresh cadence, alerts, and optiona
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEX_REFRESH_INTERVAL_MINUTES` | `1` | Background refresh interval for web app |
+| `GEX_REFRESH_INTERVAL_MINUTES` | `2` | Background refresh interval for web app |
+| `GEX_BACKFILL_INTERVAL_MINUTES` | `2` | Sample UW intraday rows every N minutes |
 | `GEX_DISABLE_SCHEDULER` | off | Set `1` to disable APScheduler refresh |
 | `GEX_DEFAULT_TICKERS` | `SPX` | Tickers for batch refresh scripts |
 | `GEX_UW_CACHE_TTL_SECONDS` | aligned to refresh | Live UW API cache TTL |

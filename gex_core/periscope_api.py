@@ -37,11 +37,11 @@ from gex_core.tickers import PRIMARY_TICKER
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_INTERVAL = parse_env_minutes("GEX_BACKFILL_INTERVAL_MINUTES", 10.0)
+_DEFAULT_INTERVAL = parse_env_minutes("GEX_BACKFILL_INTERVAL_MINUTES", 2.0)
 _CACHE_TTL = int(
     os.environ.get(
         "GEX_PERISCOPE_API_CACHE_TTL_SECONDS",
-        str(max(30, int(parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 10.0) * 60))),
+        str(max(30, int(parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", 2.0) * 60))),
     )
 )
 
