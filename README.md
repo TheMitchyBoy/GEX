@@ -352,6 +352,18 @@ environment:
 - **systemd/bare gunicorn:** add `UW_API_KEY=...` to the unit's `Environment=`/`EnvironmentFile=`.
 - **Cursor Cloud Agents:** add it under Dashboard → Cloud Agents → Secrets. The repo includes `.cursor/environment.json`, which starts the Flask dashboard via `scripts/start_web.sh` and inherits injected secrets.
 
+### Webull 401 `INVALID_TOKEN`
+
+The trade desk banner means Webull rejected the stored OAuth token. The app clears the stale file automatically and pauses live API calls for ~30 seconds.
+
+**Checklist:**
+
+1. **Credentials** — `GEX_WEBULL_APP_KEY`, `GEX_WEBULL_APP_SECRET`, and `GEX_WEBULL_ACCOUNT_ID` must match the same approved OpenAPI app. Production uses `api.webull.com` (default). Set `GEX_WEBULL_USE_UAT=1` only with sandbox keys.
+2. **Persistent token** — the token is stored at `$GEX_DATA_DIR/webull/token.txt` (default `data/webull/token.txt`). On Railway, mount a volume at `/app/data` so the token survives redeploys; otherwise you must re-approve in the mobile app after every restart.
+3. **Mobile verification** — on first connect or after a token reset, open the Webull mobile app and approve the API verification prompt.
+4. **Retry** — disarm the trader, wait ~30 seconds, then click **Retry connection** on `/trade` or the Wall GEX page. If `GEX_ADMIN_TOKEN` is set, enter it in the trade desk admin field first.
+5. **Logs** — look for `init_token` / `check_token` lines from the Webull SDK; `status=PENDING` means approval is still waiting.
+
 Compact aged strike CSVs (keeps summaries + cumulative):
 
 ```bash

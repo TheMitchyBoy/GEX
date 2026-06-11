@@ -71,6 +71,9 @@ def configure_data_paths() -> Path:
     os.environ.setdefault("GEX_EXPORT_DIR", str(exports))
     os.environ.setdefault("GEX_TRADING_DB", str(root / "trading_journal.db"))
     os.environ.setdefault("GEX_INDEX_DB", str(root / "gex_index.db"))
+    webull_token_dir = root / "webull"
+    webull_token_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("WEBULL_OPENAPI_TOKEN_DIR", str(webull_token_dir))
 
     if root != preferred and not _path_writable(preferred):
         logger.warning(

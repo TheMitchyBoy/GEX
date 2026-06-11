@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -67,9 +68,44 @@ def reset_webull_clients() -> None:
     _data_client = None
 
 
+_LEGACY_TOKEN_PATHS = (
+    Path("conf") / "token.txt",
+    Path(__file__).resolve().parents[2] / "conf" / "token.txt",
+)
+
+
+def migrate_legacy_webull_token(target_dir: Path) -> bool:
+    """Copy a token from the legacy conf/ path into the persistent data directory."""
+    target = target_dir / "token.txt"
+    if target.is_file():
+        return False
+    for legacy in _LEGACY_TOKEN_PATHS:
+        try:
+            resolved = legacy.resolve()
+        except OSError:
+            continue
+        if not resolved.is_file():
+            continue
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(resolved, target)
+            logger.info("Migrated Webull token from %s to %s", resolved, target)
+            return True
+        except OSError as exc:
+            logger.warning("Could not migrate Webull token from %s: %s", resolved, exc)
+    return False
+
+
 def _token_dir() -> Path:
     env_dir = os.environ.get("WEBULL_OPENAPI_TOKEN_DIR", "").strip()
+    if not env_dir:
+        from gex_core.data_root import configure_data_paths
+
+        configure_data_paths()
+        env_dir = os.environ.get("WEBULL_OPENAPI_TOKEN_DIR", "").strip()
     base = Path(env_dir).expanduser() if env_dir else Path("conf")
+    base.mkdir(parents=True, exist_ok=True)
+    migrate_legacy_webull_token(base)
     return base.resolve()
 
 
@@ -204,15 +240,20 @@ def webull_auth_status() -> dict[str, Any]:
         }
 
     show_banner = rate_limited or invalid_token
+    token_path = _token_file_path()
+    token_present = token_path.is_file()
     if invalid_token:
         headline = "Webull token rejected (401)"
         detail = (
             "Webull returned INVALID_TOKEN / permission denied. The stale token file was cleared. "
             "Confirm GEX_WEBULL_APP_KEY, GEX_WEBULL_APP_SECRET, and GEX_WEBULL_ACCOUNT_ID match "
             "your approved production OpenAPI app (set GEX_WEBULL_USE_UAT=1 only for sandbox). "
-            "On first setup, approve the verification prompt in the Webull mobile app, disarm the "
-            "trader, wait ~30 seconds, then use Retry connection."
+            "On Railway, mount a persistent volume at /app/data so the token survives restarts "
+            f"(stored at {token_path}). On first setup, approve the verification prompt in the "
+            "Webull mobile app, disarm the trader, wait ~30 seconds, then use Retry connection."
         )
+        if not token_present:
+            detail += " No local token file yet — Retry connection will trigger a new verification request."
     elif rate_limited:
         headline = "Webull rate limit (429)"
         detail = (
@@ -234,6 +275,8 @@ def webull_auth_status() -> dict[str, Any]:
         "headline": headline,
         "message": detail,
         "last_error": recent.get("message") if recent_active else None,
+        "token_dir": str(token_path.parent),
+        "token_present": token_present,
     }
 
 

@@ -1,9 +1,13 @@
+import os
+from pathlib import Path
+
 from gex_core.trading.config import webull_data_endpoint, webull_trade_endpoint
 from gex_core.trading.execution import (
     build_webull_option_symbol,
     map_execution_strike,
 )
 from gex_core.trading.webull_broker import (
+    migrate_legacy_webull_token,
     _order_avg_price,
     _order_filled_qty,
     _order_status,
@@ -315,6 +319,31 @@ def test_fetch_option_quote_rate_limit_uses_stale_cache(monkeypatch):
     assert first["bid"] == 2.0
     assert second["bid"] == 2.0
     assert webull_auth_status()["rate_limited"] is True
+
+
+def test_migrate_legacy_webull_token_from_conf(tmp_path, monkeypatch):
+    legacy_dir = tmp_path / "conf"
+    legacy_dir.mkdir()
+    legacy_token = legacy_dir / "token.txt"
+    legacy_token.write_text("abc123\n1700000000\nNORMAL\n", encoding="utf-8")
+    target_dir = tmp_path / "webull"
+
+    monkeypatch.chdir(tmp_path)
+    assert migrate_legacy_webull_token(target_dir) is True
+    assert (target_dir / "token.txt").read_text(encoding="utf-8") == legacy_token.read_text(encoding="utf-8")
+
+
+def test_configure_data_paths_sets_webull_token_dir(tmp_path, monkeypatch):
+    import gex_core.data_root as data_root
+
+    data_root._CONFIGURED = False
+    monkeypatch.setenv("GEX_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("WEBULL_OPENAPI_TOKEN_DIR", raising=False)
+
+    root = data_root.configure_data_paths()
+    token_dir = Path(os.environ["WEBULL_OPENAPI_TOKEN_DIR"])
+    assert token_dir == root / "webull"
+    assert token_dir.is_dir()
 
 
 def test_webull_trade_endpoint_migrates_deprecated_host(monkeypatch):
