@@ -108,6 +108,52 @@ def _resolve_trade_strike(
     return _refine_trade_strike(cur, magnet_strike, spot, option_type)
 
 
+def _extreme_gamma_magnet(search: pd.Series) -> tuple[float, float, str]:
+    """Pick the strike with the largest |gamma| — highest positive or lowest negative."""
+    if search.empty:
+        return 0.0, 0.0, "max_positive_gamma"
+
+    positive = search[search > 0]
+    negative = search[search < 0]
+    max_pos_strike = float(positive.idxmax()) if not positive.empty else None
+    max_pos_gamma = float(positive.max()) if not positive.empty else 0.0
+    min_neg_strike = float(negative.idxmin()) if not negative.empty else None
+    min_neg_gamma = float(negative.min()) if not negative.empty else 0.0
+
+    pos_mag = abs(max_pos_gamma) if max_pos_strike is not None else 0.0
+    neg_mag = abs(min_neg_gamma) if min_neg_strike is not None else 0.0
+
+    if neg_mag > pos_mag and min_neg_strike is not None:
+        return min_neg_strike, min_neg_gamma, "min_negative_gamma"
+    if max_pos_strike is not None:
+        return max_pos_strike, max_pos_gamma, "max_positive_gamma"
+    if min_neg_strike is not None:
+        return min_neg_strike, min_neg_gamma, "min_negative_gamma"
+
+    strike = float(search.idxmax())
+    gamma = float(search.loc[strike])
+    sig_type = "max_positive_gamma" if gamma >= 0 else "min_negative_gamma"
+    return strike, gamma, sig_type
+
+
+def _resolve_extreme_trade_strike(
+    cur: pd.Series,
+    magnet_strike: float,
+    spot: float,
+    option_type: str,
+    gamma_bn: float,
+) -> float | None:
+    """Trade strike for dominant +γ or −γ magnets (negative walls trade at the magnet)."""
+    if gamma_bn < 0:
+        if spot <= 0:
+            return None
+        dist = abs(magnet_strike - spot) / spot
+        if dist <= max_strike_distance_pct():
+            return float(magnet_strike)
+        return None
+    return _resolve_trade_strike(cur, magnet_strike, spot, option_type)
+
+
 def _signal_dict(sig: GammaSignal) -> dict[str, Any]:
     return {
         "signal_type": sig.signal_type,
@@ -146,8 +192,9 @@ def _unavailable(
     max_pos_signal: GammaSignal,
     fastest_signal: GammaSignal,
     max_pos_delta: float,
+    min_neg_signal: GammaSignal | None = None,
 ) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "available": False,
         "reason": reason,
         "skip_reason": skip_reason,
@@ -156,35 +203,45 @@ def _unavailable(
         "fastest_gamma_increase": _signal_dict(fastest_signal),
         "max_pos_gamma_delta": max_pos_delta,
     }
+    if min_neg_signal is not None:
+        out["min_negative_gamma"] = _signal_dict(min_neg_signal)
+    return out
 
 
 def _compute_max_gamma_only(
     *,
     cur: pd.Series,
-    positive: pd.Series,
+    search: pd.Series,
     spot_val: float,
-    max_pos_strike: float,
-    max_pos_gamma: float,
-    max_pos_delta: float,
+    delta: pd.Series,
     max_pos_signal: GammaSignal,
+    min_neg_signal: GammaSignal | None,
     fastest_signal: GammaSignal,
+    max_pos_delta: float,
 ) -> dict[str, Any]:
-    """Single max-positive-gamma candidate locked to the magnet direction."""
-    if max_pos_delta < 0 and not clear_all_filters():
+    """Single dominant |gamma| candidate — highest +γ or lowest −γ near spot."""
+    magnet_strike, magnet_gamma, magnet_sig_type = _extreme_gamma_magnet(search)
+    magnet_delta = float(delta.get(magnet_strike, 0.0))
+    magnet_label = "Highest" if magnet_sig_type == "max_positive_gamma" else "Lowest"
+
+    if magnet_delta < 0 and not clear_all_filters():
         return _unavailable(
             reason=(
-                f"Largest positive gamma at {max_pos_strike:.0f} declined "
-                f"(Δ{max_pos_delta:+.3f} Bn)"
+                f"{magnet_label} gamma at {magnet_strike:.0f} declined "
+                f"(Δ{magnet_delta:+.3f} Bn)"
             ),
             skip_reason="gamma_declined",
             spot_val=spot_val,
             max_pos_signal=max_pos_signal,
             fastest_signal=fastest_signal,
             max_pos_delta=max_pos_delta,
+            min_neg_signal=min_neg_signal,
         )
 
-    master_direction = _option_type_for_strike(max_pos_strike, spot_val)
-    trade_strike = _resolve_trade_strike(cur, max_pos_strike, spot_val, master_direction)
+    master_direction = _option_type_for_strike(magnet_strike, spot_val)
+    trade_strike = _resolve_extreme_trade_strike(
+        cur, magnet_strike, spot_val, master_direction, magnet_gamma
+    )
     if trade_strike is None:
         return _unavailable(
             reason=f"No tradeable strike within {max_strike_distance_pct():.1%} of spot",
@@ -193,23 +250,27 @@ def _compute_max_gamma_only(
             max_pos_signal=max_pos_signal,
             fastest_signal=fastest_signal,
             max_pos_delta=max_pos_delta,
+            min_neg_signal=min_neg_signal,
         )
 
     sig = GammaSignal(
-        signal_type="max_positive_gamma",
+        signal_type=magnet_sig_type,
         strike=trade_strike,
-        gamma_bn=max_pos_gamma,
-        gamma_delta=max_pos_delta,
-        score=max_pos_gamma,
+        gamma_bn=magnet_gamma,
+        gamma_delta=magnet_delta,
+        score=abs(magnet_gamma),
         option_type=master_direction,
-        rationale=f"Max positive gamma magnet {max_pos_strike:.0f} → {master_direction}",
-        magnet_strike=max_pos_strike,
+        rationale=(
+            f"{magnet_label} gamma {magnet_gamma:+.3f} Bn at {magnet_strike:.0f} "
+            f"→ {master_direction}"
+        ),
+        magnet_strike=magnet_strike,
     )
     rec = _signal_dict(sig)
-    return {
+    out: dict[str, Any] = {
         "available": True,
         "spot": spot_val,
-        "selection_reason": "max_positive_gamma",
+        "selection_reason": magnet_sig_type,
         "candidates": [rec],
         "recommended": rec,
         "max_positive_gamma": _signal_dict(max_pos_signal),
@@ -218,6 +279,9 @@ def _compute_max_gamma_only(
         "master_direction": master_direction,
         "gamma_delta_by_strike": {},
     }
+    if min_neg_signal is not None:
+        out["min_negative_gamma"] = _signal_dict(min_neg_signal)
+    return out
 
 
 def _compute_legacy_candidates(
@@ -355,9 +419,13 @@ def compute_entry_candidates(
             search = near
 
     positive = search[search > 0]
+    negative = search[search < 0]
     max_pos_strike = float(positive.idxmax()) if not positive.empty else float(cur.idxmax())
     max_pos_gamma = float(positive.max()) if not positive.empty else float(cur.max())
+    min_neg_strike = float(negative.idxmin()) if not negative.empty else max_pos_strike
+    min_neg_gamma = float(negative.min()) if not negative.empty else 0.0
     max_pos_delta = 0.0
+    min_neg_delta = 0.0
 
     delta = cur.subtract(prev.reindex(cur.index), fill_value=0.0) if not prev.empty else cur * 0.0
     fastest_strike = float(delta.idxmax()) if not delta.empty else max_pos_strike
@@ -365,6 +433,8 @@ def compute_entry_candidates(
     fastest_gamma = float(cur.get(fastest_strike, 0.0))
     if not positive.empty:
         max_pos_delta = float(delta.get(max_pos_strike, 0.0))
+    if not negative.empty:
+        min_neg_delta = float(delta.get(min_neg_strike, 0.0))
 
     max_option_type = _option_type_for_strike(max_pos_strike, spot_val)
     max_trade_strike = _resolve_trade_strike(cur, max_pos_strike, spot_val, max_option_type)
@@ -379,6 +449,20 @@ def compute_entry_candidates(
         rationale=f"Largest positive gamma magnet {max_pos_strike:.0f}",
         magnet_strike=max_pos_strike,
     )
+
+    min_neg_signal: GammaSignal | None = None
+    if not negative.empty:
+        min_option_type = _option_type_for_strike(min_neg_strike, spot_val)
+        min_neg_signal = GammaSignal(
+            signal_type="min_negative_gamma",
+            strike=min_neg_strike,
+            gamma_bn=min_neg_gamma,
+            gamma_delta=min_neg_delta,
+            score=abs(min_neg_gamma),
+            option_type=min_option_type,
+            rationale=f"Largest negative gamma magnet {min_neg_strike:.0f}",
+            magnet_strike=min_neg_strike,
+        )
 
     fast_option_type = _option_type_for_strike(fastest_strike, spot_val)
     fast_trade_strike = _resolve_trade_strike(cur, fastest_strike, spot_val, fast_option_type)
@@ -396,13 +480,13 @@ def compute_entry_candidates(
     if max_gamma_only():
         result = _compute_max_gamma_only(
             cur=cur,
-            positive=positive,
+            search=search,
             spot_val=spot_val,
-            max_pos_strike=max_pos_strike,
-            max_pos_gamma=max_pos_gamma,
-            max_pos_delta=max_pos_delta,
+            delta=delta,
             max_pos_signal=max_pos_signal,
+            min_neg_signal=min_neg_signal,
             fastest_signal=fastest_signal,
+            max_pos_delta=max_pos_delta,
         )
         if result.get("available"):
             delta_slice = delta.nlargest(8)

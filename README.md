@@ -214,7 +214,7 @@ Implemented in `gex_core.trading.signals.compute_entry_candidates()`. A snapshot
 
 | Check | Env / logic | Default | Skip reason |
 |-------|-------------|---------|-------------|
-| Max-gamma mode | `GEX_TRADER_MAX_GAMMA_ONLY=1` | on | Only the largest **positive** gamma magnet; no `fastest_gamma_increase` fallback |
+| Max-gamma mode | `GEX_TRADER_MAX_GAMMA_ONLY=1` | on | Dominant \|γ\| magnet — highest **positive** or lowest **negative** gamma near spot; no `fastest_gamma_increase` fallback |
 | Gamma rising | compare current vs previous strike profile | — | `gamma_declined` if top magnet Δγ < 0 |
 | Tradeable strike | `GEX_TRADER_MAX_STRIKE_DISTANCE_PCT` | `0.02` (2%) | `strike_too_far` if no ATM/slightly-ITM positive-γ strike in range |
 | Strike selection | `GEX_TRADER_MAGNET_ANCHORED_STRIKES` | off | Off: nearest ATM positive-γ strike; on: trade at magnet strike |

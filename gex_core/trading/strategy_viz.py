@@ -243,6 +243,7 @@ def build_strategy_chart(
 
     for label, key, color, symbol in (
         ("Max +γ", "max_positive_gamma", _GREEN, "diamond"),
+        ("Min −γ", "min_negative_gamma", _RED, "diamond"),
         ("Fastest Δγ", "fastest_gamma_increase", _PURPLE, "triangle-up"),
         ("Entry", "recommended", _AMBER, "star"),
     ):

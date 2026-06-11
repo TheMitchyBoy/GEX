@@ -671,7 +671,7 @@ def prefer_signal_type() -> str:
 
 
 def max_gamma_only() -> bool:
-    """Only trade max positive gamma; drop fastest-increase fallback."""
+    """Trade dominant |gamma| magnet (highest +γ or lowest −γ); drop fastest-increase fallback."""
     return _flag("GEX_TRADER_MAX_GAMMA_ONLY", "1")
 
 
