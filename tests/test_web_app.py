@@ -44,16 +44,18 @@ def test_gamma_dashboard_renders_periscope():
     assert b"strategyChart" in response.data
 
 
-def test_gamma_near_dashboard_renders_near_spot_view():
+def test_gamma_near_dashboard_renders_near_spot_walls():
     from web_app import APP
 
     client = APP.test_client()
     response = client.get("/gamma/near")
     assert response.status_code == 200
-    assert b"Near-Spot Gamma" in response.data
+    assert b"Near-Spot Walls" in response.data
+    assert b"Wall GEX" in response.data
     assert b"1.0% strikes" in response.data
-    assert b"Full view" in response.data
+    assert b"Full gamma view" in response.data
     assert b"strikeWindowPct" in response.data
+    assert b"wallMode" in response.data
 
 
 def test_api_trader_strategy_honors_window_pct(monkeypatch):
@@ -61,11 +63,11 @@ def test_api_trader_strategy_honors_window_pct(monkeypatch):
 
     captured: dict = {}
 
-    def _fake_build(**kwargs):
+    def _fake_wall_build(**kwargs):
         captured.update(kwargs)
-        return {"state": {"signals": {}}, "chart_json": "{}", "window_pct": kwargs.get("window_pct")}
+        return {"state": {"signals": {}}, "chart_json": "{}", "window_pct": kwargs.get("window_pct"), "strategy_mode": "wall"}
 
-    monkeypatch.setattr("gex_core.trading.strategy_viz.build_strategy_dashboard", _fake_build)
+    monkeypatch.setattr("gex_core.trading.strategy_viz.build_wall_strategy_dashboard", _fake_wall_build)
     monkeypatch.setattr("web_app.build_periscope_context", lambda **_k: {"spot": 6000.0, "selected": {}, "history": []})
     monkeypatch.setattr("web_app._strategy_exposure_from_context", lambda _ctx: (None, None))
     monkeypatch.setattr("web_app._uw_bundle_for_context", lambda **_k: None)
@@ -77,6 +79,7 @@ def test_api_trader_strategy_honors_window_pct(monkeypatch):
     assert response.status_code == 200
     assert captured["window_pct"] == 0.01
     assert captured["max_strikes"] == 40
+    assert response.get_json().get("strategy_mode") == "wall"
 
 
 def test_api_periscope_returns_json():

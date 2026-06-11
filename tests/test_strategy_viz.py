@@ -5,6 +5,8 @@ from gex_core.trading.strategy_viz import (
     build_strategy_chart,
     build_strategy_dashboard,
     build_strategy_state,
+    build_wall_strategy_dashboard,
+    build_wall_strategy_state,
 )
 
 
@@ -99,3 +101,41 @@ def test_build_strategy_dashboard_near_spot_window(monkeypatch):
         max_strikes=40,
     )
     assert out["window_pct"] == 0.01
+
+
+def test_build_wall_strategy_state_finds_low_and_high_walls(monkeypatch):
+    monkeypatch.setenv("GEX_WALL_SIGNAL_FILTERS", "0")
+    exposure = pd.Series(
+        [-2.0, -0.5, 0.3, 2.5, 1.0],
+        index=[7305.0, 7350.0, 7380.0, 7390.0, 7420.0],
+    )
+    state = build_wall_strategy_state(
+        ticker="SPX",
+        spot=7385.0,
+        exposure=exposure,
+        snapshot={"regime": "LONG gamma"},
+        window_pct=0.01,
+    )
+    assert state["strategy_mode"] == "wall"
+    assert state["signals"]["available"]
+    assert state["signals"]["recommended"]["signal_type"] == "min_gamma_strike"
+    assert state["signals"]["max_gamma_strike"]["signal_type"] == "max_gamma_strike"
+
+
+def test_build_wall_strategy_dashboard_returns_chart(monkeypatch):
+    monkeypatch.setenv("GEX_WALL_SIGNAL_FILTERS", "0")
+    exposure = pd.Series(
+        [-2.0, -0.5, 0.3, 2.5],
+        index=[7350.0, 7375.0, 7385.0, 7395.0],
+    )
+    out = build_wall_strategy_dashboard(
+        ticker="SPX",
+        spot=7385.0,
+        exposure=exposure,
+        snapshot={"regime": "LONG gamma"},
+        window_pct=0.01,
+        max_strikes=40,
+    )
+    assert out["strategy_mode"] == "wall"
+    assert "chart_json" in out
+    assert "Low wall" in out["chart_json"] or "min_gamma_strike" in out["chart_json"]

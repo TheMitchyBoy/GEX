@@ -25,6 +25,11 @@ from gex_core.trading.exits import build_exit_profile, effective_stop_loss
 from gex_core.trading.filters import MarketContext, evaluate_entry_filters
 from gex_core.trading.journal import get_performance_summary, list_open_trades, list_recent_trades
 from gex_core.trading.paper_broker import estimate_option_pnl_pct
+from gex_core.trading.low_gex_signals import (
+    compute_high_gex_signal,
+    compute_low_gex_signal,
+    wall_entry_quality_ok,
+)
 from gex_core.trading.signals import compute_gamma_signals
 
 _BG = "#080b10"
@@ -387,4 +392,326 @@ def build_strategy_dashboard(
         "state": state,
         "chart_json": _encode(fig),
         "window_pct": window_pct,
+    }
+
+
+def build_wall_strategy_state(
+    *,
+    ticker: str,
+    spot: float | None,
+    exposure: pd.Series | None,
+    snapshot: dict[str, Any] | None = None,
+    window_pct: float = 0.01,
+) -> dict[str, Any]:
+    """Wall GEX signals, quality filters, and open positions for the near-spot dashboard."""
+    from gex_core.trading.config import wall_max_hold_bars, wall_stop_loss_pct, wall_take_profit_pct
+    from gex_core.trading.low_gex_engine import is_wall_gex_trade, wall_gex_open_trades
+
+    spot_val = safe_float(spot, 0.0)
+    snap = snapshot or {}
+    if spot_val <= 0:
+        spot_val = safe_float(snap.get("spot"), 0.0)
+
+    low = compute_low_gex_signal(exposure, spot=spot_val, window_pct=window_pct)
+    high = compute_high_gex_signal(exposure, spot=spot_val, window_pct=window_pct)
+    rec = low.get("recommended") or {}
+    signals: dict[str, Any] = {
+        "available": bool(low.get("available")),
+        "reason": low.get("reason"),
+        "recommended": rec if low.get("available") else None,
+        "min_gamma_strike": low.get("min_gamma_strike"),
+        "max_gamma_strike": high.get("max_gamma_strike") if high.get("available") else None,
+        "master_direction": low.get("master_direction"),
+    }
+
+    filters = {"approve": False, "reason": "No signal"}
+    if signals.get("available"):
+        ok, reason = wall_entry_quality_ok(
+            wall_strike=float(rec.get("strike") or 0),
+            wall_gamma=float(rec.get("gamma_bn") or 0),
+            regime=str(snap.get("regime") or ""),
+        )
+        filters = {"approve": ok, "reason": reason or "Wall quality OK"}
+
+    advice = {
+        "approve": bool(filters.get("approve")),
+        "reason": rec.get("rationale") if filters.get("approve") else filters.get("reason", "No signal"),
+        "source": "wall_gex",
+        "confidence": 0.85 if filters.get("approve") else 0.4,
+    }
+
+    open_positions = []
+    for pos in wall_gex_open_trades(ticker):
+        pnl = None
+        if spot_val > 0:
+            pnl = estimate_option_pnl_pct(
+                pos["option_type"],
+                entry_spot=float(pos["entry_spot"]),
+                current_spot=spot_val,
+                strike=float(pos["strike"]),
+            )
+        stop = wall_stop_loss_pct()
+        open_positions.append(
+            {
+                **pos,
+                "pnl_pct": pnl,
+                "stop_pct": -stop,
+                "target_pct": wall_take_profit_pct(),
+            }
+        )
+
+    closed = [
+        t
+        for t in list_recent_trades(limit=50, ticker=ticker)
+        if is_wall_gex_trade(t)
+    ]
+    wins = sum(1 for t in closed if t.get("status") == "closed" and safe_float(t.get("pnl_usd"), 0) > 0)
+    closed_done = [t for t in closed if t.get("status") == "closed" or t.get("exit_reason")]
+    total_pnl = sum(safe_float(t.get("pnl_usd"), 0.0) for t in closed_done)
+    performance = {
+        "total_trades": len(closed_done),
+        "win_rate": (wins / len(closed_done)) if closed_done else 0.0,
+        "total_pnl_usd": total_pnl,
+    }
+
+    return {
+        "spot": spot_val,
+        "signals": signals,
+        "filters": filters,
+        "advice": advice,
+        "open_positions": open_positions,
+        "performance": performance,
+        "recent_trades": closed[:15],
+        "rules": {
+            "stop_loss_pct": wall_stop_loss_pct(),
+            "take_profit_pct": wall_take_profit_pct(),
+            "partial_take_profit_pct": 0.0,
+            "trail_trigger_pct": 0.0,
+            "trail_floor_pct": 0.0,
+            "max_strike_distance_pct": window_pct,
+            "max_hold_bars": wall_max_hold_bars(),
+        },
+        "exit_profile": None,
+        "levels": {
+            "gamma_flip": parse_gamma_flip_value(snap.get("gamma_flip")),
+            "call_wall": snap.get("call_wall"),
+            "put_wall": snap.get("put_wall"),
+            "regime": str(snap.get("regime") or ""),
+        },
+        "strategy_mode": "wall",
+    }
+
+
+def build_wall_strategy_chart(
+    *,
+    spot: float | None,
+    exposure: pd.Series | None,
+    state: dict[str, Any],
+    window_pct: float = 0.01,
+    max_strikes: int = 40,
+) -> go.Figure:
+    """Near-spot wall chart: low/high γ walls instead of gamma magnets."""
+    spot_val = safe_float(spot or state.get("spot"), 0.0)
+    signals = state.get("signals") or {}
+    performance = state.get("performance") or {}
+    recent = state.get("recent_trades") or []
+    open_positions = state.get("open_positions") or []
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        row_heights=[0.68, 0.32],
+        vertical_spacing=0.06,
+        subplot_titles=(
+            f"GEX by strike · ±{window_pct * 100:.1f}% of spot · walls",
+            "Cumulative PnL (wall trades)",
+        ),
+    )
+
+    window = _chart_exposure_window(
+        exposure if isinstance(exposure, pd.Series) else pd.Series(dtype=float),
+        spot_val,
+        window_pct=window_pct,
+        max_strikes=max_strikes,
+    )
+    x_range = _symmetric_x_range([float(v) for v in window.values]) if not window.empty else [-1.0, 1.0]
+    if not window.empty and spot_val > 0:
+        strikes = [float(s) for s in window.index]
+        colors = [_GREEN if v >= 0 else _RED for v in window.values]
+        fig.add_trace(
+            go.Bar(
+                x=window.values,
+                y=strikes,
+                orientation="h",
+                width=_bar_width(strikes),
+                marker_color=colors,
+                opacity=0.86,
+                name="Gamma",
+                hovertemplate="Strike %{y:.0f}<br>γ %{x:+.3f} Bn<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_vline(
+            x=0,
+            line=dict(color="rgba(226, 232, 240, 0.45)", width=1.5),
+            row=1,
+            col=1,
+        )
+
+    if spot_val > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=x_range,
+                y=[spot_val, spot_val],
+                mode="lines",
+                line=dict(color=_AMBER, width=3),
+                name="Spot",
+                hovertemplate="Spot %{y:.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    for label, key, color, symbol in (
+        ("Low wall", "min_gamma_strike", _RED, "diamond"),
+        ("High wall", "max_gamma_strike", _GREEN, "diamond"),
+        ("Entry", "recommended", _AMBER, "star"),
+    ):
+        sig = signals.get(key) or {}
+        strike = safe_float(sig.get("strike"), 0.0)
+        if strike > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=[0],
+                    y=[strike],
+                    mode="markers+text",
+                    marker=dict(size=12, color=color, symbol=symbol),
+                    text=[label],
+                    textposition="middle right",
+                    name=label,
+                    hovertemplate=f"{label}<br>%{{y:.0f}} {sig.get('option_type', '')}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+
+    for pos in open_positions:
+        strike = safe_float(pos.get("strike"), 0.0)
+        if strike <= 0:
+            continue
+        pnl = pos.get("pnl_pct")
+        pnl_txt = f"{pnl:+.1%}" if pnl is not None else "open"
+        color = _GREEN if (pnl or 0) >= 0 else _RED
+        fig.add_trace(
+            go.Scatter(
+                x=[0],
+                y=[strike],
+                mode="markers",
+                marker=dict(size=14, color=color, symbol="x", line=dict(width=2, color=_TEXT)),
+                name=f"Open {pos.get('option_type')}",
+                hovertemplate=f"OPEN {str(pos.get('option_type')).upper()} %{y:.0f}<br>PnL {pnl_txt}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    closed = [t for t in reversed(recent) if t.get("status") == "closed" or t.get("exit_reason")]
+    cum = 0.0
+    xs, ys, colors = [], [], []
+    for i, trade in enumerate(closed):
+        cum += safe_float(trade.get("pnl_usd"), 0.0)
+        xs.append(i + 1)
+        ys.append(cum)
+        colors.append(_GREEN if safe_float(trade.get("pnl_usd"), 0) >= 0 else _RED)
+
+    if xs:
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines+markers",
+                line=dict(color=_BLUE, width=2),
+                marker=dict(color=colors, size=7),
+                name="Equity",
+                hovertemplate="Trade #%{x}<br>Cum PnL $%{y:,.0f}<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_hline(y=0, line_dash="dot", line_color=_MUTED, row=2, col=1)
+    else:
+        fig.add_annotation(
+            text="No closed wall trades yet",
+            xref="x2",
+            yref="y2",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(color=_MUTED, size=12),
+        )
+
+    total_pnl = safe_float(performance.get("total_pnl_usd"), 0.0)
+    win_rate = safe_float(performance.get("win_rate"), 0.0)
+    fig.update_layout(
+        paper_bgcolor=_BG,
+        plot_bgcolor=_PANEL,
+        font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
+        margin=dict(l=64, r=20, t=36, b=40),
+        height=680,
+        showlegend=False,
+        title=dict(
+            text=f"Wall GEX · WR {win_rate:.0%} · ${total_pnl:,.0f} cumulative",
+            x=0.01,
+            y=0.98,
+            font=dict(size=11, color=_MUTED),
+        ),
+    )
+    if not window.empty:
+        strike_axis = _strike_axis_layout([float(s) for s in window.index], spot_val, axis="y")
+        fig.update_yaxes(**strike_axis, row=1, col=1)
+    else:
+        fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.08)")
+    fig.update_xaxes(
+        title_text="Net gamma (Bn)",
+        row=1,
+        col=1,
+        range=x_range,
+        gridcolor="rgba(148,163,184,0.08)",
+        zeroline=True,
+        zerolinecolor="rgba(255,255,255,0.2)",
+    )
+    fig.update_xaxes(title_text="Trade #", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
+    fig.update_yaxes(title_text="USD", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
+    return fig
+
+
+def build_wall_strategy_dashboard(
+    *,
+    ticker: str,
+    spot: float | None,
+    exposure: pd.Series | None,
+    snapshot: dict[str, Any] | None = None,
+    window_pct: float = 0.01,
+    max_strikes: int = 40,
+) -> dict[str, Any]:
+    state = build_wall_strategy_state(
+        ticker=ticker,
+        spot=spot,
+        exposure=exposure,
+        snapshot=snapshot,
+        window_pct=window_pct,
+    )
+    fig = build_wall_strategy_chart(
+        spot=spot,
+        exposure=exposure,
+        state=state,
+        window_pct=window_pct,
+        max_strikes=max_strikes,
+    )
+    return {
+        "state": state,
+        "chart_json": _encode(fig),
+        "window_pct": window_pct,
+        "strategy_mode": "wall",
     }

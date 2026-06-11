@@ -424,15 +424,21 @@ def _dashboard_strike_window_pct(explicit: float | None = None) -> float:
     return DEFAULT_DASHBOARD_STRIKE_WINDOW_PCT
 
 
+def _is_near_spot_window(window_pct: float) -> bool:
+    return window_pct <= NEAR_SPOT_STRIKE_WINDOW_PCT + 1e-9
+
+
 def _render_periscope_dashboard(
     ticker: str = PRIMARY_TICKER,
     *,
     strike_window_pct: float | None = None,
+    strategy_mode: str = "gamma",
 ):
     """Periscope-style market maker exposure view (replaces the legacy command center)."""
     ticker = ticker.upper()
     strike_window_pct = _dashboard_strike_window_pct(strike_window_pct)
-    near_spot_view = strike_window_pct <= NEAR_SPOT_STRIKE_WINDOW_PCT + 1e-9
+    near_spot_view = _is_near_spot_window(strike_window_pct)
+    wall_mode = strategy_mode == "wall"
     exposure = request.args.get("exposure", "gamma").lower()
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
@@ -483,20 +489,33 @@ def _render_periscope_dashboard(
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
 
-    from gex_core.trading.strategy_viz import build_strategy_dashboard
-
     uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
-    strategy = build_strategy_dashboard(
-        ticker=ticker,
-        spot=spot,
-        exposure=gex_series,
-        previous_exposure=prev_series,
-        snapshot=selected,
-        prev_spot=prev_spot,
-        uw_bundle=uw_bundle,
-        window_pct=strike_window_pct,
-        max_strikes=40 if near_spot_view else 65,
-    )
+    max_strikes = 40 if near_spot_view else 65
+    if wall_mode:
+        from gex_core.trading.strategy_viz import build_wall_strategy_dashboard
+
+        strategy = build_wall_strategy_dashboard(
+            ticker=ticker,
+            spot=spot,
+            exposure=gex_series,
+            snapshot=selected,
+            window_pct=strike_window_pct,
+            max_strikes=max_strikes,
+        )
+    else:
+        from gex_core.trading.strategy_viz import build_strategy_dashboard
+
+        strategy = build_strategy_dashboard(
+            ticker=ticker,
+            spot=spot,
+            exposure=gex_series,
+            previous_exposure=prev_series,
+            snapshot=selected,
+            prev_spot=prev_spot,
+            uw_bundle=uw_bundle,
+            window_pct=strike_window_pct,
+            max_strikes=max_strikes,
+        )
     strategy_chart_json = strategy["chart_json"]
     strategy_state = strategy["state"]
 
@@ -514,12 +533,17 @@ def _render_periscope_dashboard(
     if uw_entry:
         data_source += " · live API"
 
-    from gex_core.trading.engine import trader_status
+    if wall_mode:
+        from gex_core.trading.low_gex_engine import wall_gex_status
 
-    auto_trader = trader_status(ticker)
+        auto_trader = wall_gex_status(ticker)
+    else:
+        from gex_core.trading.engine import trader_status
+
+        auto_trader = trader_status(ticker)
 
     full_gamma_url = url_for("ticker_gamma_page", ticker=ticker) if ticker != PRIMARY_TICKER else url_for("gamma_dashboard")
-    near_gamma_url = (
+    near_walls_url = (
         url_for("ticker_gamma_near_page", ticker=ticker)
         if ticker != PRIMARY_TICKER
         else url_for("gamma_near_dashboard")
@@ -532,8 +556,9 @@ def _render_periscope_dashboard(
         spot=spot,
         strike_window_pct=strike_window_pct,
         near_spot_view=near_spot_view,
+        wall_mode=wall_mode,
         full_gamma_url=full_gamma_url,
-        near_gamma_url=near_gamma_url,
+        near_walls_url=near_walls_url,
         regime=ctx.get("regime", "N/A"),
         total_gex=ctx.get("total_gex", 0.0),
         gamma_flip=gamma_flip,
@@ -715,7 +740,11 @@ def gamma_dashboard():
 @APP.route("/gamma/near")
 @APP.route("/near")
 def gamma_near_dashboard():
-    return _render_periscope_dashboard(PRIMARY_TICKER, strike_window_pct=NEAR_SPOT_STRIKE_WINDOW_PCT)
+    return _render_periscope_dashboard(
+        PRIMARY_TICKER,
+        strike_window_pct=NEAR_SPOT_STRIKE_WINDOW_PCT,
+        strategy_mode="wall",
+    )
 
 
 @APP.route("/ticker/<ticker>")
@@ -740,7 +769,11 @@ def ticker_gamma_near_page(ticker):
     ticker = ticker.upper()
     if not is_supported_ticker(ticker):
         return _spx_redirect()
-    return _render_periscope_dashboard(ticker, strike_window_pct=NEAR_SPOT_STRIKE_WINDOW_PCT)
+    return _render_periscope_dashboard(
+        ticker,
+        strike_window_pct=NEAR_SPOT_STRIKE_WINDOW_PCT,
+        strategy_mode="wall",
+    )
 
 
 @APP.post("/ticker/<ticker>/refresh")
@@ -955,8 +988,6 @@ def api_trader_run():
 @APP.get("/api/trader/strategy")
 def api_trader_strategy():
     """Live strategy signals, filter state, and chart spec for dashboard refresh."""
-    from gex_core.trading.strategy_viz import build_strategy_dashboard
-
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
     uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
@@ -977,17 +1008,34 @@ def api_trader_strategy():
     uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     exposure, previous_exposure = _strategy_exposure_from_context(ctx)
     window_pct = _dashboard_strike_window_pct()
-    payload = build_strategy_dashboard(
-        ticker=ticker,
-        spot=ctx.get("spot"),
-        exposure=exposure,
-        previous_exposure=previous_exposure,
-        snapshot=ctx.get("selected"),
-        prev_spot=prev_spot,
-        uw_bundle=uw_bundle,
-        window_pct=window_pct,
-        max_strikes=40 if window_pct <= NEAR_SPOT_STRIKE_WINDOW_PCT + 1e-9 else 65,
-    )
+    near_spot = _is_near_spot_window(window_pct)
+    wall_mode = (request.args.get("strategy") or "").lower() == "wall" or near_spot
+    max_strikes = 40 if near_spot else 65
+    if wall_mode:
+        from gex_core.trading.strategy_viz import build_wall_strategy_dashboard
+
+        payload = build_wall_strategy_dashboard(
+            ticker=ticker,
+            spot=ctx.get("spot"),
+            exposure=exposure,
+            snapshot=ctx.get("selected"),
+            window_pct=window_pct,
+            max_strikes=max_strikes,
+        )
+    else:
+        from gex_core.trading.strategy_viz import build_strategy_dashboard
+
+        payload = build_strategy_dashboard(
+            ticker=ticker,
+            spot=ctx.get("spot"),
+            exposure=exposure,
+            previous_exposure=previous_exposure,
+            snapshot=ctx.get("selected"),
+            prev_spot=prev_spot,
+            uw_bundle=uw_bundle,
+            window_pct=window_pct,
+            max_strikes=max_strikes,
+        )
     return jsonify(payload)
 
 

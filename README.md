@@ -162,7 +162,7 @@ docker compose --profile tools run --rm refresh
 |-----|-----------|-------------------|-------------|
 | `/` | **Wall GEX** — trade toward the lowest-\|γ\| wall | `low_gex_engine.py` | `GEX_WALL_GEX_AUTO=1` (default on) |
 | `/gamma`, `/periscope` | **Gamma Magnet** — max-positive-γ magnet strategy | `engine.py` | `GEX_AUTO_TRADER=1` |
-| `/gamma/near`, `/near` | Gamma Magnet chart limited to ±1% around spot | same as `/gamma` | same |
+| `/gamma/near`, `/near` | **Near-Spot Walls** — low/high γ walls within ±1% of spot | `low_gex_engine.py` | `GEX_WALL_GEX_AUTO=1` |
 | `/trade` | **Webull quick-trade desk** — live quotes + one-click orders | manual / API | Webull credentials |
 | `/ticker/<TICKER>/...` | Per-ticker variants of the above | same | same |
 

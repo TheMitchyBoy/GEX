@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% if near_spot_view %}{{ ticker }} · Near-Spot Gamma (±1%){% else %}SPX · Gamma Auto-Trader{% endif %}</title>
+    <title>{% if wall_mode %}{{ ticker }} · Near-Spot Walls (±1%){% elif near_spot_view %}{{ ticker }} · Near-Spot Gamma (±1%){% else %}SPX · Gamma Auto-Trader{% endif %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -466,7 +466,7 @@
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
           <div>
             <div class="d-flex gap-2 mb-2 flex-wrap">
-              <span class="chip">Auto-Trader</span>
+              <span class="chip">{% if wall_mode %}Wall GEX{% else %}Auto-Trader{% endif %}</span>
               <span class="chip">{{ ticker }}</span>
               {% if near_spot_view %}<span class="chip pass">±{{ '%.1f'|format(strike_window_pct * 100) }}% strikes</span>{% endif %}
               {% if timeline.is_latest %}<span class="chip live-pulse" id="liveChip">Live</span>{% else %}<span class="chip">Replay</span>{% endif %}
@@ -474,8 +474,8 @@
                 {% if advice.get('approve') %}Entry OK{% elif sig.get('available') %}No Entry{% else %}No Signal{% endif %}
               </span>
             </div>
-            <h1 class="h5 mb-1 fw-semibold">{% if near_spot_view %}Near-Spot Gamma{% else %}Gamma Magnet Strategy{% endif %}</h1>
-            <div class="small muted">{{ data_source }}{% if near_spot_view %} · strikes within ±{{ '%.1f'|format(strike_window_pct * 100) }}% of spot{% endif %}</div>
+            <h1 class="h5 mb-1 fw-semibold">{% if wall_mode %}Near-Spot Walls{% elif near_spot_view %}Near-Spot Gamma{% else %}Gamma Magnet Strategy{% endif %}</h1>
+            <div class="small muted">{{ data_source }}{% if near_spot_view %} · {% if wall_mode %}low/high γ walls{% else %}gamma magnets{% endif %} within ±{{ '%.1f'|format(strike_window_pct * 100) }}% of spot{% endif %}</div>
           </div>
           <div class="d-flex gap-2 align-items-center flex-wrap">
             <span class="chip {% if auto_trader.armed %}badge-armed{% else %}badge-disarmed{% endif %}" id="traderArmBadge">{% if auto_trader.armed %}Armed{% else %}Disarmed{% endif %}</span>
@@ -483,9 +483,9 @@
             {% if auto_trader.enabled %}<span class="chip">Every {{ auto_trader.cycle_seconds or 30 }}s</span>{% endif %}
             {% if auto_trader.execution_ticker and auto_trader.execution_ticker != auto_trader.signal_ticker %}<span class="chip">{{ auto_trader.signal_ticker }} γ → {{ auto_trader.execution_ticker }}</span>{% endif %}
             {% if near_spot_view %}
-            <a href="{{ full_gamma_url }}" class="chip text-decoration-none" style="color:#93c5fd;">Full view →</a>
+            <a href="{{ full_gamma_url }}" class="chip text-decoration-none" style="color:#93c5fd;">Full gamma view →</a>
             {% else %}
-            <a href="{{ near_gamma_url }}" class="chip text-decoration-none" style="color:#93c5fd;">Near spot ±1% →</a>
+            <a href="{{ near_walls_url }}" class="chip text-decoration-none" style="color:#93c5fd;">Near spot walls ±1% →</a>
             {% endif %}
             <a href="{{ url_for('webull_trade_dashboard') }}" id="quickTradeLink" class="chip text-decoration-none" style="color:#93c5fd;">Quick Trade →</a>
             <span class="last-updated" id="lastUpdated"></span>
@@ -542,14 +542,19 @@
           <section class="uw-panel">
             <div class="uw-panel-head">
               <span>Strategy map</span>
-              <span class="small muted fw-normal">GEX · spot · positions · equity</span>
+              <span class="small muted fw-normal">{% if wall_mode %}GEX · walls · spot · equity{% else %}GEX · spot · positions · equity{% endif %}</span>
             </div>
             <div class="uw-panel-body"><div id="strategyChart"></div></div>
             <div class="chart-legend">
               <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> +γ</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> −γ</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--amber)"></span> Spot</span>
+              {% if wall_mode %}
+              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> Low wall</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> High wall</span>
+              {% else %}
               <span class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> Signals</span>
+              {% endif %}
             </div>
           </section>
         </div>
@@ -563,9 +568,15 @@
               <div class="pipeline-step {% if filters.get('approve') %}done{% elif sig.get('available') %}blocked{% else %}active{% endif %}" data-step="filters">
                 <span class="step-icon">{% if filters.get('approve') %}✓{% elif sig.get('available') %}✗{% else %}…{% endif %}</span>Filters
               </div>
+              {% if wall_mode %}
+              <div class="pipeline-step {% if advice.get('approve') %}done{% elif filters.get('approve') %}active{% elif sig.get('available') %}blocked{% else %}active{% endif %}" data-step="advisor">
+                <span class="step-icon">{% if advice.get('approve') %}✓{% elif filters.get('approve') %}…{% else %}—{% endif %}</span>Ready
+              </div>
+              {% else %}
               <div class="pipeline-step {% if advice.get('approve') %}done{% elif filters.get('approve') %}active{% elif sig.get('available') %}blocked{% else %}active{% endif %}" data-step="advisor">
                 <span class="step-icon">{% if advice.get('approve') %}✓{% elif filters.get('approve') %}…{% else %}—{% endif %}</span>Advisor
               </div>
+              {% endif %}
             </div>
             <div id="entryContent">
               {% if sig.get('available') %}
@@ -576,16 +587,18 @@
                   <div class="entry-meta">{{ rec.signal_type }} · γ {{ '%+.3f'|format(rec.gamma_bn) }} Bn</div>
                 </div>
               </div>
+              {% if not wall_mode %}
               <div class="confidence-bar-wrap">
                 <label><span>Confidence</span><span class="mono" id="confPct">{{ '%.0f'|format((advice.confidence or 0) * 100) }}%</span></label>
                 <div class="confidence-bar"><div class="confidence-bar-fill" id="confBar" style="width:{{ '%.0f'|format((advice.confidence or 0) * 100) }}%"></div></div>
               </div>
               <div class="signal-row mt-2"><span>Δγ (10m)</span><span class="signal-val">{{ '%+.3f'|format(rec.gamma_delta) }} Bn</span></div>
+              {% endif %}
               <div class="small muted mt-2" id="entryReason">{{ advice.reason or rec.rationale }}</div>
               {% else %}
               <div class="empty-state">
                 <div class="empty-state-icon">◎</div>
-                <div id="entryReason">{{ sig.reason or 'Waiting for gamma exposure data…' }}</div>
+                <div id="entryReason">{{ sig.reason or ('Waiting for wall exposure data…' if wall_mode else 'Waiting for gamma exposure data…') }}</div>
               </div>
               {% endif %}
             </div>
@@ -596,7 +609,7 @@
             <div id="filterList">
               <div class="filter-item">
                 <span class="filter-check {% if sig.get('available') %}ok{% else %}no{% endif %}">{% if sig.get('available') %}✓{% else %}✗{% endif %}</span>
-                <span class="filter-label">Gamma signal detected</span>
+                <span class="filter-label">{% if wall_mode %}Wall signal detected{% else %}Gamma signal detected{% endif %}</span>
               </div>
               <div class="filter-item">
                 <span class="filter-check {% if filters.get('approve') %}ok{% elif sig.get('available') %}no{% else %}wait{% endif %}" id="filterCheckIcon">{% if filters.get('approve') %}✓{% elif sig.get('available') %}✗{% else %}—{% endif %}</span>
@@ -604,7 +617,7 @@
               </div>
               <div class="filter-item">
                 <span class="filter-check {% if advice.get('approve') %}ok{% elif filters.get('approve') %}wait{% else %}wait{% endif %}">{% if advice.get('approve') %}✓{% elif filters.get('approve') %}…{% else %}—{% endif %}</span>
-                <span class="filter-label">AI advisor approval</span>
+                <span class="filter-label">{% if wall_mode %}Entry ready{% else %}AI advisor approval{% endif %}</span>
               </div>
             </div>
             {% if not filters.get('approve') and filters.get('reason') %}
@@ -622,9 +635,14 @@
             <div class="rule-grid">
               <span class="rule-pill danger">Stop −{{ '%.0f'|format((strategy_state.rules.stop_loss_pct or 0.06) * 100) }}%</span>
               <span class="rule-pill success">Target +{{ '%.0f'|format((strategy_state.rules.take_profit_pct or 0.28) * 100) }}%</span>
+              {% if wall_mode %}
+              <span class="rule-pill">Hold {{ strategy_state.rules.max_hold_bars or 8 }} bars</span>
+              <span class="rule-pill">Window ±{{ '%.1f'|format((strategy_state.rules.max_strike_distance_pct or 0.01) * 100) }}%</span>
+              {% else %}
               <span class="rule-pill">Partial +{{ '%.0f'|format((strategy_state.rules.partial_take_profit_pct or 0.15) * 100) }}%</span>
               <span class="rule-pill">Trail +{{ '%.0f'|format((strategy_state.rules.trail_trigger_pct or 0.10) * 100) }}/+{{ '%.0f'|format((strategy_state.rules.trail_floor_pct or 0.05) * 100) }}%</span>
               <span class="rule-pill">Max dist {{ '%.1f'|format((strategy_state.rules.max_strike_distance_pct or 0.01) * 100) }}%</span>
+              {% endif %}
             </div>
           </div>
 
@@ -727,6 +745,7 @@
       const isLiveSlice = {{ is_live_slice|tojson }};
       const ticker = '{{ ticker }}';
       const strikeWindowPct = {{ strike_window_pct|tojson }};
+      const wallMode = {{ wall_mode|default(false)|tojson }};
 
       const chartEl = document.getElementById('strategyChart');
 
@@ -881,6 +900,9 @@
         if (strikeWindowPct && strikeWindowPct < 0.04) {
           params.set('window_pct', String(strikeWindowPct));
         }
+        if (wallMode) {
+          params.set('strategy', 'wall');
+        }
         return params;
       }
 
@@ -974,30 +996,34 @@
         const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
         return res.json();
       }
+      const traderArmUrl = wallMode ? '/api/wall-gex/arm' : '/api/trader/arm';
+      const traderRunUrl = wallMode ? '/api/wall-gex/run' : '/api/trader/run';
+
       document.getElementById('traderArmBtn')?.addEventListener('click', async () => {
         const live = {{ auto_trader.live_mode|tojson }};
-        const body = {armed: true};
+        const body = {armed: true, ticker};
         if (live && !window.confirm('Arm LIVE Webull trading?')) return;
         if (live) body.live_confirm = true;
-        const data = await traderPost('/api/trader/arm', body);
+        const data = await traderPost(traderArmUrl, body);
+        const armed = wallMode ? data.status?.armed : data.armed;
         const badge = document.getElementById('traderArmBadge');
         if (badge) {
-          badge.textContent = data.armed ? 'Armed' : 'Disarmed';
-          badge.className = 'chip ' + (data.armed ? 'badge-armed' : 'badge-disarmed');
+          badge.textContent = armed ? 'Armed' : 'Disarmed';
+          badge.className = 'chip ' + (armed ? 'badge-armed' : 'badge-disarmed');
         }
-        document.getElementById('traderStatusMsg').textContent = data.armed ? 'Trader armed.' : '';
+        document.getElementById('traderStatusMsg').textContent = armed ? 'Trader armed.' : '';
       });
       document.getElementById('traderDisarmBtn')?.addEventListener('click', async () => {
-        await traderPost('/api/trader/arm', {armed: false});
+        await traderPost(traderArmUrl, {armed: false, ticker});
         const badge = document.getElementById('traderArmBadge');
         if (badge) { badge.textContent = 'Disarmed'; badge.className = 'chip badge-disarmed'; }
         document.getElementById('traderStatusMsg').textContent = 'Trader disarmed.';
       });
       document.getElementById('traderRunBtn')?.addEventListener('click', async () => {
         document.getElementById('traderStatusMsg').textContent = 'Running cycle…';
-        const data = await traderPost('/api/trader/run', {});
+        const data = await traderPost(traderRunUrl, {ticker});
         const entry = data.entry;
-        let msg = data.reason || 'Cycle complete.';
+        let msg = data.reason || data.last_cycle?.reason || 'Cycle complete.';
         if (entry?.action === 'opened') msg = `Opened ${entry.option_type?.toUpperCase()} @ ${entry.strike}`;
         document.getElementById('traderStatusMsg').textContent = msg;
         await refreshStrategy();
