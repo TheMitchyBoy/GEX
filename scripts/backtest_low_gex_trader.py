@@ -54,6 +54,12 @@ def main() -> None:
         action="store_true",
         help="Enable wall signal quality filters (default off)",
     )
+    parser.add_argument(
+        "--window-pct",
+        type=float,
+        default=0.12,
+        help="Strike search window as fraction of spot (default 12%%; /near uses 1%%)",
+    )
     args = parser.parse_args()
 
     if args.signal_filters:
@@ -73,6 +79,7 @@ def main() -> None:
         take_profit=args.take_profit,
         starting_capital=args.starting_capital,
         reenter_each_bar=args.reenter_each_bar,
+        window_pct=args.window_pct,
     )
 
     if args.json:
@@ -80,6 +87,8 @@ def main() -> None:
         return
 
     print(f"\n=== Low-GEX backtest · {result.get('ticker', args.ticker.upper())} ===")
+    if result.get("window_pct") is not None:
+        print(f"strike window: ±{result['window_pct'] * 100:.1f}% of spot")
     if result.get("reenter_each_bar"):
         print("mode: re-enter each bar (close + open toward lowest GEX)")
     if result.get("date_from") and result.get("date_to"):

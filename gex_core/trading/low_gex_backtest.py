@@ -127,6 +127,7 @@ def _maybe_enter_wall_gex(
     row: dict,
     max_open: int,
     target: WallTarget = "min",
+    window_pct: float = 0.12,
     reenter_each_bar: bool = False,
     reenter_on_shift: bool | None = None,
     reentry_after_stop: bool | None = None,
@@ -149,7 +150,7 @@ def _maybe_enter_wall_gex(
         state.skipped_filters += 1
         return
 
-    pack = compute_wall_gex_signal(exposure, spot=spot, target=target)
+    pack = compute_wall_gex_signal(exposure, spot=spot, target=target, window_pct=window_pct)
     if not pack.get("available"):
         state.skipped_entries += 1
         return
@@ -267,6 +268,7 @@ def backtest_wall_gex_trader(
     ticker: str,
     *,
     target: WallTarget = "min",
+    window_pct: float = 0.12,
     export_dir=EXPORT_DIR,
     lookback_days: int | None = 7,
     max_snapshots: int | None = 500,
@@ -361,6 +363,7 @@ def backtest_wall_gex_trader(
             row=row,
             max_open=max_open,
             target=target,
+            window_pct=window_pct,
             reenter_each_bar=rotate,
             reenter_on_shift=shift,
             reentry_after_stop=after_stop,
@@ -407,6 +410,7 @@ def backtest_wall_gex_trader(
     )
     result["strategy"] = "low_gex" if target == "min" else "high_gex"
     result["wall_target"] = target
+    result["window_pct"] = window_pct
     result["reenter_each_bar"] = rotate
     result["reenter_on_shift"] = shift
     result["reentry_after_stop"] = after_stop
