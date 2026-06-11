@@ -27,33 +27,179 @@ Unusual Whales API
   main.py / gex_core.refresh  ──►  data/exports/  (CSV + JSON snapshots)
        │                                    │
        ├─ streamlit_app.py                  ├─ gex_core.history  (timeline)
-       └─ web_app.py (Flask)                ├─ gex_core.predict  (KNN forecast)
-                                            └─ scripts/train_*   (model overlay)
+       └─ web_app.py (Flask + gunicorn)     ├─ gex_core.predict  (KNN forecast)
+              │                             └─ scripts/train_*   (model overlay)
+              ├─ Background scheduler (UW refresh, optional auto-traders)
+              ├─ UW price websocket (live spot chart)
+              └─ SQLite journals (gex_index.db, trading_journal.db)
 ```
 
 Persistence is **file-based** with an optional **SQLite index** (`data/gex_index.db`) for fast history lookups. Each refresh writes a matched set of files sharing a timestamp suffix under `data/exports/`.
 
-## Installation
+## App setup
 
-**Requirements:** Python 3.11+, `UW_API_KEY`
+The primary interface is the **Flask web dashboard** (`web_app.py`), served by **gunicorn** in production via `scripts/start_web.sh` / `wsgi.py`. On boot the app:
+
+1. Loads configuration from `.env` and `config/spx.env` (`gex_core.env_bootstrap`)
+2. Starts a background scheduler (unless `GEX_DISABLE_SCHEDULER=1`) that pulls UW data on an interval
+3. Optionally runs **two independent auto-traders** on separate timers (Wall GEX and Gamma Magnet)
+4. Serves dashboards from saved exports, with live UW websocket prices when configured
+
+### Prerequisites
+
+| Requirement | Required for |
+|-------------|--------------|
+| Python 3.11+ | All local runs |
+| `UW_API_KEY` | Live data, refresh, dashboards |
+| Webull OpenAPI credentials | Live SPY 0DTE orders (`/trade`) |
+| `OPENAI_API_KEY` or `OPENROUTER_API_KEY` | AI entry advisor and chat (optional) |
+
+### 1. Install
 
 ```bash
 git clone https://github.com/TheMitchyBoy/GEX.git
 cd GEX
 pip install -r requirements.txt
-export UW_API_KEY=your-key
 ```
 
-For development:
+For development and tests:
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```
 
-## Quick start
+### 2. Configure environment
 
-### CLI
+Copy the example config and set at least your Unusual Whales key:
+
+```bash
+cp config/spx.env.example config/spx.env
+# edit config/spx.env:
+export UW_API_KEY=your-key-here
+```
+
+**How env loading works:** `bootstrap_env()` reads `.env` and `config/spx.env` in order. Variables already set in the process environment (shell export, Docker, Railway, Cursor Cloud secrets) are **never overwritten** by files.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `UW_API_KEY` | (none) | **Required** — Unusual Whales API access |
+| `GEX_DATA_DIR` | `data/` | Exports, SQLite DBs; use `/app/data` on Railway with a volume |
+| `GEX_DEFAULT_TICKERS` | `SPX` | Symbols refreshed by the scheduler |
+| `GEX_REFRESH_INTERVAL_MINUTES` | `2` | How often new GEX snapshots are fetched |
+| `GEX_DISABLE_SCHEDULER` | off | Set `1` to disable background refresh |
+
+Full variable list: [config/spx.env.example](config/spx.env.example).
+
+### 3. Bootstrap historical data
+
+A fresh install has no strike history. Forecasts, timelines, and backtests need CSV snapshots under `data/exports/`.
+
+**Automatic (default):** when fewer than 4 strike CSVs exist, `scripts/start_web.sh` kicks off a background 90-day backfill (`GEX_AUTO_BACKFILL_IF_EMPTY=1`).
+
+**Manual / first deploy:**
+
+```bash
+export GEX_STARTUP_BACKFILL=1          # one-shot on container boot
+# or run directly:
+python scripts/gex_backfill_intraday.py --tickers SPX --intraday-days 90 --interval-minutes 2
+python scripts/gex_refresh.py --force
+```
+
+GitHub Actions also run scheduled exports (see [Scheduled exports](#scheduled-exports) below).
+
+### 4. Run locally
+
+**Development** — Flask built-in server on port 5000:
+
+```bash
+export UW_API_KEY=your-key
+python web_app.py
+# → http://localhost:5000/
+```
+
+**Production-like** — gunicorn on port 8080 (same path used in Docker/Railway):
+
+```bash
+bash scripts/start_web.sh
+# → http://localhost:8080/
+```
+
+Verify the server is healthy:
+
+```bash
+curl -s localhost:8080/health | jq
+```
+
+`uw_api_configured: false` means no `UW_API_KEY` — the UI will show saved snapshots only.
+
+### 5. Docker
+
+```bash
+cp config/spx.env.example config/spx.env   # set UW_API_KEY
+docker compose up web
+```
+
+Open **http://localhost:8080/**. The `data/` directory is bind-mounted so exports and journals survive restarts.
+
+One-off refresh (tools profile):
+
+```bash
+docker compose --profile tools run --rm refresh
+```
+
+### 6. Deploy to Railway / cloud
+
+1. Set `UW_API_KEY` in the service environment variables.
+2. Mount a **persistent volume** at `/app/data` and set `GEX_DATA_DIR=/app/data`.
+3. Start command: `bash scripts/start_web.sh` (default in the Dockerfile).
+4. Optional first deploy: `GEX_STARTUP_BACKFILL=1` to pull 90 days of intraday history.
+5. `GEX_DASHBOARD_SKIP_BACKTEST=1` (set in `start_web.sh`) keeps HTML page loads fast on small instances.
+
+### 7. Pages and auto-traders
+
+| URL | Dashboard | Background trader | Enable with |
+|-----|-----------|-------------------|-------------|
+| `/` | **Wall GEX** — trade toward the lowest-\|γ\| wall | `low_gex_engine.py` | `GEX_WALL_GEX_AUTO=1` (default on) |
+| `/gamma`, `/periscope` | **Gamma Magnet** — max-positive-γ magnet strategy | `engine.py` | `GEX_AUTO_TRADER=1` |
+| `/gamma/near`, `/near` | Gamma Magnet chart limited to ±1% around spot | same as `/gamma` | same |
+| `/trade` | **Webull quick-trade desk** — live quotes + one-click orders | manual / API | Webull credentials |
+| `/ticker/<TICKER>/...` | Per-ticker variants of the above | same | same |
+
+Both auto-traders read **SPX** gamma signals (`GEX_SIGNAL_TICKER=SPX`) and execute **SPY** 0DTE options by default (`GEX_EXECUTION_TICKER=SPY`). Default exits are **3% stop / 22% take profit** on Wall GEX; Gamma Magnet uses **20% / 60%** unless overridden via `GEX_TRADER_STOP_LOSS_PCT` / `GEX_TRADER_TAKE_PROFIT_PCT`.
+
+**Scheduler loops** (when not disabled):
+
+| Job | Interval | Env |
+|-----|----------|-----|
+| UW data refresh | `GEX_REFRESH_INTERVAL_MINUTES` (2 min) | always (unless scheduler off) |
+| Gamma Magnet tick | `GEX_TRADER_CYCLE_SECONDS` (15 s) | `GEX_AUTO_TRADER=1` |
+| Wall GEX tick | `GEX_WALL_GEX_CYCLE_SECONDS` (30 s) | `GEX_WALL_GEX_AUTO=1` |
+
+Arm or disarm traders from the dashboard UI, or via `POST /api/trader/arm` and `POST /api/wall-gex/arm`. Paper mode is the default (`GEX_TRADER_PAPER=1`).
+
+**Streamlit explorer** (optional, separate from the main dashboard):
+
+```bash
+streamlit run streamlit_app.py
+```
+
+### 8. Optional: live Webull trading
+
+```bash
+export GEX_TRADER_PAPER=0
+export GEX_WEBULL_APP_KEY=your-app-key
+export GEX_WEBULL_APP_SECRET=your-app-secret
+export GEX_WEBULL_ACCOUNT_ID=your-account-id
+export GEX_TRADER_LIVE_CONFIRM=1
+export GEX_ADMIN_TOKEN=change-me    # required for POST order routes when set
+```
+
+Orders from `/trade` require `live_confirm: true` in the API body. Enable background execution with `GEX_AUTO_TRADER=1` and/or `GEX_WALL_GEX_AUTO=1`, then arm the trader on the dashboard.
+
+### 9. CLI and manual refresh
+
+**CLI** — fetch, plot, and export without the web server:
 
 ```bash
 python main.py --ticker SPX
@@ -73,29 +219,11 @@ python main.py --ticker SPX --market-date 2026-06-01  # historical UW date
 | `--uw-key` | env | Override `UW_API_KEY` |
 | `--market-date` | today | Historical date `YYYY-MM-DD` |
 
-### Dashboards
-
-**Flask (primary):**
-
-```bash
-python web_app.py
-# or: docker compose up web
-```
-
-Open **http://localhost:5000/** for the gamma auto-trader. **http://localhost:5000/trade** is the Webull quick-trade desk: live SPY 0DTE quotes, entry/exit condition signals, and one-click limit orders (passive / mid / smart / aggressive). Requires `GEX_WEBULL_*` credentials and `GEX_TRADER_PAPER=0` for live execution; orders need `live_confirm: true` in the API body.
-
-**Streamlit:**
-
-```bash
-streamlit run streamlit_app.py
-```
-
-### Manual refresh
+**Manual refresh scripts:**
 
 ```bash
 python scripts/gex_refresh.py --force
 python scripts/gex_refresh.py --tickers SPX --backfill-days 7
-python scripts/gex_refresh.py --tickers SPX --intraday-days 90 --interval-minutes 2
 python scripts/gex_backfill_intraday.py --intraday-days 90 --daily-days 90 --interval-minutes 2
 ```
 
@@ -337,18 +465,17 @@ python scripts/train_gex_model.py --ticker SPX
 
 ```bash
 curl -s localhost:8080/health | jq
+curl -s localhost:8080/health/ready | jq
 ```
 
-`uw_api_configured: false` in the `/health` payload (or a startup log warning
-`UW_API_KEY is not set ...`) means the server has no API key. The dashboard then
-shows **"Live data isn't configured on this server (UW_API_KEY is missing)"** and
-serves only saved snapshots. Fix by setting `UW_API_KEY` in the **service**
-environment:
+If `uw_api_configured` is `false`, set `UW_API_KEY` in the service environment (see [App setup](#app-setup)). The dashboard still serves saved snapshots from `data/exports/`.
 
-- **docker compose:** export `UW_API_KEY` in your shell or add it to `.env` / `config/spx.env` before `docker compose up` (compose loads those files automatically).
-- **Heroku/Procfile-style:** `heroku config:set UW_API_KEY=...` (or the platform's config UI).
-- **systemd/bare gunicorn:** add `UW_API_KEY=...` to the unit's `Environment=`/`EnvironmentFile=`.
-- **Cursor Cloud Agents:** add it under Dashboard → Cloud Agents → Secrets. The repo includes `.cursor/environment.json`, which starts the Flask dashboard via `scripts/start_web.sh` and inherits injected secrets.
+| Platform | Where to set `UW_API_KEY` |
+|----------|---------------------------|
+| Local / Docker | `.env`, `config/spx.env`, or shell `export` |
+| Railway / Heroku | Service environment variables in the platform UI |
+| systemd | `Environment=` / `EnvironmentFile=` in the unit |
+| Cursor Cloud Agents | Dashboard → Cloud Agents → Secrets |
 
 Compact aged strike CSVs (keeps summaries + cumulative):
 
@@ -376,13 +503,18 @@ See [ROADMAP.md](ROADMAP.md) for planned work.
 | Path | Role |
 |------|------|
 | `main.py` | CLI entry — fetch, print, plot, export |
-| `web_app.py` | Flask SPX dashboard |
-| `streamlit_app.py` | Streamlit explorer |
+| `web_app.py` | Flask dashboard — routes, scheduler, trader hooks |
+| `wsgi.py` | Gunicorn entrypoint (`bootstrap_env` + `APP`) |
+| `scripts/start_web.sh` | Production start — backfill, retrain, gunicorn |
+| `streamlit_app.py` | Streamlit explorer (optional) |
 | `gex_core/` | Core library (fetch, history, features, predict, `gex_core/trading/`) |
+| `gex_core/trading/` | Auto-traders: `engine.py` (Gamma Magnet), `low_gex_engine.py` (Wall GEX) |
+| `config/spx.env.example` | Documented environment template |
 | `live/` | Real-time flow ingest |
 | `scripts/` | Refresh, training, backtest, compaction |
-| `gex_core/storage.py` | SQLite export index |
-| `data/exports/` | Timestamped snapshot store |
+| `data/exports/` | Timestamped GEX snapshot store |
+| `data/gex_index.db` | SQLite export index |
+| `data/trading_journal.db` | Paper/live trade journal |
 | `models/` | Trained overlay models + manifests |
 
 ## Disclaimer
