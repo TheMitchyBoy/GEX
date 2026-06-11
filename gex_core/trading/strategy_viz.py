@@ -41,6 +41,9 @@ _BLUE = "#38bdf8"
 _PURPLE = "#a78bfa"
 _MUTED = "#64748b"
 _TEXT = "#cbd5e1"
+_TRAIL_CYAN = "#67e8f9"
+_TRAIL_VIOLET = "#c4b5fd"
+_GAMMA_CHANGE_MIN = 0.015
 
 
 def _encode(fig: go.Figure) -> str:
@@ -70,6 +73,217 @@ def _chart_exposure_window(
         spot,
         window_pct=window_pct,
         max_strikes=max_strikes,
+    )
+
+
+def _normalize_exposure_trail(
+    exposure_trail: list[dict[str, Any]] | None,
+    previous_exposure: pd.Series | None,
+) -> list[dict[str, Any]]:
+    if exposure_trail:
+        return list(exposure_trail)
+    if isinstance(previous_exposure, pd.Series) and not previous_exposure.empty:
+        return [{"ts": "", "label": "prior", "spot": None, "series": previous_exposure, "age": 1}]
+    return []
+
+
+def _gamma_change_points(
+    current: pd.Series,
+    trail: list[dict[str, Any]],
+    *,
+    window_index: pd.Index,
+    top_n: int = 10,
+) -> list[dict[str, Any]]:
+    """Largest |Δγ| strikes between consecutive recent slices."""
+    if current.empty or not len(trail):
+        return []
+    chain = [item.get("series") for item in trail if isinstance(item.get("series"), pd.Series)]
+    chain.append(current)
+    points: dict[tuple[float, int], dict[str, Any]] = {}
+    for step_idx in range(1, len(chain)):
+        prev = chain[step_idx - 1]
+        cur = chain[step_idx]
+        label = str(trail[step_idx - 1].get("label") or trail[step_idx - 1].get("ts") or f"t-{step_idx}")
+        aligned_prev, aligned_cur = prev.align(cur, join="outer", fill_value=0.0)
+        delta = aligned_cur - aligned_prev
+        scoped = delta.reindex(window_index, fill_value=0.0)
+        for strike, dv in scoped.abs().nlargest(top_n).items():
+            change = float(scoped.get(strike, 0.0))
+            if abs(change) < _GAMMA_CHANGE_MIN:
+                continue
+            key = (float(strike), step_idx)
+            prior = points.get(key)
+            if prior is None or abs(change) > abs(float(prior.get("delta", 0.0))):
+                points[key] = {
+                    "strike": float(strike),
+                    "delta": change,
+                    "gamma": float(aligned_cur.get(strike, 0.0)),
+                    "label": label,
+                    "step": step_idx,
+                }
+    return list(points.values())
+
+
+def _signal_strike_trail(
+    trail: list[dict[str, Any]],
+    *,
+    wall_mode: bool,
+    window_pct: float,
+) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    for item in trail:
+        series = item.get("series")
+        if not isinstance(series, pd.Series) or series.empty:
+            continue
+        spot_val = safe_float(item.get("spot"), 0.0)
+        if spot_val <= 0:
+            spot_val = safe_float(series.attrs.get("spot"), 0.0)
+        if wall_mode:
+            pack = compute_low_gex_signal(series, spot=spot_val or None, window_pct=window_pct)
+        else:
+            pack = compute_gamma_signals(series, None, spot=spot_val or None)
+        rec = pack.get("recommended") or {}
+        strike = safe_float(rec.get("strike"), 0.0)
+        if strike <= 0:
+            continue
+        markers.append(
+            {
+                "strike": strike,
+                "label": str(item.get("label") or item.get("ts") or ""),
+                "gamma": safe_float(rec.get("gamma_bn"), 0.0),
+                "age": int(item.get("age") or 1),
+            }
+        )
+    return markers
+
+
+def _decorate_gex_strike_panel(
+    fig: go.Figure,
+    *,
+    window: pd.Series,
+    spot_val: float,
+    x_range: list[float],
+    levels: dict[str, Any] | None,
+    exposure_trail: list[dict[str, Any]] | None,
+    previous_exposure: pd.Series | None,
+    wall_mode: bool,
+    window_pct: float,
+    row: int = 1,
+    col: int = 1,
+) -> None:
+    """History dots, Δγ highlights, level guides, and signal trail."""
+    if window.empty or spot_val <= 0:
+        return
+
+    trail = _normalize_exposure_trail(exposure_trail, previous_exposure)
+    peak = max(abs(x_range[0]), abs(x_range[1]), 0.05)
+
+    # Prior-slice γ positions (fading cyan dots).
+    max_age = max((int(item.get("age") or 1) for item in trail), default=1)
+    for item in trail:
+        series = item.get("series")
+        if not isinstance(series, pd.Series) or series.empty:
+            continue
+        age = int(item.get("age") or 1)
+        opacity = 0.18 + 0.22 * (1.0 - (age - 1) / max(max_age, 1))
+        label = str(item.get("label") or item.get("ts") or "")
+        hist = series.reindex(window.index, fill_value=0.0)
+        fig.add_trace(
+            go.Scatter(
+                x=hist.values,
+                y=[float(s) for s in hist.index],
+                mode="markers",
+                marker=dict(
+                    size=5.5,
+                    color=_TRAIL_CYAN,
+                    opacity=opacity,
+                    line=dict(width=0.5, color="rgba(103,232,249,0.35)"),
+                    symbol="circle",
+                ),
+                name=f"γ {label}",
+                hovertemplate="%{customdata}<br>Strike %{y:.0f}<br>γ %{x:+.3f} Bn<extra></extra>",
+                customdata=[label] * len(hist),
+                showlegend=False,
+            ),
+            row=row,
+            col=col,
+        )
+
+    # Δγ pulse dots on current profile.
+    changes = _gamma_change_points(window, trail, window_index=window.index, top_n=10)
+    if changes:
+        fig.add_trace(
+            go.Scatter(
+                x=[p["gamma"] for p in changes],
+                y=[p["strike"] for p in changes],
+                mode="markers",
+                marker=dict(
+                    size=[6 + min(14.0, abs(p["delta"]) * 18.0) for p in changes],
+                    color=[_GREEN if p["delta"] >= 0 else _RED for p in changes],
+                    opacity=0.92,
+                    line=dict(width=1.2, color="rgba(255,255,255,0.55)"),
+                    symbol="circle",
+                ),
+                name="Δγ",
+                customdata=[f"{p['label']} · Δγ {p['delta']:+.3f} Bn" for p in changes],
+                hovertemplate="%{customdata}<br>Strike %{y:.0f}<br>γ %{x:+.3f} Bn<extra></extra>",
+                showlegend=False,
+            ),
+            row=row,
+            col=col,
+        )
+
+    # Signal / wall strike trail (violet breadcrumbs left of zero).
+    for marker in _signal_strike_trail(trail, wall_mode=wall_mode, window_pct=window_pct):
+        age = int(marker.get("age") or 1)
+        x_pos = -peak * 0.07 * age
+        fig.add_trace(
+            go.Scatter(
+                x=[x_pos],
+                y=[marker["strike"]],
+                mode="markers",
+                marker=dict(
+                    size=7,
+                    color=_TRAIL_VIOLET,
+                    opacity=0.35 + 0.2 * (1.0 - (age - 1) / max(max_age, 1)),
+                    symbol="circle",
+                    line=dict(width=0.8, color="rgba(196,181,253,0.5)"),
+                ),
+                name="Signal trail",
+                hovertemplate=f"{marker['label']}<br>%{{y:.0f}}<br>γ {marker['gamma']:+.3f} Bn<extra></extra>",
+                showlegend=False,
+            ),
+            row=row,
+            col=col,
+        )
+
+    gamma_flip = parse_gamma_flip_value((levels or {}).get("gamma_flip"))
+    if gamma_flip is not None and gamma_flip > 0:
+        fig.add_hline(
+            y=gamma_flip,
+            line=dict(color="rgba(167,139,250,0.45)", width=1, dash="dot"),
+            row=row,
+            col=col,
+        )
+    for level_key, color, name in (
+        ("call_wall", "rgba(34,197,94,0.35)", "Call wall"),
+        ("put_wall", "rgba(239,68,68,0.35)", "Put wall"),
+    ):
+        level = safe_float((levels or {}).get(level_key), 0.0)
+        if level > 0:
+            fig.add_hline(y=level, line=dict(color=color, width=1, dash="dash"), row=row, col=col)
+
+    fig.add_annotation(
+        x=0.01,
+        y=spot_val,
+        xref="paper",
+        yref="y",
+        text=f"Spot {spot_val:,.0f}",
+        showarrow=False,
+        font=dict(size=9, color=_AMBER),
+        bgcolor="rgba(8,11,16,0.75)",
+        borderpad=2,
+        xanchor="left",
     )
 
 
@@ -179,6 +393,9 @@ def build_strategy_chart(
     state: dict[str, Any],
     window_pct: float = 0.04,
     max_strikes: int = 65,
+    exposure_trail: list[dict[str, Any]] | None = None,
+    previous_exposure: pd.Series | None = None,
+    wall_mode: bool = False,
 ) -> go.Figure:
     """Two-row dashboard: GEX by strike + cumulative PnL."""
     spot_val = safe_float(spot or state.get("spot"), 0.0)
@@ -188,16 +405,17 @@ def build_strategy_chart(
     levels = state.get("levels") or {}
     open_positions = state.get("open_positions") or []
 
+    trail_count = len(_normalize_exposure_trail(exposure_trail, previous_exposure))
     strike_title = (
-        f"GEX by strike · ±{window_pct * 100:.1f}% of spot"
+        f"GEX by strike · ±{window_pct * 100:.1f}% · last {trail_count} γ snapshots"
         if window_pct < 0.04
-        else "GEX by strike · entry levels & open positions"
+        else f"GEX by strike · last {trail_count} γ snapshots & signals"
     )
     fig = make_subplots(
         rows=2,
         cols=1,
-        row_heights=[0.68, 0.32],
-        vertical_spacing=0.06,
+        row_heights=[0.7, 0.3],
+        vertical_spacing=0.05,
         subplot_titles=(strike_title, "Cumulative PnL (recent trades)"),
     )
 
@@ -217,17 +435,31 @@ def build_strategy_chart(
                 y=strikes,
                 orientation="h",
                 width=_bar_width(strikes),
-                marker_color=colors,
-                opacity=0.86,
+                marker=dict(
+                    color=colors,
+                    opacity=0.9,
+                    line=dict(width=0.6, color="rgba(255,255,255,0.12)"),
+                ),
                 name="Gamma",
                 hovertemplate="Strike %{y:.0f}<br>γ %{x:+.3f} Bn<extra></extra>",
             ),
             row=1,
             col=1,
         )
+        _decorate_gex_strike_panel(
+            fig,
+            window=window,
+            spot_val=spot_val,
+            x_range=x_range,
+            levels=levels,
+            exposure_trail=exposure_trail,
+            previous_exposure=previous_exposure,
+            wall_mode=wall_mode,
+            window_pct=window_pct,
+        )
         fig.add_vline(
             x=0,
-            line=dict(color="rgba(226, 232, 240, 0.45)", width=1.5),
+            line=dict(color="rgba(226, 232, 240, 0.55)", width=1.5),
             row=1,
             col=1,
         )
@@ -238,7 +470,7 @@ def build_strategy_chart(
                 x=x_range,
                 y=[spot_val, spot_val],
                 mode="lines",
-                line=dict(color=_AMBER, width=3),
+                line=dict(color=_AMBER, width=2.5, dash="dot"),
                 name="Spot",
                 hovertemplate="Spot %{y:.2f}<extra></extra>",
             ),
@@ -331,13 +563,13 @@ def build_strategy_chart(
         paper_bgcolor=_BG,
         plot_bgcolor=_PANEL,
         font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
-        margin=dict(l=64, r=20, t=36, b=40),
-        height=680,
+        margin=dict(l=68, r=24, t=42, b=44),
+        height=700,
         showlegend=False,
         title=dict(
-            text=f"WR {win_rate:.0%} · ${total_pnl:,.0f} cumulative",
+            text=f"WR {win_rate:.0%} · ${total_pnl:,.0f} cumulative · cyan=γ history · dots=Δγ",
             x=0.01,
-            y=0.98,
+            y=0.99,
             font=dict(size=11, color=_MUTED),
         ),
     )
@@ -345,18 +577,18 @@ def build_strategy_chart(
         strike_axis = _strike_axis_layout([float(s) for s in window.index], spot_val, axis="y")
         fig.update_yaxes(**strike_axis, row=1, col=1)
     else:
-        fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.08)")
+        fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.06)")
     fig.update_xaxes(
         title_text="Net gamma (Bn)",
         row=1,
         col=1,
         range=x_range,
-        gridcolor="rgba(148,163,184,0.08)",
+        gridcolor="rgba(148,163,184,0.06)",
         zeroline=True,
-        zerolinecolor="rgba(255,255,255,0.2)",
+        zerolinecolor="rgba(255,255,255,0.25)",
     )
-    fig.update_xaxes(title_text="Trade #", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
-    fig.update_yaxes(title_text="USD", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
+    fig.update_xaxes(title_text="Trade #", row=2, col=1, gridcolor="rgba(148,163,184,0.06)")
+    fig.update_yaxes(title_text="USD", row=2, col=1, gridcolor="rgba(148,163,184,0.06)")
     return fig
 
 
@@ -371,6 +603,7 @@ def build_strategy_dashboard(
     uw_bundle: dict[str, Any] | None = None,
     window_pct: float = 0.04,
     max_strikes: int = 65,
+    exposure_trail: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     state = build_strategy_state(
         ticker=ticker,
@@ -387,6 +620,9 @@ def build_strategy_dashboard(
         state=state,
         window_pct=window_pct,
         max_strikes=max_strikes,
+        exposure_trail=exposure_trail,
+        previous_exposure=previous_exposure,
+        wall_mode=False,
     )
     return {
         "state": state,
@@ -509,21 +745,25 @@ def build_wall_strategy_chart(
     state: dict[str, Any],
     window_pct: float = 0.01,
     max_strikes: int = 40,
+    exposure_trail: list[dict[str, Any]] | None = None,
+    previous_exposure: pd.Series | None = None,
 ) -> go.Figure:
     """Near-spot wall chart: low/high γ walls instead of gamma magnets."""
     spot_val = safe_float(spot or state.get("spot"), 0.0)
     signals = state.get("signals") or {}
     performance = state.get("performance") or {}
     recent = state.get("recent_trades") or []
+    levels = state.get("levels") or {}
     open_positions = state.get("open_positions") or []
 
+    trail_count = len(_normalize_exposure_trail(exposure_trail, previous_exposure))
     fig = make_subplots(
         rows=2,
         cols=1,
-        row_heights=[0.68, 0.32],
-        vertical_spacing=0.06,
+        row_heights=[0.7, 0.3],
+        vertical_spacing=0.05,
         subplot_titles=(
-            f"GEX by strike · ±{window_pct * 100:.1f}% of spot · walls",
+            f"GEX by strike · ±{window_pct * 100:.1f}% · walls · last {trail_count} γ snapshots",
             "Cumulative PnL (wall trades)",
         ),
     )
@@ -544,17 +784,31 @@ def build_wall_strategy_chart(
                 y=strikes,
                 orientation="h",
                 width=_bar_width(strikes),
-                marker_color=colors,
-                opacity=0.86,
+                marker=dict(
+                    color=colors,
+                    opacity=0.9,
+                    line=dict(width=0.6, color="rgba(255,255,255,0.12)"),
+                ),
                 name="Gamma",
                 hovertemplate="Strike %{y:.0f}<br>γ %{x:+.3f} Bn<extra></extra>",
             ),
             row=1,
             col=1,
         )
+        _decorate_gex_strike_panel(
+            fig,
+            window=window,
+            spot_val=spot_val,
+            x_range=x_range,
+            levels=levels,
+            exposure_trail=exposure_trail,
+            previous_exposure=previous_exposure,
+            wall_mode=True,
+            window_pct=window_pct,
+        )
         fig.add_vline(
             x=0,
-            line=dict(color="rgba(226, 232, 240, 0.45)", width=1.5),
+            line=dict(color="rgba(226, 232, 240, 0.55)", width=1.5),
             row=1,
             col=1,
         )
@@ -565,7 +819,7 @@ def build_wall_strategy_chart(
                 x=x_range,
                 y=[spot_val, spot_val],
                 mode="lines",
-                line=dict(color=_AMBER, width=3),
+                line=dict(color=_AMBER, width=2.5, dash="dot"),
                 name="Spot",
                 hovertemplate="Spot %{y:.2f}<extra></extra>",
             ),
@@ -657,13 +911,13 @@ def build_wall_strategy_chart(
         paper_bgcolor=_BG,
         plot_bgcolor=_PANEL,
         font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
-        margin=dict(l=64, r=20, t=36, b=40),
-        height=680,
+        margin=dict(l=68, r=24, t=42, b=44),
+        height=700,
         showlegend=False,
         title=dict(
-            text=f"Wall GEX · WR {win_rate:.0%} · ${total_pnl:,.0f} cumulative",
+            text=f"Wall GEX · WR {win_rate:.0%} · ${total_pnl:,.0f} · cyan=γ history · dots=Δγ",
             x=0.01,
-            y=0.98,
+            y=0.99,
             font=dict(size=11, color=_MUTED),
         ),
     )
@@ -671,18 +925,18 @@ def build_wall_strategy_chart(
         strike_axis = _strike_axis_layout([float(s) for s in window.index], spot_val, axis="y")
         fig.update_yaxes(**strike_axis, row=1, col=1)
     else:
-        fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.08)")
+        fig.update_yaxes(title_text="Strike", row=1, col=1, gridcolor="rgba(148,163,184,0.06)")
     fig.update_xaxes(
         title_text="Net gamma (Bn)",
         row=1,
         col=1,
         range=x_range,
-        gridcolor="rgba(148,163,184,0.08)",
+        gridcolor="rgba(148,163,184,0.06)",
         zeroline=True,
-        zerolinecolor="rgba(255,255,255,0.2)",
+        zerolinecolor="rgba(255,255,255,0.25)",
     )
-    fig.update_xaxes(title_text="Trade #", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
-    fig.update_yaxes(title_text="USD", row=2, col=1, gridcolor="rgba(148,163,184,0.08)")
+    fig.update_xaxes(title_text="Trade #", row=2, col=1, gridcolor="rgba(148,163,184,0.06)")
+    fig.update_yaxes(title_text="USD", row=2, col=1, gridcolor="rgba(148,163,184,0.06)")
     return fig
 
 
@@ -694,6 +948,8 @@ def build_wall_strategy_dashboard(
     snapshot: dict[str, Any] | None = None,
     window_pct: float = 0.01,
     max_strikes: int = 40,
+    exposure_trail: list[dict[str, Any]] | None = None,
+    previous_exposure: pd.Series | None = None,
 ) -> dict[str, Any]:
     state = build_wall_strategy_state(
         ticker=ticker,
@@ -708,6 +964,8 @@ def build_wall_strategy_dashboard(
         state=state,
         window_pct=window_pct,
         max_strikes=max_strikes,
+        exposure_trail=exposure_trail,
+        previous_exposure=previous_exposure,
     )
     return {
         "state": state,

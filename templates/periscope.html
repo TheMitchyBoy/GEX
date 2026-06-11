@@ -281,18 +281,42 @@
       .rule-pill.success { background: var(--green-soft); color: #86efac; border-color: rgba(34, 197, 94, 0.2); }
 
       /* Chart */
-      #strategyChart { min-height: 680px; width: 100%; }
+      #strategyChart { min-height: 700px; width: 100%; }
+      .strategy-map-panel .uw-panel-head {
+        background: linear-gradient(180deg, rgba(59, 130, 246, 0.08), transparent);
+      }
+      .strategy-map-panel .uw-panel-body {
+        padding: 0.15rem 0.35rem 0.4rem;
+        background: radial-gradient(ellipse at 50% 0%, rgba(103, 232, 249, 0.04), transparent 55%);
+      }
       .chart-legend {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.75rem;
-        padding: 0.35rem 1rem 0.65rem;
+        gap: 0.65rem 1rem;
+        padding: 0.55rem 1rem 0.75rem;
+        border-top: 1px solid var(--border);
         font-size: 0.68rem;
         color: var(--muted);
-        border-top: 1px solid var(--border);
       }
-      .legend-item { display: flex; align-items: center; gap: 0.35rem; }
-      .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+      .chart-legend .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .chart-legend .legend-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .chart-legend .legend-dot.ring {
+        border: 1.5px solid rgba(255,255,255,0.45);
+        background: transparent;
+      }
+      .chart-legend .legend-dot.trail {
+        background: #67e8f9;
+        opacity: 0.65;
+      }
 
       /* Time nav */
       .time-nav .form-control, .time-nav .form-select {
@@ -539,21 +563,28 @@
 
       <div class="row g-3 mb-3">
         <div class="col-lg-8">
-          <section class="uw-panel">
+          <section class="uw-panel strategy-map-panel">
             <div class="uw-panel-head">
-              <span>Strategy map</span>
-              <span class="small muted fw-normal">{% if wall_mode %}GEX · walls · spot · equity{% else %}GEX · spot · positions · equity{% endif %}</span>
+              <div>
+                <span>Strategy map</span>
+                <div class="small muted fw-normal mt-1">Current γ bars · cyan dots = last 4 slices · colored dots = Δγ</div>
+              </div>
+              <span class="chip" style="font-size:0.58rem;">±{{ '%.1f'|format(strike_window_pct * 100) }}% window</span>
             </div>
             <div class="uw-panel-body"><div id="strategyChart"></div></div>
             <div class="chart-legend">
-              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> +γ</span>
-              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> −γ</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> +γ now</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> −γ now</span>
+              <span class="legend-item"><span class="legend-dot trail"></span> γ history</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span><span class="legend-dot ring" style="margin-left:-0.55rem"></span> Δγ up</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> Δγ down</span>
+              <span class="legend-item"><span class="legend-dot" style="background:#c4b5fd"></span> Signal trail</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--amber)"></span> Spot</span>
               {% if wall_mode %}
               <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> Low wall</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> High wall</span>
               {% else %}
-              <span class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> Signals</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> Magnets</span>
               {% endif %}
             </div>
           </section>

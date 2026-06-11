@@ -357,6 +357,12 @@ def _strategy_exposure_from_context(ctx: dict) -> tuple[pd.Series | None, pd.Ser
     return exposure, previous
 
 
+def _exposure_trail_from_context(ctx: dict) -> list[dict[str, Any]]:
+    """Recent slice profiles for strategy-map γ history overlays."""
+    trail = ctx.get("exposure_trail")
+    return list(trail) if trail else []
+
+
 def _spx_redirect(**extra):
     args = request.args.to_dict(flat=True)
     args.update(extra)
@@ -478,6 +484,7 @@ def _render_periscope_dashboard(
     if gamma_flip is not None:
         selected = {**selected, "gamma_flip": gamma_flip}
     gex_series, prev_series = _strategy_exposure_from_context(ctx)
+    exposure_trail = _exposure_trail_from_context(ctx)
     spot = ctx.get("spot")
 
     prev_spot = None
@@ -501,6 +508,8 @@ def _render_periscope_dashboard(
             snapshot=selected,
             window_pct=strike_window_pct,
             max_strikes=max_strikes,
+            exposure_trail=exposure_trail,
+            previous_exposure=prev_series,
         )
     else:
         from gex_core.trading.strategy_viz import build_strategy_dashboard
@@ -515,6 +524,7 @@ def _render_periscope_dashboard(
             uw_bundle=uw_bundle,
             window_pct=strike_window_pct,
             max_strikes=max_strikes,
+            exposure_trail=exposure_trail,
         )
     strategy_chart_json = strategy["chart_json"]
     strategy_state = strategy["state"]
@@ -1007,6 +1017,7 @@ def api_trader_strategy():
                 break
     uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     exposure, previous_exposure = _strategy_exposure_from_context(ctx)
+    exposure_trail = _exposure_trail_from_context(ctx)
     window_pct = _dashboard_strike_window_pct()
     near_spot = _is_near_spot_window(window_pct)
     wall_mode = (request.args.get("strategy") or "").lower() == "wall" or near_spot
@@ -1021,6 +1032,8 @@ def api_trader_strategy():
             snapshot=ctx.get("selected"),
             window_pct=window_pct,
             max_strikes=max_strikes,
+            exposure_trail=exposure_trail,
+            previous_exposure=previous_exposure,
         )
     else:
         from gex_core.trading.strategy_viz import build_strategy_dashboard
@@ -1035,6 +1048,7 @@ def api_trader_strategy():
             uw_bundle=uw_bundle,
             window_pct=window_pct,
             max_strikes=max_strikes,
+            exposure_trail=exposure_trail,
         )
     return jsonify(payload)
 

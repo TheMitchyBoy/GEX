@@ -2,6 +2,7 @@ import pandas as pd
 
 from gex_core.trading.strategy_viz import (
     _chart_exposure_window,
+    _gamma_change_points,
     build_strategy_chart,
     build_strategy_dashboard,
     build_strategy_state,
@@ -120,6 +121,47 @@ def test_build_wall_strategy_state_finds_low_and_high_walls(monkeypatch):
     assert state["signals"]["available"]
     assert state["signals"]["recommended"]["signal_type"] == "min_gamma_strike"
     assert state["signals"]["max_gamma_strike"]["signal_type"] == "max_gamma_strike"
+
+
+def test_gamma_change_points_detects_largest_moves():
+    current = pd.Series([1.0, -0.5, 0.2], index=[7380.0, 7390.0, 7400.0])
+    trail = [
+        {
+            "label": "10:20",
+            "series": pd.Series([0.4, -0.5, 0.2], index=[7380.0, 7390.0, 7400.0]),
+            "age": 1,
+        }
+    ]
+    points = _gamma_change_points(current, trail, window_index=current.index, top_n=3)
+    assert points
+    top = max(points, key=lambda p: abs(p["delta"]))
+    assert top["strike"] == 7380.0
+    assert top["delta"] > 0.5
+
+
+def test_build_strategy_chart_includes_gamma_history_traces(monkeypatch):
+    monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: None)
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
+    cur = pd.Series([0.2, 1.5, 0.4], index=[7380.0, 7390.0, 7400.0])
+    prev = pd.Series([0.1, 0.5, 0.35], index=[7380.0, 7390.0, 7400.0])
+    state = build_strategy_state(
+        ticker="SPX",
+        spot=7385.0,
+        exposure=cur,
+        previous_exposure=prev,
+        snapshot={"regime": "LONG gamma"},
+        prev_spot=7380.0,
+    )
+    trail = [{"label": "prior", "series": prev, "age": 1, "spot": 7380.0}]
+    fig = build_strategy_chart(
+        spot=7385.0,
+        exposure=cur,
+        state=state,
+        exposure_trail=trail,
+        previous_exposure=prev,
+    )
+    scatter_traces = [t for t in fig.data if getattr(t, "mode", "") and "markers" in t.mode]
+    assert len(scatter_traces) >= 2
 
 
 def test_build_wall_strategy_dashboard_returns_chart(monkeypatch):

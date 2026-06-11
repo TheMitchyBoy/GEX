@@ -585,6 +585,46 @@ def build_periscope_context(
 
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
 
+    exposure_trail: list[dict[str, Any]] = []
+    if resolved_ts and resolved_ts in timestamps:
+        trail_idx = timestamps.index(resolved_ts)
+        for back in range(1, 5):
+            prior_idx = trail_idx - back
+            if prior_idx < 0:
+                break
+            trail_ts = timestamps[prior_idx]
+            trail_snap = load_periscope_snapshot(
+                ticker,
+                trail_ts,
+                api_key=api_key,
+                market_date=ts_market_date(trail_ts),
+            )
+            if not trail_snap:
+                continue
+            trail_spot = safe_float(trail_snap.get("spot"), 0.0)
+            trail_strike = trail_snap.get("strike")
+            trail_spot_df = trail_snap.get("spot_exposures_df")
+            trail_greek_df = trail_snap.get("greek_exposure_df")
+            trail_series = _exposure_series(
+                trail_spot_df if isinstance(trail_spot_df, pd.DataFrame) else None,
+                trail_greek_df if isinstance(trail_greek_df, pd.DataFrame) else None,
+                trail_strike if isinstance(trail_strike, pd.Series) else None,
+                exposure,
+                spot=trail_spot or None,
+            )
+            if trail_series.empty:
+                continue
+            exposure_trail.append(
+                {
+                    "ts": trail_ts,
+                    "label": trail_snap.get("ts_label") or ts_market_time_label(trail_ts),
+                    "spot": trail_spot,
+                    "series": trail_series.sort_index(),
+                    "age": back,
+                }
+            )
+        exposure_trail.reverse()
+
     return {
         "ticker": ticker,
         "exposure": exposure,
@@ -607,6 +647,7 @@ def build_periscope_context(
         "exposure_series": current_exposure,
         "magnet_exposure_series": magnet_exposure.sort_index(),
         "previous_exposure": previous_exposure,
+        "exposure_trail": exposure_trail,
         "previous_magnet_exposure": previous_magnet_exposure.sort_index()
         if isinstance(previous_magnet_exposure, pd.Series) and not previous_magnet_exposure.empty
         else previous_exposure,
