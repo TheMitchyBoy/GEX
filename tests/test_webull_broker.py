@@ -16,6 +16,7 @@ from gex_core.trading.webull_broker import (
     limit_price_for_buy,
     note_webull_error,
     parse_total_account_value,
+    reconnect_webull_auth,
     reset_webull_clients,
     webull_auth_status,
     webull_api_paused,
@@ -157,6 +158,42 @@ def test_webull_auth_status_invalid_token_banner(tmp_path, monkeypatch):
     assert auth["invalid_token"] is True
     assert auth["show_banner"] is True
     assert "401" in auth["headline"]
+
+
+def test_webull_auth_status_invalid_token_pauses_api(monkeypatch):
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    note_webull_error("HTTP Status: 401, Code: INVALID_TOKEN")
+
+    auth = webull_auth_status()
+    assert auth["invalid_token"] is True
+    assert auth["pause_api"] is True
+    assert webull_api_paused() is True
+
+
+def test_reconnect_webull_auth_clears_error_state(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    reset_webull_clients()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("abc123\n1700000000\nNORMAL\n", encoding="utf-8")
+    note_webull_error("HTTP Status: 401, Code: INVALID_TOKEN")
+
+    monkeypatch.setattr(
+        "gex_core.trading.webull_broker.fetch_account_balance",
+        lambda **kwargs: {"code": 0, "data": {"total_net_liquidation_value": "1000"}},
+    )
+
+    result = reconnect_webull_auth()
+    assert result["ok"] is True
+    assert webull_auth_status()["show_banner"] is False
 
 
 def test_webull_auth_status_rate_limit_banner(monkeypatch):

@@ -148,9 +148,35 @@
           return;
         }
         el.className = 'auth-banner show';
+        const retry = auth.can_reconnect
+          ? '<button type="button" id="btn-webull-reconnect" style="margin-top:0.6rem;border:1px solid rgba(251,191,36,0.45);background:transparent;color:#fde68a;border-radius:8px;padding:0.35rem 0.65rem;font-size:0.72rem;font-weight:600;cursor:pointer;">Retry connection</button>'
+          : '';
         el.innerHTML =
           `<strong>${auth.headline || 'Webull API issue'}</strong>` +
-          `<div>${auth.message || ''}</div>`;
+          `<div>${auth.message || ''}</div>` +
+          retry;
+        const btn = document.getElementById('btn-webull-reconnect');
+        if (btn) {
+          btn.onclick = async () => {
+            try {
+              const res = await fetch('/api/webull/auth/reconnect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ probe: true }),
+              });
+              const data = await readJson(res);
+              renderAuthBanner(data.webull_auth || {});
+              if (data.ok) {
+                setMsg('Webull reconnect OK', 'ok');
+                await refresh();
+              } else {
+                setMsg(data.error || data.reason || 'Reconnect failed', 'err');
+              }
+            } catch (e) {
+              setMsg(e.message, 'err');
+            }
+          };
+        }
       }
 
       function renderStatus(payload) {

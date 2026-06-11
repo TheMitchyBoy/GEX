@@ -41,6 +41,7 @@ _EQUITY_CACHE: dict[str, tuple[float, float]] = {}
 _QUOTE_CACHE: dict[str, tuple[float, dict[str, float | str | None]]] = {}
 _LAST_WEBULL_ERROR: dict[str, Any] = {}
 _RATE_LIMIT_COOLDOWN_SEC = 45
+_INVALID_TOKEN_COOLDOWN_SEC = 30
 
 
 def clear_webull_equity_cache() -> None:
@@ -66,6 +67,12 @@ def reset_webull_clients() -> None:
     _data_client = None
 
 
+def _token_dir() -> Path:
+    env_dir = os.environ.get("WEBULL_OPENAPI_TOKEN_DIR", "").strip()
+    base = Path(env_dir).expanduser() if env_dir else Path("conf")
+    return base.resolve()
+
+
 def invalidate_local_webull_token() -> bool:
     """Remove a stale on-disk token so Webull can issue a fresh one."""
     path = _token_file_path()
@@ -80,9 +87,7 @@ def invalidate_local_webull_token() -> bool:
 
 
 def _token_file_path() -> Path:
-    env_dir = os.environ.get("WEBULL_OPENAPI_TOKEN_DIR", "").strip()
-    base = Path(env_dir).expanduser() if env_dir else Path("conf")
-    return base.resolve() / "token.txt"
+    return _token_dir() / "token.txt"
 
 
 def _is_rate_limited_message(message: str) -> bool:
@@ -94,10 +99,18 @@ def _is_invalid_token_message(message: str) -> bool:
     upper = message.upper()
     return (
         "INVALID_TOKEN" in upper
+        or "ERROR_INIT_TOKEN" in upper
+        or "ERROR_CREATE_TOKEN" in upper
         or ("HTTP STATUS: 401" in upper and "UNAUTHORIZED" in upper)
+        or ("CODE: 401" in upper and "INVALID" in upper)
         or ("CODE: INVALID_TOKEN" in upper)
         or ("PERMISSION DENIED" in upper and "401" in upper)
     )
+
+
+def _is_invalid_token_code(code: str) -> bool:
+    normalized = code.strip().upper()
+    return normalized in {"401", "INVALID_TOKEN", "ERROR_INIT_TOKEN", "ERROR_CREATE_TOKEN"}
 
 
 def _classify_webull_error(exc: Exception | str | dict[str, Any]) -> dict[str, Any]:
@@ -122,7 +135,7 @@ def _classify_webull_error(exc: Exception | str | dict[str, Any]) -> dict[str, A
     return {
         "message": message,
         "rate_limited": _is_rate_limited_message(message),
-        "invalid_token": _is_invalid_token_message(message) or code == "INVALID_TOKEN",
+        "invalid_token": _is_invalid_token_message(message) or _is_invalid_token_code(code),
     }
 
 
@@ -135,8 +148,29 @@ def note_webull_error(exc: Exception | str | dict[str, Any]) -> None:
     _LAST_WEBULL_ERROR.update({"at": time.monotonic(), **flags})
 
 
+def reconnect_webull_auth(*, probe: bool = True) -> dict[str, Any]:
+    """Clear cached auth state and request a fresh SDK token handshake."""
+    clear_webull_error_state()
+    invalidate_local_webull_token()
+    reset_webull_clients()
+    clear_webull_quote_cache()
+    if not webull_configured():
+        return {"ok": False, "reason": "Webull credentials not configured", "webull_auth": webull_auth_status()}
+    if not live_trading_allowed():
+        return {"ok": True, "reason": "paper_mode", "webull_auth": webull_auth_status()}
+    if not probe:
+        return {"ok": True, "webull_auth": webull_auth_status()}
+    try:
+        fetch_account_balance()
+        return {"ok": True, "webull_auth": webull_auth_status()}
+    except Exception as exc:
+        note_webull_error(exc)
+        auth = webull_auth_status()
+        return {"ok": False, "error": _format_webull_error(exc), "webull_auth": auth}
+
+
 def webull_api_paused() -> bool:
-    """Skip live Webull calls while we are in a 429 cooldown."""
+    """Skip live Webull calls during 429 or post-401 cooldown windows."""
     return bool(webull_auth_status().get("pause_api"))
 
 
@@ -156,6 +190,11 @@ def webull_auth_status() -> dict[str, Any]:
         and recent_age < _RATE_LIMIT_COOLDOWN_SEC
     )
     invalid_token = bool(recent.get("invalid_token")) and recent_active
+    invalid_token_cooldown = (
+        bool(recent.get("invalid_token"))
+        and recent_age is not None
+        and recent_age < _INVALID_TOKEN_COOLDOWN_SEC
+    )
 
     if webull_use_uat():
         return {
@@ -168,9 +207,11 @@ def webull_auth_status() -> dict[str, Any]:
     if invalid_token:
         headline = "Webull token rejected (401)"
         detail = (
-            "Webull returned INVALID_TOKEN / permission denied. Any stale token file was cleared. "
-            "Disarm, wait ~30 seconds, confirm GEX_WEBULL_APP_KEY, GEX_WEBULL_APP_SECRET, and "
-            "GEX_WEBULL_ACCOUNT_ID match your production OpenAPI app, then retry."
+            "Webull returned INVALID_TOKEN / permission denied. The stale token file was cleared. "
+            "Confirm GEX_WEBULL_APP_KEY, GEX_WEBULL_APP_SECRET, and GEX_WEBULL_ACCOUNT_ID match "
+            "your approved production OpenAPI app (set GEX_WEBULL_USE_UAT=1 only for sandbox). "
+            "On first setup, approve the verification prompt in the Webull mobile app, disarm the "
+            "trader, wait ~30 seconds, then use Retry connection."
         )
     elif rate_limited:
         headline = "Webull rate limit (429)"
@@ -186,9 +227,10 @@ def webull_auth_status() -> dict[str, Any]:
     return {
         "required": True,
         "show_banner": show_banner,
-        "pause_api": rate_limited,
+        "pause_api": rate_limited or invalid_token_cooldown,
         "invalid_token": invalid_token,
         "rate_limited": rate_limited,
+        "can_reconnect": invalid_token,
         "headline": headline,
         "message": detail,
         "last_error": recent.get("message") if recent_active else None,
@@ -318,6 +360,7 @@ def _ensure_client():
     region = webull_region()
     try:
         _client = ApiClient(key, secret, region)
+        _client.set_token_dir(str(_token_dir()))
         _configure_api_client(_client, region=region)
         _trade_client = TradeClient(_client)
     except Exception as exc:

@@ -971,6 +971,19 @@ def api_webull_status():
     return jsonify(dashboard_state(signal_ticker_arg=ticker))
 
 
+@APP.post("/api/webull/auth/reconnect")
+def api_webull_auth_reconnect():
+    """Force a fresh Webull token handshake after 401 INVALID_TOKEN."""
+    from gex_core.trading.webull_broker import reconnect_webull_auth
+
+    if not _admin_action_authorized(request) and os.environ.get("GEX_ADMIN_TOKEN"):
+        return jsonify({"error": "Admin token required for Webull reconnect"}), 403
+    probe = request.get_json(silent=True) or {}
+    result = reconnect_webull_auth(probe=bool(probe.get("probe", True)))
+    status = 200 if result.get("ok") else 400
+    return jsonify(result), status
+
+
 def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
     """Gamma strategy state + execution-mapped contract for the trade desk."""
     from gex_core.trading.strategy_viz import build_strategy_state
