@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pandas as pd
 import pytest
 
@@ -165,6 +167,44 @@ def test_backtest_account_cash_matches_trade_pnl(monkeypatch):
     trade_pnl = sum(t["pnl_usd"] for t in result["trades"])
     expected_cash = 500.0 + trade_pnl
     assert abs(account["ending_capital"] - expected_cash) < 0.05
+
+
+def test_backtest_uses_uw_option_marks_when_enabled(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_UW_OPTION_MARKS", "1")
+    monkeypatch.setenv("UW_API_KEY", "test-key")
+    monkeypatch.setenv("GEX_SIGNAL_TICKER", "SPX")
+    monkeypatch.setenv("GEX_EXECUTION_TICKER", "SPY")
+
+    class FakeMarks:
+        def __init__(self):
+            self.fallbacks = 0
+
+        def mid_at(self, *, ts, strike, option_type):
+            if ts < "2026-06-01_102000":
+                return 2.0
+            return 3.0
+
+        def stats(self):
+            return {"hits": 2, "misses": 0, "fallbacks": 0}
+
+    fake = FakeMarks()
+    history = [
+        _snapshot("2026-06-01_100000", 5000.0, {4990: 0.2, 5000: 0.4, 5010: 2.0}),
+        _snapshot("2026-06-01_101000", 5005.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+        _snapshot("2026-06-01_102000", 5000.0, {4990: 0.2, 5000: 0.5, 5010: 2.2}),
+    ]
+    with patch("gex_core.trading.backtest.create_uw_mark_provider_if_enabled", return_value=fake):
+        result = backtest_auto_trader(
+            "SPX",
+            history=history,
+            stop_loss=0.50,
+            take_profit=0.50,
+            max_open=1,
+        )
+    assert result["total_trades"] >= 1
+    trade = result["trades"][0]
+    assert trade["pnl_pct"] == 0.5
+    assert result["uw_option_marks"]["enabled"] is True
 
 
 def test_backtest_account_starting_capital(monkeypatch):

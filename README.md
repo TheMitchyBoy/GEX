@@ -192,6 +192,8 @@ python scripts/backtest_auto_trader.py --lookback-days 14 --starting-capital 500
 python scripts/backtest_improvement_sweep.py --lookback-days 14
 ```
 
+**Option marks (backtest):** By default PnL uses a synthetic leverage model (`GEX_TRADER_OPTION_LEVERAGE`). Set `GEX_TRADER_UW_OPTION_MARKS=1` with `UW_API_KEY` to mark SPY 0DTE entries/exits from UW intraday contract bars (`/api/option-contract/{symbol}/intraday`). Marks are cached under `data/uw_option_cache/`. Missing quotes fall back to the synthetic model.
+
 ### 1. Export data-quality filters
 
 Applied in `gex_core.data_quality.clean_option_data()` when building each snapshot. These shape the strike distribution that all downstream gamma signals use — they are **not** the same as trader entry filters.
