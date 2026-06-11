@@ -10,6 +10,8 @@ from gex_core.trading.webull_broker import (
     build_option_order,
     clear_webull_equity_cache,
     clear_webull_error_state,
+    clear_webull_quote_cache,
+    fetch_option_quote,
     fetch_total_account_value,
     limit_price_for_buy,
     note_webull_error,
@@ -182,6 +184,100 @@ def test_webull_auth_status_ok_without_sms(monkeypatch):
     assert auth["show_banner"] is False
     assert auth["pause_api"] is False
     assert webull_api_paused() is False
+
+
+def test_fetch_option_quote_uses_cache(monkeypatch):
+    clear_webull_quote_cache()
+    clear_webull_error_state()
+    calls = {"n": 0}
+
+    def _fake_snapshot(*_a, **_k):
+        calls["n"] += 1
+        return {"code": 0, "data": {"bid": 1.0, "ask": 1.2, "last": 1.1}}
+
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setattr(
+        "gex_core.trading.webull_broker._ensure_data_client",
+        lambda: type(
+            "D",
+            (),
+            {
+                "option_market_data": type(
+                    "M",
+                    (),
+                    {"get_option_snapshot": lambda *_a, **_k: _fake_snapshot()},
+                )()
+            },
+        )(),
+    )
+
+    first = fetch_option_quote(
+        underlying="SPY",
+        option_type="call",
+        strike=590.0,
+        expire_date="2026-06-06",
+    )
+    second = fetch_option_quote(
+        underlying="SPY",
+        option_type="call",
+        strike=590.0,
+        expire_date="2026-06-06",
+    )
+    assert first["bid"] == 1.0
+    assert second["bid"] == 1.0
+    assert calls["n"] == 1
+
+
+def test_fetch_option_quote_rate_limit_uses_stale_cache(monkeypatch):
+    clear_webull_quote_cache()
+    clear_webull_error_state()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+
+    state = {"mode": "ok"}
+
+    def _fake_snapshot(*_a, **_k):
+        if state["mode"] == "ok":
+            return {"code": 0, "data": {"bid": 2.0, "ask": 2.2, "last": 2.1}}
+        return {"code": 429, "msg": "TOO_MANY_REQUESTS"}
+
+    monkeypatch.setattr(
+        "gex_core.trading.webull_broker._ensure_data_client",
+        lambda: type(
+            "D",
+            (),
+            {
+                "option_market_data": type(
+                    "M",
+                    (),
+                    {"get_option_snapshot": lambda *_a, **_k: _fake_snapshot()},
+                )()
+            },
+        )(),
+    )
+
+    first = fetch_option_quote(
+        underlying="SPY",
+        option_type="call",
+        strike=590.0,
+        expire_date="2026-06-06",
+        force_refresh=True,
+    )
+    state["mode"] = "rate_limited"
+    second = fetch_option_quote(
+        underlying="SPY",
+        option_type="call",
+        strike=590.0,
+        expire_date="2026-06-06",
+        force_refresh=True,
+    )
+    assert first["bid"] == 2.0
+    assert second["bid"] == 2.0
+    assert webull_auth_status()["rate_limited"] is True
 
 
 def test_webull_trade_endpoint_migrates_deprecated_host(monkeypatch):

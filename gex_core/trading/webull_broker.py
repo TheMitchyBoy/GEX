@@ -21,6 +21,7 @@ from gex_core.trading.config import (
     webull_fill_timeout_sec,
     webull_limit_buffer_pct,
     webull_option_category,
+    webull_quote_cache_seconds,
     webull_region,
     webull_trade_endpoint,
     webull_use_uat,
@@ -37,6 +38,7 @@ _data_client = None
 _FILLED = frozenset({"FILLED", "PARTIAL FILLED", "PARTIAL_FILLED", 4, 5, "4", "5"})
 _TERMINAL_BAD = frozenset({"CANCELLED", "FAILED", "REJECTED", 2, 3, "2", "3"})
 _EQUITY_CACHE: dict[str, tuple[float, float]] = {}
+_QUOTE_CACHE: dict[str, tuple[float, dict[str, float | str | None]]] = {}
 _LAST_WEBULL_ERROR: dict[str, Any] = {}
 _RATE_LIMIT_COOLDOWN_SEC = 45
 
@@ -44,6 +46,11 @@ _RATE_LIMIT_COOLDOWN_SEC = 45
 def clear_webull_equity_cache() -> None:
     """Drop cached Webull net-liquidation values (for tests)."""
     _EQUITY_CACHE.clear()
+
+
+def clear_webull_quote_cache() -> None:
+    """Drop cached option NBBO snapshots (for tests)."""
+    _QUOTE_CACHE.clear()
 
 
 def clear_webull_error_state() -> None:
@@ -167,7 +174,11 @@ def webull_auth_status() -> dict[str, Any]:
         )
     elif rate_limited:
         headline = "Webull rate limit (429)"
-        detail = "Disarm the trader and wait about 30 seconds before retrying."
+        detail = (
+            "Webull is throttling API calls. Quote refresh is slowed automatically; "
+            "wait about 45 seconds before placing orders. Reduce poll frequency or "
+            "raise GEX_WEBULL_QUOTE_CACHE_SEC if this persists."
+        )
     else:
         headline = ""
         detail = ""
@@ -427,25 +438,61 @@ def _extract_quote(snapshot: dict[str, Any]) -> dict[str, float | None]:
     return {"ask": ask, "bid": bid, "last": last}
 
 
+def _empty_option_quote(symbol: str) -> dict[str, float | str | None]:
+    return {"ask": None, "bid": None, "last": None, "symbol": symbol}
+
+
+def _cached_option_quote(symbol: str, *, allow_stale: bool = False) -> dict[str, float | str | None] | None:
+    cached = _QUOTE_CACHE.get(symbol)
+    if not cached:
+        return None
+    age = time.monotonic() - cached[0]
+    if age <= webull_quote_cache_seconds() or (allow_stale and age <= webull_quote_cache_seconds() * 4):
+        return dict(cached[1])
+    return None
+
+
+def _store_option_quote(symbol: str, quote: dict[str, float | str | None]) -> dict[str, float | str | None]:
+    stored = dict(quote)
+    stored["symbol"] = symbol
+    _QUOTE_CACHE[symbol] = (time.monotonic(), stored)
+    return stored
+
+
 def fetch_option_quote(
     *,
     underlying: str,
     option_type: str,
     strike: float,
     expire_date: str,
-) -> dict[str, float | None]:
-    """Fetch bid/ask/last for a single option contract."""
+    force_refresh: bool = False,
+) -> dict[str, float | str | None]:
+    """Fetch bid/ask/last for a single option contract (cached per symbol)."""
     symbol = build_webull_option_symbol(
         underlying=underlying,
         expire_date=expire_date,
         option_type=option_type,
         strike=strike,
     )
+    if not force_refresh:
+        cached = _cached_option_quote(symbol)
+        if cached is not None:
+            return cached
+    if webull_api_paused():
+        stale = _cached_option_quote(symbol, allow_stale=True)
+        return stale if stale is not None else _empty_option_quote(symbol)
+
     try:
         data = _ensure_data_client()
         resp = _response_body(
             data.option_market_data.get_option_snapshot(symbol, webull_option_category())
         )
+        if not _is_ok(resp):
+            note_webull_error(resp)
+            stale = _cached_option_quote(symbol, allow_stale=True)
+            if stale is not None:
+                return stale
+            return _empty_option_quote(symbol)
         payload = _unwrap_data(resp)
         rows: list[Any]
         if isinstance(payload, list):
@@ -462,15 +509,18 @@ def fetch_option_quote(
                 continue
             quote = _extract_quote(row)
             if any(quote.values()):
-                quote["symbol"] = symbol
-                return quote
+                return _store_option_quote(symbol, quote)
         if isinstance(payload, dict) and payload:
             quote = _extract_quote(payload)
-            quote["symbol"] = symbol
-            return quote
+            if any(quote.values()):
+                return _store_option_quote(symbol, quote)
     except Exception as exc:
+        note_webull_error(exc)
         logger.debug("Webull option quote failed for %s: %s", symbol, exc)
-    return {"ask": None, "bid": None, "last": None, "symbol": symbol}
+        stale = _cached_option_quote(symbol, allow_stale=True)
+        if stale is not None:
+            return stale
+    return _empty_option_quote(symbol)
 
 
 def limit_price_for_buy(

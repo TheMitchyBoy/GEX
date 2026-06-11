@@ -544,6 +544,22 @@ def webull_equity_cache_seconds() -> float:
         return 60.0
 
 
+def webull_quote_cache_seconds() -> float:
+    """TTL for option NBBO snapshots — reduces duplicate calls per quote refresh."""
+    try:
+        return max(0.5, float(os.environ.get("GEX_WEBULL_QUOTE_CACHE_SEC", "3")))
+    except (TypeError, ValueError):
+        return 3.0
+
+
+def webull_position_cache_seconds() -> float:
+    """TTL for broker open-position snapshots on the trade desk."""
+    try:
+        return max(5.0, float(os.environ.get("GEX_WEBULL_POSITION_CACHE_SEC", "30")))
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def min_zero_dte_ratio() -> float:
     try:
         return max(0.0, float(os.environ.get("GEX_TRADER_MIN_ZERO_DTE_RATIO", "0")))

@@ -57,6 +57,11 @@
         </div>
       </div>
 
+      <div id="webull-auth-banner" class="alert alert-warning py-2 px-3 small mb-3 d-none" role="alert">
+        <strong id="webull-auth-headline"></strong>
+        <span id="webull-auth-detail" class="d-block mt-1"></span>
+      </div>
+
       <div class="row g-3 mb-3" id="kpi-row">
         <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">SPY spot</div><div class="val mono" id="kpi-spot">—</div></div></div>
         <div class="col-6 col-md-2"><div class="kpi"><div class="muted small">Account</div><div class="val mono" id="kpi-equity">—</div></div></div>
@@ -115,7 +120,7 @@
                 </div>
               </div>
               <button class="btn btn-sm btn-outline-accent w-100 mb-2" id="btn-refresh-quote">Refresh quote</button>
-              <div class="small muted mb-1">Auto-refresh every <span id="poll-sec">3</span>s</div>
+              <div class="small muted mb-1">Auto-refresh every <span id="poll-sec">5</span>s</div>
             </div>
           </div>
 
@@ -184,7 +189,10 @@
       let executionSpot = null;
       let selectedTradeId = null;
       let lastStrategyTrade = null;
-      let pollMs = 3000;
+      let pollMs = 5000;
+      const POLL_MS_NORMAL = 5000;
+      const POLL_MS_ACTIVE = 3000;
+      const POLL_MS_RATE_LIMITED = 15000;
 
       function log(msg) {
         const el = document.getElementById('log');
@@ -276,9 +284,37 @@
         }
       }
 
+      function applyWebullAuth(auth) {
+        const banner = document.getElementById('webull-auth-banner');
+        if (!auth || !auth.show_banner) {
+          banner.classList.add('d-none');
+          return false;
+        }
+        document.getElementById('webull-auth-headline').textContent = auth.headline || 'Webull API issue';
+        document.getElementById('webull-auth-detail').textContent = auth.message || '';
+        banner.classList.remove('d-none');
+        return !!(auth.pause_api || auth.rate_limited);
+      }
+
+      function updatePollInterval({ rateLimited, activeExit }) {
+        let next = POLL_MS_NORMAL;
+        if (rateLimited) next = POLL_MS_RATE_LIMITED;
+        else if (activeExit) next = POLL_MS_ACTIVE;
+        if (next !== pollMs) {
+          pollMs = next;
+          schedulePoll();
+        }
+        document.getElementById('poll-sec').textContent = (pollMs / 1000).toFixed(1);
+      }
+
       async function refreshStatus() {
         const r = await fetch('/api/webull/status?ticker=' + encodeURIComponent(TICKER));
         const s = await r.json();
+        const rateLimited = applyWebullAuth(s.webull_auth);
+        updatePollInterval({
+          rateLimited,
+          activeExit: document.getElementById('entry-premium').value && pollMs !== POLL_MS_RATE_LIMITED,
+        });
         executionSpot = s.execution_spot || null;
         document.getElementById('kpi-spot').textContent = executionSpot ? Number(executionSpot).toFixed(2) : '—';
         document.getElementById('kpi-equity').textContent = fmtUsd(s.account_equity);
@@ -367,9 +403,11 @@
         const entry = document.getElementById('entry-premium').value;
         if (entry) params.set('entry_premium', entry);
         if (peakPremium) params.set('peak_premium', peakPremium);
+        params.set('strategy', '0');
         const r = await fetch('/api/webull/quote?' + params);
         const q = await r.json();
         if (q.error) { log('Quote error: ' + q.error); return; }
+        const rateLimited = applyWebullAuth(q.webull_auth);
         const qq = q.quote || {};
         document.getElementById('kpi-nbbo').textContent = fmtPx(qq.bid) + ' / ' + fmtPx(qq.ask);
         document.getElementById('kpi-spread').textContent = qq.spread_pct != null ? (qq.spread_pct * 100).toFixed(1) + '%' : '—';
@@ -383,9 +421,10 @@
           pnlEl.textContent = '—';
           pnlEl.style.color = '';
         }
-        const nextPoll = (q.exit_conditions?.action === 'sell' || document.getElementById('entry-premium').value) ? 1500 : 3000;
-        if (nextPoll !== pollMs) { pollMs = nextPoll; schedulePoll(); }
-        document.getElementById('poll-sec').textContent = (pollMs / 1000).toFixed(1);
+        updatePollInterval({
+          rateLimited,
+          activeExit: !rateLimited && (q.exit_conditions?.action === 'sell' || !!document.getElementById('entry-premium').value),
+        });
         if (qq.mid) {
           peakPremium = peakPremium == null ? qq.mid : Math.max(peakPremium, qq.mid);
         }

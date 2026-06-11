@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -29,12 +30,14 @@ from gex_core.trading.webull_broker import (
     WebullBroker,
     fetch_option_quote,
     fetch_total_account_value,
-    limit_price_for_buy,
+    webull_auth_status,
 )
 
 logger = logging.getLogger(__name__)
 
 PriceStyle = Literal["passive", "mid", "smart", "aggressive"]
+
+_POSITION_CACHE: tuple[float, list[dict[str, Any]]] | None = None
 
 
 @dataclass(frozen=True)
@@ -361,10 +364,29 @@ def price_ladder(analysis: QuoteAnalysis, *, entry_premium: float | None = None)
     }
 
 
-def fetch_broker_option_positions() -> list[dict[str, Any]]:
+def clear_broker_position_cache() -> None:
+    """Drop cached broker positions (for tests)."""
+    global _POSITION_CACHE
+    _POSITION_CACHE = None
+
+
+def fetch_broker_option_positions(*, force_refresh: bool = False) -> list[dict[str, Any]]:
     """Best-effort open option positions from Webull account API."""
+    global _POSITION_CACHE
     if not webull_configured():
         return []
+    from gex_core.trading.config import webull_position_cache_seconds
+    from gex_core.trading.webull_broker import webull_api_paused
+
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _POSITION_CACHE is not None
+        and (now - _POSITION_CACHE[0]) < webull_position_cache_seconds()
+    ):
+        return list(_POSITION_CACHE[1])
+    if webull_api_paused() and _POSITION_CACHE is not None:
+        return list(_POSITION_CACHE[1])
     try:
         from gex_core.trading.webull_broker import _ensure_client, _response_body, webull_account_id
 
@@ -403,9 +425,12 @@ def fetch_broker_option_positions() -> list[dict[str, Any]]:
                     "unrealized_pnl": float(pos.get("unrealized_profit_loss") or pos.get("unrealized_pnl") or 0),
                 }
             )
-        return out
+        _POSITION_CACHE = (time.monotonic(), out)
+        return list(out)
     except Exception as exc:
         logger.warning("Webull positions fetch failed: %s", exc)
+        if _POSITION_CACHE is not None:
+            return list(_POSITION_CACHE[1])
         return []
 
 
@@ -602,22 +627,18 @@ def quote_payload(
             peak_premium=peak_premium,
         ),
         "prices": price_ladder(analysis, entry_premium=entry_premium),
-        "limit_price_for_buy": limit_price_for_buy(
-            spot_val or 0.0,
-            strike,
-            side="buy",
-            underlying=underlying,
-            option_type=option_type,
-            expire_date=expire_date,
+        "limit_price_for_buy": entry_limit_price(
+            analysis,
+            style="smart",
+            spot=spot_val or 0.0,
+            strike=strike,
         ),
-        "limit_price_for_sell": limit_price_for_buy(
-            spot_val or 0.0,
-            strike,
-            side="sell",
-            underlying=underlying,
-            option_type=option_type,
-            expire_date=expire_date,
+        "limit_price_for_sell": exit_limit_price(
+            analysis,
+            style="smart",
+            entry_premium=entry_premium,
         ),
+        "webull_auth": webull_auth_status(),
     }
 
 
@@ -649,6 +670,7 @@ def dashboard_state(*, signal_ticker_arg: str | None = None) -> dict[str, Any]:
         "webull_configured": webull_configured(),
         "live_trading_allowed": live,
         "paper_mode": paper,
+        "webull_auth": webull_auth_status(),
         "account_equity": equity,
         "execution_spot": exec_spot,
         "signal_spot": signal_spot,
