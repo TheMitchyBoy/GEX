@@ -65,9 +65,9 @@ def paper_trading_only() -> bool:
 
 def stop_loss_pct() -> float:
     try:
-        return max(0.01, float(os.environ.get("GEX_TRADER_STOP_LOSS_PCT", "0.20")))
+        return max(0.01, float(os.environ.get("GEX_TRADER_STOP_LOSS_PCT", "0.03")))
     except (TypeError, ValueError):
-        return 0.20
+        return 0.03
 
 
 def far_otm_stop_loss_pct() -> float:
@@ -86,9 +86,9 @@ def far_otm_distance_pct() -> float:
 
 def take_profit_pct() -> float:
     try:
-        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.60")))
+        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.22")))
     except (TypeError, ValueError):
-        return 0.60
+        return 0.22
 
 
 def partial_take_profit_pct() -> float:
