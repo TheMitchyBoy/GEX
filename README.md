@@ -280,9 +280,9 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 
 | Priority | Exit | Env | Default | Condition |
 |----------|------|-----|---------|-----------|
-| 1 | Stop loss | `GEX_TRADER_STOP_LOSS_PCT` | `20%` | PnL ≤ −stop; far-OTM uses `GEX_TRADER_FAR_OTM_STOP_PCT` (`3%`) beyond `FAR_OTM_DISTANCE_PCT` |
+| 1 | Stop loss | `GEX_TRADER_STOP_LOSS_PCT` | `3%` | PnL ≤ −stop; far-OTM uses `GEX_TRADER_FAR_OTM_STOP_PCT` (`3%`) beyond `FAR_OTM_DISTANCE_PCT` |
 | 2 | Magnet touch | `GEX_TRADER_MAGNET_TOUCH_EXIT` | off | Opt-in; spot at magnet with min PnL (let `TAKE_PROFIT` run by default) |
-| 3 | Take profit | `GEX_TRADER_TAKE_PROFIT_PCT` | `60%` | Full target; optional `GEX_TRADER_DYNAMIC_TP` scales down from IV |
+| 3 | Take profit | `GEX_TRADER_TAKE_PROFIT_PCT` | `22%` | Full target; optional `GEX_TRADER_DYNAMIC_TP` scales down from IV |
 | 4 | Magnet partial | `GEX_TRADER_MAGNET_PARTIAL_EXIT` | off | Exit fraction at `GEX_TRADER_MAGNET_PARTIAL_PROGRESS` (default 80%) toward magnet |
 | 5 | Partial TP | `GEX_TRADER_PARTIAL_TP_PCT` | `8%` | Only when `hold_for_target=False` (non-strong profiles) |
 | 6 | Trailing stop | `GEX_TRADER_TRAIL_TRIGGER_PCT` / `TRAIL_FLOOR_PCT` | `10%` / `5%` | After peak PnL hits trigger, exit at floor |

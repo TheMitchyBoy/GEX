@@ -620,8 +620,8 @@
               {% if strategy_state.exit_profile and strategy_state.exit_profile.hold_for_target %}<span class="chip pass" style="font-size:0.58rem">Runner</span>{% endif %}
             </h3>
             <div class="rule-grid">
-              <span class="rule-pill danger">Stop −{{ '%.0f'|format((strategy_state.rules.stop_loss_pct or 0.05) * 100) }}%</span>
-              <span class="rule-pill success">Target +{{ '%.0f'|format((strategy_state.rules.take_profit_pct or 0.35) * 100) }}%</span>
+              <span class="rule-pill danger">Stop −{{ '%.0f'|format((strategy_state.rules.stop_loss_pct or 0.03) * 100) }}%</span>
+              <span class="rule-pill success">Target +{{ '%.0f'|format((strategy_state.rules.take_profit_pct or 0.22) * 100) }}%</span>
               <span class="rule-pill">Partial +{{ '%.0f'|format((strategy_state.rules.partial_take_profit_pct or 0.15) * 100) }}%</span>
               <span class="rule-pill">Trail +{{ '%.0f'|format((strategy_state.rules.trail_trigger_pct or 0.10) * 100) }}/+{{ '%.0f'|format((strategy_state.rules.trail_floor_pct or 0.05) * 100) }}%</span>
               <span class="rule-pill">Max dist {{ '%.1f'|format((strategy_state.rules.max_strike_distance_pct or 0.01) * 100) }}%</span>
