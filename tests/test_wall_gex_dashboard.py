@@ -49,6 +49,24 @@ def test_api_wall_gex_status():
     assert payload["status"]["take_profit_pct"] == 0.22
 
 
+def test_get_uw_data_with_timeout_returns_cached_without_http(monkeypatch):
+    import time
+
+    import web_app
+
+    web_app._UW_CACHE.clear()
+    web_app._UW_CACHE["SPX"] = {
+        "spot": 6000.0,
+        "ts": time.monotonic(),
+        "agg": None,
+    }
+    monkeypatch.setattr("web_app.uw_api_configured", lambda: True)
+
+    entry = web_app.get_uw_data_with_timeout("SPX")
+    assert entry is not None
+    assert entry["spot"] == 6000.0
+
+
 def test_api_wall_gex_status_returns_json_on_error(monkeypatch):
     from web_app import APP
 

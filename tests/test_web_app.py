@@ -17,6 +17,23 @@ def test_index_renders_wall_gex_dashboard():
     assert b"/api/wall-gex/status" in response.data
 
 
+def test_ticker_page_does_not_block_on_live_wall_gex_data(monkeypatch):
+    from web_app import APP
+
+    calls = {"n": 0}
+
+    def _track(*_a, **_k):
+        calls["n"] += 1
+        return 6000.0, None, {"ran": False}
+
+    monkeypatch.setattr("web_app._wall_gex_live_data", _track)
+    client = APP.test_client()
+    response = client.get("/ticker/SPX/")
+    assert response.status_code == 200
+    assert b"Loading signal" in response.data
+    assert calls["n"] == 0
+
+
 def test_gamma_dashboard_renders_periscope():
     from web_app import APP
 

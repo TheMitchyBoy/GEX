@@ -16,6 +16,7 @@ import os
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -161,6 +162,33 @@ def _uw_failure_reason(ticker: str) -> str:
         return _LAST_UW_ERROR.get(ticker.upper(), "error")
 
 _uw_lock = threading.Lock()
+_WALL_GEX_LIVE_CACHE: dict[str, tuple[float, tuple[float | None, pd.Series | None, dict[str, Any]]]] = {}
+_UW_FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="uw-fetch")
+
+
+def _wall_gex_live_cache_seconds() -> float:
+    try:
+        return max(3.0, float(os.environ.get("GEX_WALL_GEX_LIVE_CACHE_SEC", "15")))
+    except (TypeError, ValueError):
+        return 15.0
+
+
+def _uw_fetch_timeout_seconds() -> float:
+    try:
+        return max(2.0, float(os.environ.get("GEX_UW_FETCH_TIMEOUT_SEC", "12")))
+    except (TypeError, ValueError):
+        return 12.0
+
+
+def _peek_uw_data(ticker: str) -> dict | None:
+    """Return in-memory UW cache only — never blocks on HTTP."""
+    if not uw_api_configured():
+        return None
+    ticker = ticker.upper()
+    with _uw_lock:
+        if _uw_cache_fresh(ticker):
+            return _UW_CACHE[ticker]
+    return None
 
 
 def _uw_cache_fresh(ticker: str) -> bool:
@@ -168,8 +196,8 @@ def _uw_cache_fresh(ticker: str) -> bool:
     return bool(entry and (time.monotonic() - entry["ts"]) < _UW_CACHE_TTL)
 
 
-def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
-    """Fetch live UW GEX and run AI analysis; cache the result."""
+def refresh_uw_data(ticker: str, force: bool = False, *, analyze: bool = True) -> dict | None:
+    """Fetch live UW GEX and optionally run AI analysis; cache the result."""
     if not uw_api_configured():
         return None
     ticker = ticker.upper()
@@ -177,18 +205,22 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
         return _UW_CACHE[ticker]
     try:
         from gex_core.uw_loader import fetch_spot_gamma_aggregate_bn, fetch_uw_gex
-        from gex_core.ai_analyst import analyze_dealer_gamma
 
         spot, agg = fetch_uw_gex(ticker, api_key=uw_api_key())
         gamma_flip = None
         spot_gamma_bn = fetch_spot_gamma_aggregate_bn(ticker, api_key=uw_api_key())
-        analysis = analyze_dealer_gamma(
-            ticker=ticker, spot=spot,
-            gex_by_strike=agg.gex_by_strike,
-            cumulative_gex=agg.cumulative_gex,
-            total_gex_bn=agg.total_gex_bn,
-            gamma_flip=gamma_flip,
-        )
+        analysis = None
+        if analyze:
+            from gex_core.ai_analyst import analyze_dealer_gamma
+
+            analysis = analyze_dealer_gamma(
+                ticker=ticker,
+                spot=spot,
+                gex_by_strike=agg.gex_by_strike,
+                cumulative_gex=agg.cumulative_gex,
+                total_gex_bn=agg.total_gex_bn,
+                gamma_flip=gamma_flip,
+            )
         entry = {
             "spot": spot, "agg": agg,
             "gamma_flip": gamma_flip,
@@ -210,7 +242,7 @@ def refresh_uw_data(ticker: str, force: bool = False) -> dict | None:
         return None
 
 
-def get_uw_data(ticker: str) -> dict | None:
+def get_uw_data(ticker: str, *, analyze: bool = True) -> dict | None:
     """Return cached UW data, refreshing if stale."""
     if not uw_api_configured():
         return None
@@ -218,7 +250,31 @@ def get_uw_data(ticker: str) -> dict | None:
     with _uw_lock:
         if _uw_cache_fresh(ticker):
             return _UW_CACHE[ticker]
-    return refresh_uw_data(ticker)
+    return refresh_uw_data(ticker, analyze=analyze)
+
+
+def get_uw_data_with_timeout(
+    ticker: str,
+    *,
+    timeout_sec: float | None = None,
+    analyze: bool = False,
+) -> dict | None:
+    """Best-effort UW refresh with a hard timeout (for request handlers)."""
+    cached = _peek_uw_data(ticker)
+    if cached is not None:
+        return cached
+    if not uw_api_configured():
+        return None
+    timeout = _uw_fetch_timeout_seconds() if timeout_sec is None else max(1.0, float(timeout_sec))
+    future = _UW_FETCH_EXECUTOR.submit(refresh_uw_data, ticker.upper(), False, analyze=analyze)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        logger.warning("UW refresh timed out for %s after %.0fs — using exports only", ticker, timeout)
+        return _peek_uw_data(ticker)
+    except Exception:
+        logger.exception("UW refresh failed for %s", ticker)
+        return _peek_uw_data(ticker)
 
 
 IMG_DIR = Path(__file__).resolve().parent / "img"
@@ -596,7 +652,14 @@ def _wall_gex_live_data(ticker: str) -> tuple[float | None, pd.Series | None, di
     from gex_core.trading.low_gex_engine import run_low_gex_trade
 
     ticker = ticker.upper()
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    now = time.monotonic()
+    cached = _WALL_GEX_LIVE_CACHE.get(ticker)
+    if cached and (now - cached[0]) < _wall_gex_live_cache_seconds():
+        return cached[1]
+
+    uw_entry = None
+    if _uw_live_enabled():
+        uw_entry = get_uw_data_with_timeout(ticker, analyze=False)
     ctx = build_periscope_context(
         ticker=ticker,
         exposure="gamma",
@@ -606,14 +669,18 @@ def _wall_gex_live_data(ticker: str) -> tuple[float | None, pd.Series | None, di
     spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
     exposure, _ = _strategy_exposure_from_context(ctx)
     if not spot or exposure is None:
-        return spot, exposure, {"ran": False, "reason": "No spot or gamma exposure available"}
+        result = (spot, exposure, {"ran": False, "reason": "No spot or gamma exposure available"})
+        _WALL_GEX_LIVE_CACHE[ticker] = (now, result)
+        return result
     preview = run_low_gex_trade(
         ticker=ticker,
         spot=float(spot),
         exposure=exposure,
         execute=False,
     )
-    return float(spot), exposure, preview
+    result = (float(spot), exposure, preview)
+    _WALL_GEX_LIVE_CACHE[ticker] = (now, result)
+    return result
 
 
 def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
@@ -621,13 +688,9 @@ def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
 
     ticker = ticker.upper()
     status = wall_gex_status(ticker)
+    # Shell HTML only — live signal loads via /api/wall-gex/status (avoids Railway 502 timeouts).
     spot: float | None = None
-    last_cycle: dict[str, Any] = {}
-    try:
-        spot, _, last_cycle = _wall_gex_live_data(ticker)
-    except Exception as exc:
-        logger.exception("Wall GEX signal preview failed for %s", ticker)
-        last_cycle = {"ran": False, "reason": str(exc)}
+    last_cycle: dict[str, Any] = {"ran": False, "reason": "Loading signal…"}
     return render_template(
         "wall_gex.html",
         ticker=ticker,
