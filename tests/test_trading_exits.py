@@ -1,4 +1,12 @@
+from gex_core.trading.config import stop_loss_pct, take_profit_pct
 from gex_core.trading.exits import ExitProfile, ExitState, build_exit_profile, evaluate_exit, spot_progress_toward_strike
+
+
+def test_gamma_magnet_default_sl_tp(monkeypatch):
+    monkeypatch.delenv("GEX_TRADER_STOP_LOSS_PCT", raising=False)
+    monkeypatch.delenv("GEX_TRADER_TAKE_PROFIT_PCT", raising=False)
+    assert stop_loss_pct() == 0.06
+    assert take_profit_pct() == 0.28
 
 
 def test_spot_progress_toward_call_strike():
@@ -37,8 +45,9 @@ def test_strong_setup_holds_for_full_target():
     )
     assert reason is None
 
+    tp = take_profit_pct()
     reason, pnl = evaluate_exit(
-        0.61,
+        tp + 0.01,
         state=state,
         bars_held=8,
         entry_spot=5000.0,
@@ -50,7 +59,7 @@ def test_strong_setup_holds_for_full_target():
         magnet_primary=False,
     )
     assert reason == "take_profit"
-    assert pnl == 0.60
+    assert pnl == tp
 
 
 def test_max_hold_exits_at_bar_limit(monkeypatch):

@@ -17,6 +17,7 @@ from gex_core.trading.config import (
     min_gamma_delta,
     multi_strike_count,
     prefer_signal_type,
+    trade_negative_gamma_magnets,
 )
 
 
@@ -108,10 +109,10 @@ def _resolve_trade_strike(
     return _refine_trade_strike(cur, magnet_strike, spot, option_type)
 
 
-def _extreme_gamma_magnet(search: pd.Series) -> tuple[float, float, str]:
-    """Pick the strike with the largest |gamma| — highest positive or lowest negative."""
+def _extreme_gamma_magnet(search: pd.Series) -> tuple[float, float, str] | None:
+    """Pick the trade magnet: highest +γ, or lowest −γ when enabled and dominant."""
     if search.empty:
-        return 0.0, 0.0, "max_positive_gamma"
+        return None
 
     positive = search[search > 0]
     negative = search[search < 0]
@@ -119,6 +120,11 @@ def _extreme_gamma_magnet(search: pd.Series) -> tuple[float, float, str]:
     max_pos_gamma = float(positive.max()) if not positive.empty else 0.0
     min_neg_strike = float(negative.idxmin()) if not negative.empty else None
     min_neg_gamma = float(negative.min()) if not negative.empty else 0.0
+
+    if not trade_negative_gamma_magnets():
+        if max_pos_strike is None:
+            return None
+        return max_pos_strike, max_pos_gamma, "max_positive_gamma"
 
     pos_mag = abs(max_pos_gamma) if max_pos_strike is not None else 0.0
     neg_mag = abs(min_neg_gamma) if min_neg_strike is not None else 0.0
@@ -220,7 +226,19 @@ def _compute_max_gamma_only(
     max_pos_delta: float,
 ) -> dict[str, Any]:
     """Single dominant |gamma| candidate — highest +γ or lowest −γ near spot."""
-    magnet_strike, magnet_gamma, magnet_sig_type = _extreme_gamma_magnet(search)
+    extreme = _extreme_gamma_magnet(search)
+    if extreme is None:
+        return _unavailable(
+            reason="No positive gamma magnet near spot",
+            skip_reason="no_positive_gamma",
+            spot_val=spot_val,
+            max_pos_signal=max_pos_signal,
+            fastest_signal=fastest_signal,
+            max_pos_delta=max_pos_delta,
+            min_neg_signal=min_neg_signal,
+        )
+
+    magnet_strike, magnet_gamma, magnet_sig_type = extreme
     magnet_delta = float(delta.get(magnet_strike, 0.0))
     magnet_label = "Highest" if magnet_sig_type == "max_positive_gamma" else "Lowest"
 

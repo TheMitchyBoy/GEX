@@ -214,7 +214,8 @@ Implemented in `gex_core.trading.signals.compute_entry_candidates()`. A snapshot
 
 | Check | Env / logic | Default | Skip reason |
 |-------|-------------|---------|-------------|
-| Max-gamma mode | `GEX_TRADER_MAX_GAMMA_ONLY=1` | on | Dominant \|γ\| magnet — highest **positive** or lowest **negative** gamma near spot; no `fastest_gamma_increase` fallback |
+| Max-gamma mode | `GEX_TRADER_MAX_GAMMA_ONLY=1` | on | Trade highest **+γ** magnet near spot (no `fastest_gamma_increase` fallback) |
+| Negative γ walls | `GEX_TRADER_TRADE_NEGATIVE_GAMMA` | off | Set `1` to also enter on lowest **−γ** when \|γ\| dominates |
 | Gamma rising | compare current vs previous strike profile | — | `gamma_declined` if top magnet Δγ < 0 |
 | Tradeable strike | `GEX_TRADER_MAX_STRIKE_DISTANCE_PCT` | `0.02` (2%) | `strike_too_far` if no ATM/slightly-ITM positive-γ strike in range |
 | Strike selection | `GEX_TRADER_MAGNET_ANCHORED_STRIKES` | off | Off: nearest ATM positive-γ strike; on: trade at magnet strike |
@@ -280,9 +281,9 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 
 | Priority | Exit | Env | Default | Condition |
 |----------|------|-----|---------|-----------|
-| 1 | Stop loss | `GEX_TRADER_STOP_LOSS_PCT` | `20%` | PnL ≤ −stop; far-OTM uses `GEX_TRADER_FAR_OTM_STOP_PCT` (`3%`) beyond `FAR_OTM_DISTANCE_PCT` |
+| 1 | Stop loss | `GEX_TRADER_STOP_LOSS_PCT` | `6%` | PnL ≤ −stop; far-OTM uses `GEX_TRADER_FAR_OTM_STOP_PCT` (`3%`) beyond `FAR_OTM_DISTANCE_PCT` |
 | 2 | Magnet touch | `GEX_TRADER_MAGNET_TOUCH_EXIT` | off | Opt-in; spot at magnet with min PnL (let `TAKE_PROFIT` run by default) |
-| 3 | Take profit | `GEX_TRADER_TAKE_PROFIT_PCT` | `60%` | Full target; optional `GEX_TRADER_DYNAMIC_TP` scales down from IV |
+| 3 | Take profit | `GEX_TRADER_TAKE_PROFIT_PCT` | `28%` | Full target; optional `GEX_TRADER_DYNAMIC_TP` scales down from IV |
 | 4 | Magnet partial | `GEX_TRADER_MAGNET_PARTIAL_EXIT` | off | Exit fraction at `GEX_TRADER_MAGNET_PARTIAL_PROGRESS` (default 80%) toward magnet |
 | 5 | Partial TP | `GEX_TRADER_PARTIAL_TP_PCT` | `8%` | Only when `hold_for_target=False` (non-strong profiles) |
 | 6 | Trailing stop | `GEX_TRADER_TRAIL_TRIGGER_PCT` / `TRAIL_FLOOR_PCT` | `10%` / `5%` | After peak PnL hits trigger, exit at floor |
@@ -297,14 +298,15 @@ Applied in `engine.py` / `backtest.py` after advisor approval:
 | Variable | Default | Layer |
 |----------|---------|-------|
 | `GEX_TRADER_CLEAR_FILTERS` | `0` | Set `1` to clear all entry filters |
-| `GEX_TRADER_MIN_ENTRY_CONFIDENCE` | `0.55` | Minimum advisor confidence to open (0 when clear filters on) |
+| `GEX_TRADER_MIN_ENTRY_CONFIDENCE` | `0` | Minimum advisor confidence to open (0 when clear filters on) |
 | `GEX_ADVISOR_CONTEXT_MAX_CHARS` | `24000` | UW + signal context cap for entry advisor LLM |
-| `GEX_TRADER_STRICT_FILTERS` | `1` when clear off | Entry master switch |
+| `GEX_TRADER_STRICT_FILTERS` | `0` when clear off | Entry master switch |
 | `GEX_TRADER_MAX_GAMMA_ONLY` | `1` | Signal |
-| `GEX_TRADER_REQUIRE_MOMENTUM` | `1` | Entry |
-| `GEX_TRADER_REQUIRE_FLIP_SIDE` | `1` | Entry |
+| `GEX_TRADER_TRADE_NEGATIVE_GAMMA` | `0` | Signal — lowest −γ walls |
+| `GEX_TRADER_REQUIRE_MOMENTUM` | `0` | Entry |
+| `GEX_TRADER_REQUIRE_FLIP_SIDE` | `0` | Entry |
 | `GEX_TRADER_REQUIRE_FLOW_ALIGN` | `0` | Entry |
-| `GEX_TRADER_ENTRY_TIME_FILTER` | `1` | Entry |
+| `GEX_TRADER_ENTRY_TIME_FILTER` | `0` | Entry |
 | `GEX_TRADER_ENTRY_AFTER_OPEN_MIN` | `15` | Entry window |
 | `GEX_TRADER_ENTRY_BEFORE_CLOSE_MIN` | `30` | Entry window |
 | `GEX_TRADER_MIN_GAMMA_DELTA` | `0.03` | Entry + signal |

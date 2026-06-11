@@ -97,6 +97,7 @@ def test_max_gamma_only_single_direction_candidate(monkeypatch):
 
 def test_max_gamma_only_picks_lowest_negative_when_dominant(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
+    monkeypatch.setenv("GEX_TRADER_TRADE_NEGATIVE_GAMMA", "1")
     monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
     monkeypatch.setenv("GEX_TRADER_MAX_STRIKE_DISTANCE_PCT", "0.05")
     cur = pd.Series([0.3, 0.5, -2.5, -0.4], index=[7370.0, 7380.0, 7390.0, 7400.0])
@@ -107,6 +108,18 @@ def test_max_gamma_only_picks_lowest_negative_when_dominant(monkeypatch):
     assert out["recommended"]["magnet_strike"] == 7390.0
     assert out["recommended"]["option_type"] == "call"
     assert "min_negative_gamma" in out
+
+
+def test_max_gamma_only_prefers_positive_when_negative_trading_off(monkeypatch):
+    monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
+    monkeypatch.setenv("GEX_TRADER_TRADE_NEGATIVE_GAMMA", "0")
+    monkeypatch.setenv("GEX_TRADER_MIN_GAMMA_DELTA", "0")
+    cur = pd.Series([0.3, 0.5, -2.5, -0.4], index=[7370.0, 7380.0, 7390.0, 7400.0])
+    prev = pd.Series([0.2, 0.4, -2.6, -0.3], index=[7370.0, 7380.0, 7390.0, 7400.0])
+    out = compute_gamma_signals(cur, prev, spot=7385.0)
+    assert out["available"]
+    assert out["recommended"]["signal_type"] == "max_positive_gamma"
+    assert out["recommended"]["magnet_strike"] == 7380.0
 
 
 def test_max_gamma_only_blocks_declining_magnet(monkeypatch):

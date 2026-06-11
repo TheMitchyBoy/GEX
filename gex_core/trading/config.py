@@ -65,9 +65,9 @@ def paper_trading_only() -> bool:
 
 def stop_loss_pct() -> float:
     try:
-        return max(0.01, float(os.environ.get("GEX_TRADER_STOP_LOSS_PCT", "0.20")))
+        return max(0.01, float(os.environ.get("GEX_TRADER_STOP_LOSS_PCT", "0.06")))
     except (TypeError, ValueError):
-        return 0.20
+        return 0.06
 
 
 def far_otm_stop_loss_pct() -> float:
@@ -86,9 +86,9 @@ def far_otm_distance_pct() -> float:
 
 def take_profit_pct() -> float:
     try:
-        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.60")))
+        return max(0.05, float(os.environ.get("GEX_TRADER_TAKE_PROFIT_PCT", "0.28")))
     except (TypeError, ValueError):
-        return 0.60
+        return 0.28
 
 
 def partial_take_profit_pct() -> float:
@@ -125,14 +125,14 @@ def max_hold_bars() -> int:
 
 
 def time_stop_bars() -> int:
-    """Stale-trade stop bars; defaults to max-hold bar count."""
+    """Stale-trade stop bars; default 7 (~14 min on 2-min snapshots)."""
     try:
         raw = os.environ.get("GEX_TRADER_TIME_STOP_BARS", "").strip()
         if raw:
             return max(1, int(raw))
-        return max_hold_bars()
+        return 7
     except (TypeError, ValueError):
-        return max_hold_bars()
+        return 7
 
 
 def time_stop_min_pnl_pct() -> float:
@@ -170,9 +170,9 @@ def min_entry_confidence() -> float:
     if clear_all_filters():
         return 0.0
     try:
-        return max(0.0, min(1.0, float(os.environ.get("GEX_TRADER_MIN_ENTRY_CONFIDENCE", "0.55"))))
+        return max(0.0, min(1.0, float(os.environ.get("GEX_TRADER_MIN_ENTRY_CONFIDENCE", "0"))))
     except (TypeError, ValueError):
-        return 0.55
+        return 0.0
 
 
 def advisor_context_max_chars() -> int:
@@ -314,9 +314,9 @@ def min_gamma_delta() -> float:
     if clear_all_filters():
         return 0.0
     try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0.03")))
+        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_GAMMA_DELTA", "0.02")))
     except (TypeError, ValueError):
-        return 0.03
+        return 0.02
 
 
 def min_fastest_gamma_delta() -> float:
@@ -349,7 +349,7 @@ def min_confluence_score() -> float:
 def require_spot_momentum() -> bool:
     if clear_all_filters():
         return False
-    return _flag("GEX_TRADER_REQUIRE_MOMENTUM", "1")
+    return _flag("GEX_TRADER_REQUIRE_MOMENTUM", "0")
 
 
 def block_event_days() -> bool:
@@ -367,7 +367,7 @@ def require_flow_alignment() -> bool:
 def strict_entry_filters() -> bool:
     if clear_all_filters():
         return False
-    return _flag("GEX_TRADER_STRICT_FILTERS", "1")
+    return _flag("GEX_TRADER_STRICT_FILTERS", "0")
 
 
 def option_leverage() -> float:
@@ -570,7 +570,7 @@ def min_zero_dte_ratio() -> float:
 def require_gamma_flip_side() -> bool:
     if clear_all_filters():
         return False
-    return _flag("GEX_TRADER_REQUIRE_FLIP_SIDE", "1")
+    return _flag("GEX_TRADER_REQUIRE_FLIP_SIDE", "0")
 
 
 def max_iv_rank() -> float:
@@ -611,7 +611,7 @@ def entry_window_before_close_min() -> int:
 
 
 def eod_flatten_enabled() -> bool:
-    return _flag("GEX_TRADER_EOD_FLATTEN", "1")
+    return _flag("GEX_TRADER_EOD_FLATTEN", "0")
 
 
 def eod_flatten_hour() -> int:
@@ -675,6 +675,11 @@ def max_gamma_only() -> bool:
     return _flag("GEX_TRADER_MAX_GAMMA_ONLY", "1")
 
 
+def trade_negative_gamma_magnets() -> bool:
+    """Enter on lowest −γ walls when |γ| dominates (off = trade highest +γ only)."""
+    return _flag("GEX_TRADER_TRADE_NEGATIVE_GAMMA", "0")
+
+
 def magnet_anchored_strikes() -> bool:
     """Trade strikes at the gamma magnet instead of nearest ATM."""
     return _flag("GEX_TRADER_MAGNET_ANCHORED_STRIKES", "0")
@@ -724,7 +729,7 @@ def magnet_partial_progress_pct() -> float:
 def entry_time_filter_enabled() -> bool:
     if clear_all_filters():
         return False
-    return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "1")
+    return _flag("GEX_TRADER_ENTRY_TIME_FILTER", "0")
 
 
 def multi_strike_count() -> int:

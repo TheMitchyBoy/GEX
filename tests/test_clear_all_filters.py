@@ -39,11 +39,11 @@ def test_clear_all_filters_allows_declining_gamma_magnet(monkeypatch):
 
 
 def test_strict_filters_when_clear_off(monkeypatch):
-    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
-    from gex_core.trading.config import strict_entry_filters
+    monkeypatch.delenv("GEX_TRADER_CLEAR_FILTERS", raising=False)
+    monkeypatch.delenv("GEX_TRADER_STRICT_FILTERS", raising=False)
 
     assert not clear_all_filters()
-    assert strict_entry_filters()
+    assert not strict_entry_filters()
 
 
 def test_clear_all_filters_bypasses_advisor_score_floor(monkeypatch):
