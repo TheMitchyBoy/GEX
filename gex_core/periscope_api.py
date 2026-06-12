@@ -47,6 +47,7 @@ _CACHE_TTL = int(
 
 _day_cache: dict[tuple[str, str], "IntradayDayCache"] = {}
 _cache_lock = threading.Lock()
+_MAX_DAY_CACHE_ENTRIES = max(1, int(os.environ.get("GEX_PERISCOPE_DAY_CACHE_MAX", "8")))
 
 
 @dataclass
@@ -63,6 +64,14 @@ class IntradayDayCache:
 
 def _cache_fresh(entry: IntradayDayCache | None) -> bool:
     return entry is not None and (time.monotonic() - entry.fetched_at) < _CACHE_TTL
+
+
+def _store_day_cache(cache_key: tuple[str, str], entry: IntradayDayCache) -> None:
+    with _cache_lock:
+        if len(_day_cache) >= _MAX_DAY_CACHE_ENTRIES and cache_key not in _day_cache:
+            oldest_key = min(_day_cache, key=lambda key: _day_cache[key].fetched_at)
+            del _day_cache[oldest_key]
+        _day_cache[cache_key] = entry
 
 
 def _snapshot_from_strike(
@@ -256,8 +265,7 @@ def fetch_intraday_day_cache(
         price_points=price_points,
         fetched_at=time.monotonic(),
     )
-    with _cache_lock:
-        _day_cache[cache_key] = entry
+    _store_day_cache(cache_key, entry)
     return entry
 
 

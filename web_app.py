@@ -287,6 +287,15 @@ def _uw_live_enabled() -> bool:
     return os.environ.get("GEX_SHOW_UW_LIVE", "1").lower() in {"1", "true", "yes"}
 
 
+def _dashboard_skip_backtest() -> bool:
+    return os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _select_snapshot(history: list, requested_ts: str | None, ticker: str | None = None) -> dict:
     if not history:
         raise ValueError("empty history")
@@ -453,7 +462,7 @@ def _render_periscope_dashboard(
 
     has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key()))
 
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -629,11 +638,14 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
         prediction = apply_flow_to_prediction(prediction, flow_overlay)
     except Exception:
         logger.exception("Flow overlay failed for %s", ticker)
-    try:
-        backtest = backtest_delta_sign_accuracy(ticker)
-    except Exception:
-        logger.exception("Backtest metrics failed for %s", ticker)
+    if _dashboard_skip_backtest():
         backtest = {}
+    else:
+        try:
+            backtest = backtest_delta_sign_accuracy(ticker, history=prediction_history)
+        except Exception:
+            logger.exception("Backtest metrics failed for %s", ticker)
+            backtest = {}
     confluence = compute_confluence_overlay(selected, prediction, flow_overlay)
     today = build_today_regime_snapshot(selected, prediction)
     alerts = generate_alerts(history, selected, prediction)
@@ -907,7 +919,7 @@ def api_periscope():
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -970,7 +982,7 @@ def api_trader_run():
     from gex_core.trading.engine import run_trading_cycle
 
     ticker = PRIMARY_TICKER
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         exposure="gamma",
@@ -999,7 +1011,7 @@ def api_trader_run():
 def api_trader_strategy():
     """Live strategy signals, filter state, and chart spec for dashboard refresh."""
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=request.args.get("ts"),
@@ -1167,7 +1179,7 @@ def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
     from gex_core.trading.strategy_viz import build_strategy_state
     from gex_core.trading.webull_quick_trade import build_recommended_trade
 
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=request.args.get("ts"),
@@ -1398,7 +1410,7 @@ def api_agent_analyze():
     ticker = PRIMARY_TICKER
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -1510,7 +1522,7 @@ def api_agent_monte_carlo_confidence():
 def api_agent_predict():
     """Feed all Unusual Whales data to the AI and return structured predictions."""
     ticker = PRIMARY_TICKER
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     if not uw_entry or not uw_entry.get("agg"):
         return jsonify(
             {
@@ -1542,7 +1554,7 @@ def api_agent_predict():
 
 def _chat_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
     """Build periscope + UW context for chat endpoints."""
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -1758,7 +1770,7 @@ def _run_wall_gex_trader(ticker: str) -> dict[str, Any] | None:
 
     if not wall_gex_auto_enabled() or not is_trader_armed():
         return None
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         exposure="gamma",
@@ -1787,7 +1799,7 @@ def _run_auto_trader(ticker: str) -> dict[str, Any] | None:
 
     if not auto_trader_enabled():
         return None
-    uw_entry = get_uw_data(ticker) if _uw_live_enabled() else None
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         exposure="gamma",

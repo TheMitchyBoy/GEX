@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _HEALTH_CACHE: dict[str, tuple[float, dict]] = {}
 
 from gex_core.env_bootstrap import uw_api_key_diagnostics
-from gex_core.exports import EXPORT_DIR, list_export_timestamps
-from gex_core.history import collect_snapshot_files, get_latest_ts
+from gex_core.exports import EXPORT_DIR, filter_export_timestamps, list_export_timestamps, parse_timestamp
+from gex_core.history import get_latest_ts
 from gex_core.models_manifest import load_manifest
 from gex_core.predict import MIN_OVERLAY_TRAIN_ROWS
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES
@@ -34,8 +34,14 @@ def build_system_status(ticker: str | None = None, *, use_cache: bool = True) ->
             return dict(cached[1])
     latest_ts = get_latest_ts(ticker, EXPORT_DIR)
     age_min = export_age_minutes(ticker, EXPORT_DIR)
-    collected = collect_snapshot_files(ticker, EXPORT_DIR, lookback_days=90, max_snapshots=240)
-    history_loaded = len(collected)
+    timestamps = list_export_timestamps(ticker, EXPORT_DIR)
+    history_loaded = 0
+    if timestamps:
+        latest_dt = parse_timestamp(timestamps[-1])
+        since = latest_dt - timedelta(days=90)
+        history_loaded = len(
+            filter_export_timestamps(timestamps, since=since, max_timestamps=240)
+        )
     manifest = load_manifest(ticker)
     n_train = None
     if manifest:

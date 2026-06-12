@@ -34,6 +34,22 @@ def test_ticker_page_does_not_block_on_live_wall_gex_data(monkeypatch):
     assert calls["n"] == 0
 
 
+def test_ticker_api_payload_skips_backtest_when_configured(monkeypatch):
+    from web_app import _ticker_api_payload
+
+    calls = {"n": 0}
+
+    def _track(*_a, **_k):
+        calls["n"] += 1
+        return {"n": 0, "accuracy": None}
+
+    monkeypatch.setenv("GEX_DASHBOARD_SKIP_BACKTEST", "1")
+    monkeypatch.setattr("web_app.backtest_delta_sign_accuracy", _track)
+    payload = _ticker_api_payload("SPX")
+    assert payload["ticker"] == "SPX"
+    assert calls["n"] == 0
+
+
 def test_gamma_dashboard_renders_periscope():
     from web_app import APP
 
@@ -71,7 +87,7 @@ def test_api_trader_strategy_honors_window_pct(monkeypatch):
     monkeypatch.setattr("web_app.build_periscope_context", lambda **_k: {"spot": 6000.0, "selected": {}, "history": []})
     monkeypatch.setattr("web_app._strategy_exposure_from_context", lambda _ctx: (None, None))
     monkeypatch.setattr("web_app._uw_bundle_for_context", lambda **_k: None)
-    monkeypatch.setattr("web_app.get_uw_data", lambda _t: None)
+    monkeypatch.setattr("web_app.get_uw_data_with_timeout", lambda _t, **_k: None)
     monkeypatch.setattr("web_app._uw_live_enabled", lambda: False)
 
     client = APP.test_client()
@@ -137,7 +153,7 @@ def test_api_chat_rule_based_reply(monkeypatch):
 def test_api_agent_predict_returns_503_without_live_uw(monkeypatch):
     import web_app
 
-    monkeypatch.setattr(web_app, "get_uw_data", lambda *a, **k: None)
+    monkeypatch.setattr(web_app, "get_uw_data_with_timeout", lambda *a, **k: None)
     client = web_app.APP.test_client()
     response = client.get("/api/agent/predict")
     assert response.status_code == 503
@@ -254,7 +270,7 @@ def test_live_uw_failure_shows_stale_banner_on_latest_slice(monkeypatch):
     monkeypatch.setenv("UW_API_KEY", "dummy-key")
     monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
     monkeypatch.setattr(web_app, "_uw_live_enabled", lambda: True)
-    monkeypatch.setattr(web_app, "get_uw_data", lambda *_a, **_k: None)
+    monkeypatch.setattr(web_app, "get_uw_data_with_timeout", lambda *_a, **_k: None)
     monkeypatch.setattr(web_app, "_uw_failure_reason", lambda *_a, **_k: "rate_limited")
 
     client = web_app.APP.test_client()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ from gex_core.exports import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SYNC_CACHE: dict[tuple[str, str], float] = {}
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "gex_index.db"
@@ -243,12 +246,40 @@ def prune_stale_index_entries(
     return len(stale)
 
 
-def sync_ticker_exports(ticker: str, export_dir: Path | None = None, path: Path | None = None) -> int:
+def _sync_cache_ttl_sec() -> float:
+    try:
+        return max(15.0, float(os.environ.get("GEX_INDEX_SYNC_TTL_SEC", "120")))
+    except (TypeError, ValueError):
+        return 120.0
+
+
+def clear_sync_cache(ticker: str | None = None, export_dir: Path | None = None) -> None:
+    """Drop sync throttle entries (e.g. after a new export lands)."""
+    if ticker is None and export_dir is None:
+        _SYNC_CACHE.clear()
+        return
+    export_dir = export_dir or EXPORT_DIR
+    key = (ticker.upper() if ticker else "", str(export_dir.resolve()))
+    _SYNC_CACHE.pop(key, None)
+
+
+def sync_ticker_exports(
+    ticker: str,
+    export_dir: Path | None = None,
+    path: Path | None = None,
+    *,
+    force: bool = False,
+) -> int:
     """Reconcile SQLite index with on-disk strike exports."""
     import json
 
     export_dir = export_dir or EXPORT_DIR
     ticker = ticker.upper()
+    cache_key = (ticker, str(export_dir.resolve()))
+    if not force:
+        last_run = _SYNC_CACHE.get(cache_key)
+        if last_run is not None and (time.monotonic() - last_run) < _sync_cache_ttl_sec():
+            return 0
     prune_stale_index_entries(ticker, export_dir, path)
     existing = set(list_indexed_timestamps(ticker, path))
     timestamps = [ts for ts in scan_export_timestamps(ticker, export_dir) if ts not in existing]
@@ -286,6 +317,7 @@ def sync_ticker_exports(ticker: str, export_dir: Path | None = None, path: Path 
             path=path,
         )
         added += 1
+    _SYNC_CACHE[cache_key] = time.monotonic()
     return added
 
 

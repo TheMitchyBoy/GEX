@@ -4,10 +4,31 @@ import pandas as pd
 
 from gex_core.periscope_api import (
     IntradayDayCache,
+    _store_day_cache,
+    clear_periscope_api_cache,
     list_periscope_timestamps,
     load_periscope_snapshot,
     snapshot_from_uw_entry,
 )
+
+
+def test_day_cache_evicts_oldest_entry_when_full(monkeypatch):
+    monkeypatch.setattr("gex_core.periscope_api._MAX_DAY_CACHE_ENTRIES", 2)
+    clear_periscope_api_cache()
+
+    first = IntradayDayCache(market_date="2026-06-04", fetched_at=1.0)
+    second = IntradayDayCache(market_date="2026-06-05", fetched_at=2.0)
+    third = IntradayDayCache(market_date="2026-06-06", fetched_at=3.0)
+    _store_day_cache(("SPX", "2026-06-04"), first)
+    _store_day_cache(("SPX", "2026-06-05"), second)
+    _store_day_cache(("SPX", "2026-06-06"), third)
+
+    from gex_core.periscope_api import _day_cache
+
+    assert len(_day_cache) == 2
+    assert ("SPX", "2026-06-04") not in _day_cache
+    assert ("SPX", "2026-06-06") in _day_cache
+    clear_periscope_api_cache()
 
 
 def test_list_periscope_timestamps_merges_history_and_api_today():

@@ -3,6 +3,7 @@ import json
 from gex_core.exports import EXPORT_DIR
 from gex_core.exports import list_export_timestamps
 from gex_core.storage import (
+    clear_sync_cache,
     latest_timestamp,
     list_indexed_timestamps,
     prune_stale_index_entries,
@@ -37,6 +38,25 @@ def test_sync_from_exports(tmp_path, monkeypatch):
     added = sync_ticker_exports("SPX", export_dir)
     assert added == 1
     assert latest_timestamp("SPX", export_dir=export_dir, path=db) == ts
+
+
+def test_sync_ticker_exports_throttles_repeated_scans(tmp_path, monkeypatch):
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    ts = "2026-06-02_000000"
+    (export_dir / f"SPX_gex_by_strike_{ts}.csv").write_text("strike,gex\n4800,1.0\n", encoding="utf-8")
+    db = tmp_path / "index.db"
+    monkeypatch.setenv("GEX_INDEX_DB", str(db))
+    monkeypatch.setenv("GEX_INDEX_SYNC_TTL_SEC", "3600")
+    clear_sync_cache()
+
+    first = sync_ticker_exports("SPX", export_dir)
+    second = sync_ticker_exports("SPX", export_dir)
+    assert first == 1
+    assert second == 0
+
+    forced = sync_ticker_exports("SPX", export_dir, force=True)
+    assert forced == 0
 
 
 def test_prune_stale_index_entries(tmp_path, monkeypatch):
