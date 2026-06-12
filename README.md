@@ -155,6 +155,7 @@ docker compose --profile tools run --rm refresh
 3. Start command: `bash scripts/start_web.sh` (default in the Dockerfile).
 4. Optional first deploy: `GEX_STARTUP_BACKFILL=1` to pull 90 days of intraday history.
 5. `GEX_DASHBOARD_SKIP_BACKTEST=1` (set in `start_web.sh`) keeps HTML page loads fast on small instances.
+6. `GEX_PAGE_MINIMAL_LOAD=1` (default) serves only the **current gamma snapshot** on dashboard pages; scheduled refresh still writes every export to `data/exports/`. Replay (`?ts=…`) or `?trail=1` loads prior slices on demand.
 
 ### 7. Pages and auto-traders
 

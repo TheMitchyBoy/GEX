@@ -882,9 +882,24 @@
         Object.values(LAYER_IDS).forEach(id => {
           document.getElementById(id)?.addEventListener('change', () => {
             saveLayerPrefs();
+            const gammaHist = document.getElementById(LAYER_IDS.gamma_history);
+            if (gammaHist?.checked && !timelineData?.prev_ts) {
+              refreshStrategyWithTrail();
+              return;
+            }
             if (currentChartSpec) renderStrategyChart(currentChartSpec);
           });
         });
+      }
+
+      async function refreshStrategyWithTrail() {
+        const params = strategyQueryParams();
+        params.set('trail', '1');
+        const qs = params.toString() ? '?' + params.toString() : '';
+        try {
+          const res = await fetch('/api/trader/strategy' + qs);
+          applyStrategyPayload(await res.json());
+        } catch (_) {}
       }
 
       function spotPriceForTrade() {
@@ -1120,7 +1135,11 @@
 
       loadLayerPrefs();
       bindLayerToggles();
-      renderStrategyChart(strategySpec);
+      if (strategySpec) {
+        renderStrategyChart(strategySpec);
+      } else {
+        loadStrategySlice({ pushUrl: false });
+      }
       bindChartStrikeClick();
       updateLastUpdated();
       startSpotStream();

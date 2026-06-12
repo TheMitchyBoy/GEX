@@ -14,7 +14,7 @@ import pandas as pd
 from gex_core.features import safe_float
 from gex_core.env_bootstrap import parse_env_minutes, uw_api_configured, uw_api_key
 from gex_core.features import enrich_snapshot_metrics
-from gex_core.history import load_snapshot_at_ts
+from gex_core.history import get_latest_ts, load_snapshot_at_ts
 from gex_core.market_time import (
     market_now_export_ts,
     market_today,
@@ -36,6 +36,12 @@ from gex_core.storage import (
 from gex_core.tickers import PRIMARY_TICKER
 
 logger = logging.getLogger(__name__)
+
+
+def page_minimal_load_enabled() -> bool:
+    """Dashboard pages load only the active gamma slice (exports still save full history)."""
+    return os.environ.get("GEX_PAGE_MINIMAL_LOAD", "1").strip().lower() in {"1", "true", "yes", "on"}
+
 
 _DEFAULT_INTERVAL = parse_env_minutes("GEX_BACKFILL_INTERVAL_MINUTES", 10.0)
 _CACHE_TTL = int(
@@ -284,22 +290,32 @@ def list_periscope_timestamps(
     *,
     api_key: str | None = None,
     today: str | None = None,
+    minimal: bool = False,
 ) -> list[str]:
     """
     Timestamp catalog for Periscope without scanning thousands of CSV files.
 
-    Historical days come from the SQLite index; today uses UW intraday API.
+    Historical days come from the SQLite index; today uses UW intraday API unless
+  ``minimal`` (indexed exports + latest save only — avoids full intraday fetch).
     """
     ticker = ticker.upper()
     today = today or market_today()
     historical = list_indexed_timestamps_before_date(ticker, today)
+
+    today_indexed = list_indexed_timestamps_for_date(ticker, today)
+    if minimal:
+        if today_indexed:
+            return historical + today_indexed
+        latest = get_latest_ts(ticker)
+        if latest and ts_market_date(latest) == today:
+            return historical + [latest]
+        return historical
 
     if uw_api_configured() or api_key:
         api_today = list_api_intraday_timestamps(ticker, today, api_key=api_key)
         if api_today:
             return historical + api_today
 
-    today_indexed = list_indexed_timestamps_for_date(ticker, today)
     if today_indexed:
         return historical + today_indexed
     return historical
@@ -334,15 +350,24 @@ def load_periscope_snapshot(
     api_key: str | None = None,
     uw_entry: dict[str, Any] | None = None,
     market_date: str | None = None,
+    minimal: bool = False,
 ) -> dict[str, Any] | None:
     """Load one snapshot via API (same-day) or a single indexed CSV."""
     ticker = ticker.upper()
     if not ts:
         if uw_entry and uw_entry.get("agg") is not None:
             return snapshot_from_uw_entry(ticker, uw_entry)
+        latest = get_latest_ts(ticker)
+        if latest:
+            return load_snapshot_at_ts(ticker, latest)
         return None
 
     day = (market_date or ts_market_date(ts))[:10]
+    if minimal:
+        if should_use_api_for_date(day, api_key=api_key) and uw_entry and uw_entry.get("agg") is not None:
+            return snapshot_from_uw_entry(ticker, uw_entry, ts=ts)
+        return load_snapshot_at_ts(ticker, ts)
+
     if should_use_api_for_date(day, api_key=api_key):
         cache = fetch_intraday_day_cache(ticker, day, api_key=api_key)
         if cache and ts in cache.snapshots:

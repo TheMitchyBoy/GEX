@@ -256,6 +256,7 @@ def _ensure_greek_exposure_df(
     snapshot: dict[str, Any],
     uw_entry: dict | None,
     greek_df: pd.DataFrame | None,
+    allow_fetch: bool = True,
 ) -> pd.DataFrame | None:
     """Resolve call/put greek data for magnet maps — never spot-exposures OI."""
     if _greek_df_has_call_put(greek_df):
@@ -293,7 +294,7 @@ def _ensure_greek_exposure_df(
         if greek_df is None and not loaded.empty:
             greek_df = loaded
 
-    if market_date:
+    if allow_fetch and market_date:
         fetched = _fetch_greek_exposure_cached(ticker, market_date, api_key=api_key)
         if fetched is not None and not fetched.empty:
             return fetched
@@ -476,11 +477,12 @@ def build_periscope_context(
     price_points: list[dict] | None = None,
     previous_snapshot: dict | None = None,
     api_key: str | None = None,
+    minimal: bool = False,
 ) -> dict[str, Any]:
     """Assemble template/API payload for the Periscope exposure view."""
     exposure = exposure.lower() if exposure.lower() in EXPOSURE_TYPES else "gamma"
     api_key = api_key or uw_api_key()
-    timestamps = list_periscope_timestamps(ticker, api_key=api_key)
+    timestamps = list_periscope_timestamps(ticker, api_key=api_key, minimal=minimal)
     resolved_ts = resolve_selected_timestamp(timestamps, ts=selected_ts, date=selected_date)
     timeline = build_timeline_navigation(timestamps, resolved_ts, ticker=ticker)
     active_date = selected_date or (ts_market_date(resolved_ts) if resolved_ts else market_today())
@@ -491,17 +493,20 @@ def build_periscope_context(
         api_key=api_key,
         uw_entry=uw_entry,
         market_date=active_date,
+        minimal=minimal,
     ) or {}
 
-    if not price_points:
+    if not price_points and not minimal:
         price_points = periscope_price_points(
             ticker,
             market_date=active_date,
             api_key=api_key,
             fallback_history=history,
         )
+    elif minimal:
+        price_points = price_points or []
 
-    if previous_snapshot is None and resolved_ts and resolved_ts in timestamps:
+    if not minimal and previous_snapshot is None and resolved_ts and resolved_ts in timestamps:
         prev_idx = timestamps.index(resolved_ts) - 1
         if prev_idx >= 0:
             prev_ts = timestamps[prev_idx]
@@ -544,6 +549,7 @@ def build_periscope_context(
         snapshot=selected,
         uw_entry=uw_entry,
         greek_df=greek_df,
+        allow_fetch=not minimal,
     )
 
     current_exposure = _exposure_series(spot_df, greek_df, gex_series, exposure, spot=spot or None)
@@ -586,7 +592,7 @@ def build_periscope_context(
     replay_index = max(0, timestamps.index(selected["ts"])) if selected.get("ts") in timestamps else max(0, len(timestamps) - 1)
 
     exposure_trail: list[dict[str, Any]] = []
-    if resolved_ts and resolved_ts in timestamps:
+    if not minimal and resolved_ts and resolved_ts in timestamps:
         trail_idx = timestamps.index(resolved_ts)
         for back in range(1, 5):
             prior_idx = trail_idx - back
@@ -643,6 +649,7 @@ def build_periscope_context(
         "next_ts": timeline.get("next_ts"),
         "timeline": timeline,
         "has_history": bool(timestamps),
+        "minimal": minimal,
         "price_points": price_points or [],
         "exposure_series": current_exposure,
         "magnet_exposure_series": magnet_exposure.sort_index(),

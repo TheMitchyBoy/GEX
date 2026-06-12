@@ -443,6 +443,19 @@ def _is_near_spot_window(window_pct: float) -> bool:
     return window_pct <= NEAR_SPOT_STRIKE_WINDOW_PCT + 1e-9
 
 
+def _periscope_minimal_load(
+    *,
+    selected_ts: str | None = None,
+    selected_date: str | None = None,
+    include_trail: bool = False,
+) -> bool:
+    from gex_core.periscope_api import page_minimal_load_enabled
+
+    if not page_minimal_load_enabled():
+        return False
+    return not selected_ts and not selected_date and not include_trail
+
+
 def _render_periscope_dashboard(
     ticker: str = PRIMARY_TICKER,
     *,
@@ -460,9 +473,10 @@ def _render_periscope_dashboard(
     bootstrap_status = request.args.get("bootstrap")
     refresh_message = None
 
-    has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key()))
+    has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key(), minimal=True))
 
     uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    minimal = _periscope_minimal_load(selected_ts=requested_ts, selected_date=requested_date)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -470,6 +484,7 @@ def _render_periscope_dashboard(
         exposure=exposure,
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=minimal,
     )
     timeline = ctx.get("timeline") or {}
 
@@ -505,42 +520,69 @@ def _render_periscope_dashboard(
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
 
-    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     max_strikes = 40 if near_spot_view else 65
-    if wall_mode:
-        from gex_core.trading.strategy_viz import build_wall_strategy_dashboard
+    strategy_chart_json = None
+    if minimal:
+        if wall_mode:
+            from gex_core.trading.strategy_viz import build_wall_strategy_state
 
-        strategy = build_wall_strategy_dashboard(
-            ticker=ticker,
-            spot=spot,
-            exposure=gex_series,
-            snapshot=selected,
-            window_pct=strike_window_pct,
-            max_strikes=max_strikes,
-            exposure_trail=exposure_trail,
-            previous_exposure=prev_series,
-        )
+            strategy_state = build_wall_strategy_state(
+                ticker=ticker,
+                spot=spot,
+                exposure=gex_series,
+                snapshot=selected,
+                window_pct=strike_window_pct,
+            )
+        else:
+            from gex_core.trading.strategy_viz import build_strategy_state
+
+            strategy_state = build_strategy_state(
+                ticker=ticker,
+                spot=spot,
+                exposure=gex_series,
+                previous_exposure=prev_series,
+                snapshot=selected,
+                prev_spot=prev_spot,
+                uw_bundle=None,
+            )
     else:
-        from gex_core.trading.strategy_viz import build_strategy_dashboard
+        uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
+        if wall_mode:
+            from gex_core.trading.strategy_viz import build_wall_strategy_dashboard
 
-        strategy = build_strategy_dashboard(
-            ticker=ticker,
-            spot=spot,
-            exposure=gex_series,
-            previous_exposure=prev_series,
-            snapshot=selected,
-            prev_spot=prev_spot,
-            uw_bundle=uw_bundle,
-            window_pct=strike_window_pct,
-            max_strikes=max_strikes,
-            exposure_trail=exposure_trail,
-        )
-    strategy_chart_json = strategy["chart_json"]
-    strategy_state = strategy["state"]
+            strategy = build_wall_strategy_dashboard(
+                ticker=ticker,
+                spot=spot,
+                exposure=gex_series,
+                snapshot=selected,
+                window_pct=strike_window_pct,
+                max_strikes=max_strikes,
+                exposure_trail=exposure_trail,
+                previous_exposure=prev_series,
+            )
+        else:
+            from gex_core.trading.strategy_viz import build_strategy_dashboard
+
+            strategy = build_strategy_dashboard(
+                ticker=ticker,
+                spot=spot,
+                exposure=gex_series,
+                previous_exposure=prev_series,
+                snapshot=selected,
+                prev_spot=prev_spot,
+                uw_bundle=uw_bundle,
+                window_pct=strike_window_pct,
+                max_strikes=max_strikes,
+                exposure_trail=exposure_trail,
+            )
+        strategy_chart_json = strategy["chart_json"]
+        strategy_state = strategy["state"]
 
     daily_strategy = None
-    if uw_bundle:
-        daily_strategy = (uw_bundle.get("daily_learning") or {}).get("today_strategy")
+    if not minimal:
+        uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
+        if uw_bundle:
+            daily_strategy = (uw_bundle.get("daily_learning") or {}).get("today_strategy")
     chat_welcome = build_welcome_message(
         ticker=ticker,
         spot=safe_float(spot, 0.0) or None,
@@ -602,6 +644,7 @@ def _render_periscope_dashboard(
         refresh_minutes=REFRESH_MINUTES,
         vanna_charm_available=ctx.get("vanna_charm_available", False),
         auto_trader=auto_trader,
+        defer_strategy_chart=minimal,
     )
 
 
@@ -716,6 +759,7 @@ def _wall_gex_live_data(ticker: str) -> tuple[float | None, pd.Series | None, di
         exposure="gamma",
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=True,
     )
     spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
     exposure, _ = _strategy_exposure_from_context(ctx)
@@ -811,7 +855,7 @@ def refresh_ticker_data(ticker):
     if not _admin_action_authorized(request):
         abort(403)
     ok, reason = _run_ticker_refresh(ticker)
-    has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key()))
+    has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key(), minimal=True))
     if ok:
         status = "ok"
     elif has_exports:
@@ -925,6 +969,7 @@ def api_periscope():
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
     uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    minimal = _periscope_minimal_load(selected_ts=requested_ts, selected_date=requested_date)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -932,6 +977,7 @@ def api_periscope():
         exposure=exposure,
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=minimal,
     )
     timeline = ctx.get("timeline") or {}
     return jsonify(
@@ -993,11 +1039,12 @@ def api_trader_run():
         exposure="gamma",
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=True,
     )
     spot = ctx.get("spot")
     if not spot:
         return jsonify({"error": "No spot price available"}), 503
-    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
+    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry, fetch_extras=False)
     exposure, previous_exposure = _strategy_exposure_from_context(ctx)
     result = run_trading_cycle(
         ticker=ticker,
@@ -1016,13 +1063,17 @@ def api_trader_run():
 def api_trader_strategy():
     """Live strategy signals, filter state, and chart spec for dashboard refresh."""
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
+    requested_ts = request.args.get("ts")
+    include_trail = request.args.get("trail") == "1"
+    minimal = _periscope_minimal_load(selected_ts=requested_ts, include_trail=include_trail)
     uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
-        selected_ts=request.args.get("ts"),
+        selected_ts=requested_ts,
         exposure="gamma",
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=minimal,
     )
     history = ctx.get("history") or []
     prev_spot = None
@@ -1032,7 +1083,7 @@ def api_trader_strategy():
             if row.get("ts") == sel_ts and i > 0:
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
-    uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
+    uw_bundle = None if minimal else _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
     exposure, previous_exposure = _strategy_exposure_from_context(ctx)
     exposure_trail = _exposure_trail_from_context(ctx)
     window_pct = _dashboard_strike_window_pct()
@@ -1902,6 +1953,7 @@ def _run_wall_gex_trader(ticker: str) -> dict[str, Any] | None:
         exposure="gamma",
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=True,
     )
     spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
     if not spot:
@@ -1931,6 +1983,7 @@ def _run_auto_trader(ticker: str) -> dict[str, Any] | None:
         exposure="gamma",
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=True,
     )
     spot = _resolve_trader_spot(ticker, safe_float(ctx.get("spot"), 0.0) or None)
     if not spot:
