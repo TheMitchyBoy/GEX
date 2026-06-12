@@ -15,7 +15,7 @@ from gex_core.features import (
     parse_gamma_flip_value,
     safe_float,
     select_dense_atm_strike_series,
-    thin_strike_series_for_chart,
+    snap_strike_grid_for_chart,
 )
 from gex_core.trading.advisor import advise_entry
 from gex_core.trading.config import (
@@ -68,29 +68,34 @@ def _chart_exposure_window(
     spot: float,
     *,
     window_pct: float = 0.04,
-    max_strikes: int = 28,
+    max_strikes: int = 40,
 ) -> pd.Series:
-    """ATM strike ladder trimmed for readable strategy-map bars."""
+    """ATM band snapped to a regular strike grid for legible strategy-map bars."""
     if series is None or series.empty or spot <= 0:
         return pd.Series(dtype=float)
-    dense = select_dense_atm_strike_series(
+    band = select_dense_atm_strike_series(
         pd.Series(series, dtype=float).sort_index(),
         spot,
         window_pct=window_pct,
-        max_strikes=max(max_strikes * 3, 40),
+        max_strikes=max(max_strikes * 4, 80),
     )
-    return thin_strike_series_for_chart(dense, spot, max_strikes=max_strikes)
+    return snap_strike_grid_for_chart(band, spot, max_strikes=max_strikes)
 
 
 def _gamma_bar_width(strikes: list[float]) -> float | None:
-    fill = 0.68 if len(strikes) > 18 else 0.82
-    return _bar_width(strikes, fill_ratio=fill)
+    """Leave visible gaps between horizontal bars on the strike axis."""
+    if len(strikes) < 2:
+        return None
+    from gex_core.charts import _median_strike_step
+
+    step = _median_strike_step(strikes)
+    return max(1.0, step * 0.48)
 
 
 def _strategy_chart_height(n_strikes: int) -> int:
-    """Scale chart height with strike count so bars are not stacked on top of each other."""
-    strike_rows = max(8, n_strikes)
-    return max(640, min(1100, 18 * strike_rows + 260))
+    """Give each strike row enough vertical pixels."""
+    rows = max(10, n_strikes)
+    return max(720, min(1400, 26 * rows + 300))
 
 
 def _normalize_exposure_trail(
@@ -171,7 +176,7 @@ def _gamma_bar_marker_styles(window: pd.Series, prior: pd.Series | None) -> tupl
     for val, delta in zip(window.values, deltas.values):
         base = _GREEN if float(val) >= 0 else _RED
         heat = min(1.0, abs(float(delta)) / max_abs)
-        opacities.append(0.55 + 0.4 * heat)
+        opacities.append(0.72 + 0.25 * heat)
         if heat >= 0.65:
             colors.append(_AMBER if float(delta) >= 0 else "#fb923c")
         else:
@@ -199,7 +204,7 @@ def _add_gamma_bars(
             marker=dict(
                 color=colors,
                 opacity=opacities,
-                line=dict(width=0.6, color="rgba(255,255,255,0.12)"),
+                line=dict(width=0.8, color="rgba(255,255,255,0.22)"),
             ),
             name="Gamma",
             meta={"layer": "gamma_bars"},
@@ -536,7 +541,7 @@ def build_strategy_chart(
     exposure: pd.Series | None,
     state: dict[str, Any],
     window_pct: float = 0.04,
-    max_strikes: int = 28,
+    max_strikes: int = 40,
     exposure_trail: list[dict[str, Any]] | None = None,
     previous_exposure: pd.Series | None = None,
     wall_mode: bool = False,
@@ -698,10 +703,11 @@ def build_strategy_chart(
         paper_bgcolor=_BG,
         plot_bgcolor=_PANEL,
         font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
-        margin=dict(l=72, r=28, t=42, b=44),
+        margin=dict(l=80, r=32, t=44, b=48),
         height=_strategy_chart_height(len(window)),
         showlegend=False,
         clickmode="event+select",
+        bargap=0.15,
         title=dict(
             text=f"WR {win_rate:.0%} · ${total_pnl:,.0f} cumulative · click strike → trade",
             x=0.01,
@@ -738,7 +744,7 @@ def build_strategy_dashboard(
     prev_spot: float | None = None,
     uw_bundle: dict[str, Any] | None = None,
     window_pct: float = 0.04,
-    max_strikes: int = 28,
+    max_strikes: int = 40,
     exposure_trail: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     state = build_strategy_state(
@@ -884,7 +890,7 @@ def build_wall_strategy_chart(
     exposure: pd.Series | None,
     state: dict[str, Any],
     window_pct: float = 0.01,
-    max_strikes: int = 16,
+    max_strikes: int = 24,
     exposure_trail: list[dict[str, Any]] | None = None,
     previous_exposure: pd.Series | None = None,
 ) -> go.Figure:
@@ -1042,10 +1048,11 @@ def build_wall_strategy_chart(
         paper_bgcolor=_BG,
         plot_bgcolor=_PANEL,
         font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
-        margin=dict(l=72, r=28, t=42, b=44),
+        margin=dict(l=80, r=32, t=44, b=48),
         height=_strategy_chart_height(len(window)),
         showlegend=False,
         clickmode="event+select",
+        bargap=0.15,
         title=dict(
             text=f"Wall GEX · WR {win_rate:.0%} · ${total_pnl:,.0f} · click strike → trade",
             x=0.01,
@@ -1079,7 +1086,7 @@ def build_wall_strategy_dashboard(
     exposure: pd.Series | None,
     snapshot: dict[str, Any] | None = None,
     window_pct: float = 0.01,
-    max_strikes: int = 16,
+    max_strikes: int = 24,
     exposure_trail: list[dict[str, Any]] | None = None,
     previous_exposure: pd.Series | None = None,
 ) -> dict[str, Any]:

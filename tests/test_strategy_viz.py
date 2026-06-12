@@ -26,21 +26,22 @@ def test_chart_exposure_window_keeps_dense_atm_strikes():
     series = pd.Series(
         {7000 + i * 5: float(i % 3 - 1) for i in range(200)},
     )
-    window = _chart_exposure_window(series, 7383.0, window_pct=0.025, max_strikes=28)
-    assert 8 <= len(window) <= 28
+    window = _chart_exposure_window(series, 7383.0, window_pct=0.025, max_strikes=40)
+    assert 10 <= len(window) <= 40
     steps = sorted(window.index.astype(float))
     gaps = [b - a for a, b in zip(steps, steps[1:])]
-    assert max(gaps) >= 5.0
+    assert all(g % 5 == 0 for g in gaps)
     assert window.index.min() <= 7383.0 <= window.index.max()
 
 
-def test_chart_exposure_window_thins_crowded_band():
+def test_chart_exposure_window_snaps_wide_band_to_coarse_grid():
     spot = 6000.0
     series = pd.Series({float(s): 0.1 * (s % 3) for s in range(5880, 6121, 5)})
-    window = _chart_exposure_window(series, spot, window_pct=0.04, max_strikes=16)
-    assert len(window) <= 16
+    window = _chart_exposure_window(series, spot, window_pct=0.04, max_strikes=40)
+    assert len(window) <= 40
     steps = sorted(window.index.astype(float))
-    assert min(b - a for a, b in zip(steps, steps[1:])) >= 5.0
+    gaps = [b - a for b, a in zip(steps[1:], steps[:-1])]
+    assert min(gaps) >= 5.0
 
 
 def test_build_strategy_state_with_signals(monkeypatch):
@@ -69,7 +70,7 @@ def test_chart_exposure_window_one_percent_band():
     series = pd.Series(
         {float(s): (1.0 if s == 6000 else -0.5) for s in range(5880, 6121, 5)},
     )
-    window = _chart_exposure_window(series, spot, window_pct=0.01, max_strikes=16)
+    window = _chart_exposure_window(series, spot, window_pct=0.01, max_strikes=24)
     assert window.index.min() >= spot * 0.99 - 0.01
     assert window.index.max() <= spot * 1.01 + 0.01
     assert 6000.0 in window.index.astype(float).tolist()
@@ -109,7 +110,7 @@ def test_build_strategy_dashboard_near_spot_window(monkeypatch):
         previous_exposure=prev,
         snapshot={"regime": "LONG gamma"},
         window_pct=0.01,
-        max_strikes=16,
+        max_strikes=24,
     )
     assert out["window_pct"] == 0.01
 
@@ -224,7 +225,7 @@ def test_build_wall_strategy_dashboard_returns_chart(monkeypatch):
         exposure=exposure,
         snapshot={"regime": "LONG gamma"},
         window_pct=0.01,
-        max_strikes=16,
+        max_strikes=24,
     )
     assert out["strategy_mode"] == "wall"
     assert "chart_json" in out

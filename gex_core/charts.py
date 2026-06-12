@@ -154,14 +154,24 @@ def _strike_axis_layout(
         zerolinecolor="rgba(255,255,255,0.15)",
     )
     n = len(strikes)
-    if n <= 10:
-        tick_every = 1
-    elif n <= 18:
-        tick_every = 2
+    span = max(strikes) - min(strikes)
+    if n <= 14:
+        layout["tickmode"] = "array"
+        layout["tickvals"] = strikes
+    elif span >= 180:
+        label_step = 25.0
+        layout["dtick"] = label_step
+        layout["tick0"] = label_step * round(min(strikes) / label_step)
+    elif span >= 70:
+        label_step = 10.0
+        layout["dtick"] = label_step
+        layout["tick0"] = label_step * round(min(strikes) / label_step)
+    elif step >= 5:
+        layout["dtick"] = step * 2
     else:
-        tick_every = max(1, int(round(n / 10)))
-    layout["tickmode"] = "array"
-    layout["tickvals"] = strikes[::tick_every]
+        tick_every = 2 if n > 20 else 1
+        layout["tickmode"] = "array"
+        layout["tickvals"] = strikes[::tick_every]
     return layout
 
 

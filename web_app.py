@@ -520,7 +520,7 @@ def _render_periscope_dashboard(
                 prev_spot = safe_float(history[i - 1].get("spot"), 0.0) or None
                 break
 
-    max_strikes = 16 if near_spot_view else 28
+    max_strikes = 24 if near_spot_view else 40
     strategy_chart_json = None
     if minimal:
         if wall_mode:
@@ -1089,7 +1089,7 @@ def api_trader_strategy():
     window_pct = _dashboard_strike_window_pct()
     near_spot = _is_near_spot_window(window_pct)
     wall_mode = (request.args.get("strategy") or "").lower() == "wall" or near_spot
-    max_strikes = 16 if near_spot else 28
+    max_strikes = 24 if near_spot else 40
     if wall_mode:
         from gex_core.trading.strategy_viz import build_wall_strategy_dashboard
 

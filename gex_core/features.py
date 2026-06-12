@@ -488,38 +488,80 @@ def select_dense_atm_strike_series(
     return window.sort_index()
 
 
-def thin_strike_series_for_chart(
+def _strike_on_grid(strike: float, grid: float) -> bool:
+    """True when strike sits on a regular SPX-style grid (5, 10, 25, …)."""
+    if grid <= 0:
+        return False
+    aligned = round(float(strike) / grid) * grid
+    return abs(float(strike) - aligned) < 0.51
+
+
+def snap_strike_grid_for_chart(
     series: pd.Series,
     spot: float | None,
     *,
     max_strikes: int,
+    pin_strikes: tuple[float, ...] = (),
 ) -> pd.Series:
-    """Evenly thin a dense ATM ladder so horizontal bars stay readable."""
-    if series is None or series.empty or len(series) <= max(1, int(max_strikes)):
-        return series.sort_index() if series is not None else pd.Series(dtype=float)
+    """Keep a regular strike grid (5/10/25 pt) so chart bars line up cleanly."""
+    if series is None or series.empty:
+        return pd.Series(dtype=float)
 
     window = series.sort_index()
-    strikes = [float(s) for s in window.index]
-    spot_val = safe_float(spot, 0.0)
+    if len(window) <= max(1, int(max_strikes)):
+        return window
 
+    spot_val = safe_float(spot, 0.0)
     pinned: set[float] = set()
+    for raw in pin_strikes:
+        try:
+            target = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if target <= 0:
+            continue
+        idx_vals = window.index.astype(float)
+        pinned.add(float(window.index[np.abs(idx_vals - target).argmin()]))
     if spot_val > 0:
         idx_vals = window.index.astype(float)
         pinned.add(float(window.index[np.abs(idx_vals - spot_val).argmin()]))
     for idx in window.abs().nlargest(min(3, len(window))).index:
         pinned.add(float(idx))
-    for idx in window.abs().nsmallest(min(2, len(window))).index:
-        pinned.add(float(idx))
 
-    remaining = max(1, int(max_strikes) - len(pinned))
-    pool = [s for s in strikes if s not in pinned]
-    if len(pool) <= remaining:
-        keep = sorted(pinned | set(pool))
-    else:
-        positions = np.linspace(0, len(pool) - 1, remaining, dtype=int)
-        keep = sorted(pinned | {pool[int(i)] for i in positions})
+    chosen: pd.Series | None = None
+    for grid in (5.0, 10.0, 25.0, 50.0):
+        keys = [
+            idx
+            for idx in window.index
+            if _strike_on_grid(float(idx), grid) or float(idx) in pinned
+        ]
+        if not keys:
+            continue
+        subset = window.loc[sorted(set(keys))].sort_index()
+        if len(subset) <= max_strikes:
+            chosen = subset
+            break
+        if chosen is None or len(subset) < len(chosen):
+            chosen = subset
 
-    return window.loc[sorted(keep)].sort_index()
+    if chosen is None or chosen.empty:
+        chosen = window
+
+    if len(chosen) <= max_strikes:
+        return chosen.sort_index()
+
+    keep_pinned = [idx for idx in chosen.index if float(idx) in pinned]
+    droppable = [idx for idx in chosen.index if float(idx) not in pinned]
+    if spot_val > 0 and droppable:
+        distances = pd.Series(
+            np.abs(pd.Series(droppable, dtype=float) - spot_val),
+            index=droppable,
+        )
+        drop_n = len(chosen) - max_strikes
+        drop = set(distances.nlargest(drop_n).index)
+        keep = [idx for idx in chosen.index if idx in keep_pinned or idx not in drop]
+        return chosen.loc[keep].sort_index()
+    return chosen.iloc[:max_strikes].sort_index()
 
 
 def spot_covers_strike_grid(series: pd.Series, spot: float, *, tolerance_pct: float = 0.015) -> bool:
