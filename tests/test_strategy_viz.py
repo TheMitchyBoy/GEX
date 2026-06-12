@@ -44,6 +44,30 @@ def test_chart_exposure_window_snaps_wide_band_to_coarse_grid():
     assert min(gaps) >= 5.0
 
 
+def test_build_strategy_state_skip_advisor_avoids_llm(monkeypatch):
+    calls = {"n": 0}
+
+    def _track(*_a, **_k):
+        calls["n"] += 1
+        return {"approve": False, "reason": "blocked", "source": "openai"}
+
+    monkeypatch.setattr("gex_core.trading.strategy_viz.advise_entry", _track)
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
+    cur = pd.Series([0.2, 1.5, 0.4], index=[7380.0, 7390.0, 7400.0])
+    prev = pd.Series([0.1, 0.5, 0.35], index=[7380.0, 7390.0, 7400.0])
+    state = build_strategy_state(
+        ticker="SPX",
+        spot=7385.0,
+        exposure=cur,
+        previous_exposure=prev,
+        snapshot={"regime": "LONG gamma", "gamma_flip": 7370.0},
+        skip_advisor=True,
+    )
+    assert state["signals"]["available"]
+    assert calls["n"] == 0
+    assert state["advice"]["source"] in {"rule_based", "rules"}
+
+
 def test_build_strategy_state_with_signals(monkeypatch):
     monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: None)
     monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")

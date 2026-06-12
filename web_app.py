@@ -627,6 +627,7 @@ def _render_periscope_dashboard(
                 snapshot=selected,
                 prev_spot=prev_spot,
                 uw_bundle=None,
+                skip_advisor=True,
             )
     else:
         uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
@@ -1143,6 +1144,7 @@ def api_trader_strategy():
     include_trail = request.args.get("trail") == "1"
     minimal = _periscope_minimal_load(selected_ts=requested_ts, include_trail=include_trail)
     live = request.args.get("live") == "1"
+    skip_advisor = not live
     blocking = live or not minimal or include_trail
     uw_entry = _uw_entry_for_request(ticker, blocking=blocking)
     ctx = build_periscope_context(
@@ -1195,6 +1197,7 @@ def api_trader_strategy():
             window_pct=window_pct,
             max_strikes=max_strikes,
             exposure_trail=exposure_trail,
+            skip_advisor=skip_advisor,
         )
     timeline = ctx.get("timeline") or {}
     payload["selected_ts"] = ctx.get("selected_ts")
@@ -1380,6 +1383,7 @@ def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
         snapshot=ctx.get("selected"),
         prev_spot=prev_spot,
         uw_bundle=uw_bundle,
+        skip_advisor=True,
     )
     trade = build_recommended_trade(strategy_state=state)
     return {"strategy_state": state, "recommended_trade": trade}

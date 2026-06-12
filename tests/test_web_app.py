@@ -90,6 +90,26 @@ def test_gamma_dashboard_renders_periscope():
     assert b"strategyChart" in response.data
 
 
+def test_gamma_dashboard_skips_llm_advisor_on_html_render(monkeypatch):
+    import time
+
+    import web_app
+
+    calls = {"n": 0}
+
+    def _track(*_a, **_k):
+        calls["n"] += 1
+        return {"approve": False, "reason": "blocked", "source": "openai"}
+
+    monkeypatch.setattr("gex_core.trading.strategy_viz.advise_entry", _track)
+    t0 = time.perf_counter()
+    response = web_app.APP.test_client().get("/gamma")
+    elapsed = time.perf_counter() - t0
+    assert response.status_code == 200
+    assert calls["n"] == 0
+    assert elapsed < 2.0
+
+
 def test_gamma_near_dashboard_renders_near_spot_walls():
     from web_app import APP
 

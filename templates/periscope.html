@@ -588,7 +588,10 @@
               </div>
               <span class="chip" style="font-size:0.58rem;">±{{ '%.1f'|format(strike_window_pct * 100) }}% window</span>
             </div>
-            <div class="uw-panel-body"><div id="strategyChart"></div></div>
+            <div class="uw-panel-body">
+              <div id="strategyChart"></div>
+              <div id="strategyChartLoading" class="small muted text-center py-4" style="display:none">Loading strategy chart…</div>
+            </div>
             <div class="layer-toggles" id="layerToggles">
               <label class="layer-toggle"><input type="checkbox" id="layerGammaHistory" checked> γ history</label>
               <label class="layer-toggle"><input type="checkbox" id="layerDeltaPulse" checked> Δγ pulses</label>
@@ -1120,17 +1123,25 @@
         else setTimeout(run, 200);
       }
 
+      function setStrategyChartLoading(on) {
+        const loading = document.getElementById('strategyChartLoading');
+        if (loading) loading.style.display = on ? 'block' : 'none';
+        if (chartEl) chartEl.style.display = on ? 'none' : 'block';
+      }
+
       async function loadStrategySlice({ ts = null, date = null, pushUrl = true } = {}) {
         const params = strategyQueryParams();
         if (ts) params.set('ts', ts);
         else if (date) params.delete('ts'), params.set('date', date);
         const qs = params.toString() ? '?' + params.toString() : '';
+        setStrategyChartLoading(true);
         try {
           const res = await fetch('/api/trader/strategy' + qs);
           const data = await res.json();
           applyStrategyPayload(data);
           if (pushUrl) history.replaceState(null, '', '?' + params.toString());
         } catch (_) {}
+        finally { setStrategyChartLoading(false); }
       }
 
       async function refreshStrategy() {
@@ -1151,6 +1162,7 @@
         renderStrategyChart(strategySpec);
         queueDailyStrategy(false);
       } else {
+        setStrategyChartLoading(true);
         loadStrategySlice({ pushUrl: false });
       }
       bindChartStrikeClick();

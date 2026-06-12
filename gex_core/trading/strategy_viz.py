@@ -17,7 +17,7 @@ from gex_core.features import (
     select_dense_atm_strike_series,
     snap_strike_grid_for_chart,
 )
-from gex_core.trading.advisor import advise_entry
+from gex_core.trading.advisor import _rule_based_advice, advise_entry, get_trade_memory_for_ai
 from gex_core.trading.config import (
     max_strike_distance_pct,
     partial_take_profit_pct,
@@ -444,6 +444,7 @@ def build_strategy_state(
     snapshot: dict[str, Any] | None = None,
     prev_spot: float | None = None,
     uw_bundle: dict[str, Any] | None = None,
+    skip_advisor: bool = False,
 ) -> dict[str, Any]:
     """Current signals, filter checklist, and open-position marks for the dashboard."""
     spot_val = safe_float(spot, 0.0)
@@ -467,7 +468,11 @@ def build_strategy_state(
     filters = {"approve": False, "reason": "No signal"}
     if signals.get("available"):
         filters = evaluate_entry_filters(signals, market=market, uw_bundle=uw_bundle)
-        advice = advise_entry(ticker=ticker, signals=signals, uw_bundle=uw_bundle, market=market)
+        if skip_advisor:
+            memory = get_trade_memory_for_ai(ticker)
+            advice = _rule_based_advice(signals, memory, market=market, uw_bundle=uw_bundle)
+        else:
+            advice = advise_entry(ticker=ticker, signals=signals, uw_bundle=uw_bundle, market=market)
 
     open_positions = list_open_trades(ticker)
     marked_positions = []
@@ -746,6 +751,7 @@ def build_strategy_dashboard(
     window_pct: float = 0.04,
     max_strikes: int = 40,
     exposure_trail: list[dict[str, Any]] | None = None,
+    skip_advisor: bool = False,
 ) -> dict[str, Any]:
     state = build_strategy_state(
         ticker=ticker,
@@ -755,6 +761,7 @@ def build_strategy_dashboard(
         snapshot=snapshot,
         prev_spot=prev_spot,
         uw_bundle=uw_bundle,
+        skip_advisor=skip_advisor,
     )
     fig = build_strategy_chart(
         spot=spot,
