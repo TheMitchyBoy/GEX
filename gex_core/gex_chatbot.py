@@ -77,6 +77,12 @@ def _prune_sessions() -> None:
     stale = [sid for sid, s in _sessions.items() if now - s.updated_at > _SESSION_TTL_SECONDS]
     for sid in stale:
         _sessions.pop(sid, None)
+        try:
+            from gex_core.chat_store import delete_session
+
+            delete_session(sid)
+        except Exception:
+            pass
     if len(_sessions) <= _MAX_SESSIONS:
         return
     ordered = sorted(_sessions.items(), key=lambda item: item[1].updated_at)
@@ -84,13 +90,40 @@ def _prune_sessions() -> None:
         _sessions.pop(sid, None)
 
 
-def get_or_create_session(session_id: str | None) -> ChatSession:
+def _persist_session(session: ChatSession, ticker: str | None = None) -> None:
+    try:
+        from gex_core.chat_store import save_session
+
+        save_session(
+            session_id=session.session_id,
+            messages=session.messages[-_MAX_MESSAGES:],
+            ticker=ticker,
+        )
+    except Exception:
+        logger.debug("Chat session persist failed", exc_info=True)
+
+
+def get_or_create_session(session_id: str | None, *, ticker: str | None = None) -> ChatSession:
     with _lock:
         _prune_sessions()
         if session_id and session_id in _sessions:
             session = _sessions[session_id]
             session.updated_at = time.monotonic()
             return session
+        if session_id:
+            try:
+                from gex_core.chat_store import load_session
+
+                stored = load_session(session_id)
+                if stored and stored.get("messages"):
+                    session = ChatSession(
+                        session_id=session_id,
+                        messages=list(stored["messages"])[-_MAX_MESSAGES:],
+                    )
+                    _sessions[session_id] = session
+                    return session
+            except Exception:
+                logger.debug("Chat session load failed", exc_info=True)
         new_id = session_id or uuid.uuid4().hex
         session = ChatSession(session_id=new_id)
         _sessions[new_id] = session
@@ -100,6 +133,12 @@ def get_or_create_session(session_id: str | None) -> ChatSession:
 def reset_session(session_id: str) -> None:
     with _lock:
         _sessions.pop(session_id, None)
+    try:
+        from gex_core.chat_store import delete_session
+
+        delete_session(session_id)
+    except Exception:
+        pass
 
 
 def build_welcome_message(
@@ -287,7 +326,7 @@ def chat_reply(
     if not user_message:
         return {"error": "Message cannot be empty"}
 
-    session = get_or_create_session(session_id)
+    session = get_or_create_session(session_id, ticker=ticker)
 
     if cumulative_gex is None or cumulative_gex.empty:
         cumulative_gex = gex_by_strike.cumsum() if not gex_by_strike.empty else pd.Series(dtype=float)
@@ -393,6 +432,7 @@ def chat_reply(
         if len(session.messages) > _MAX_MESSAGES:
             session.messages = session.messages[-_MAX_MESSAGES:]
         session.updated_at = time.monotonic()
+    _persist_session(session, ticker=ticker)
 
     return {
         "session_id": session.session_id,

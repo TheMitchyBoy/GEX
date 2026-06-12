@@ -79,6 +79,12 @@ def write_snapshot_export(
             strike_path=str(strike_path),
         )
         clear_history_cache()
+        try:
+            from gex_core.prediction_log import reconcile_llm_predictions
+
+            reconcile_llm_predictions(ticker.upper(), latest_ts=timestamp)
+        except Exception:
+            pass
     except Exception:
         pass
 

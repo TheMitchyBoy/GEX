@@ -1553,11 +1553,19 @@ def api_agent_daily_strategy():
         uw_bundle=uw_bundle,
         force_refresh=force,
     )
+    llm_calibration = {}
+    try:
+        from gex_core.prediction_log import get_llm_calibration_stats
+
+        llm_calibration = get_llm_calibration_stats(ticker)
+    except Exception:
+        pass
     return jsonify(
         {
             "ticker": ticker,
             "strategy": strategy,
             "recent_lessons": list_recent_lessons(ticker),
+            "llm_calibration": llm_calibration,
             "uw_data_fed": uw_bundle is not None,
             "context_summary": {
                 "strike_rows": len((uw_bundle or {}).get("greek_exposure_by_strike", [])),

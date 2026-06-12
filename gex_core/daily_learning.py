@@ -504,6 +504,19 @@ def get_or_create_today_strategy(
 
     strategy["updated_at"] = _now_iso()
     _save_insight(ticker, today, "strategy", strategy)
+    try:
+        from gex_core.history import get_latest_ts
+        from gex_core.prediction_log import log_llm_prediction
+
+        log_llm_prediction(
+            ticker=ticker,
+            source="daily_strategy",
+            prediction=strategy,
+            snapshot_ts=get_latest_ts(ticker),
+            market_date=today,
+        )
+    except Exception:
+        logger.debug("Daily strategy prediction log skipped", exc_info=True)
     return strategy
 
 

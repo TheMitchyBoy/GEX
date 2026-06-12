@@ -326,7 +326,7 @@ def _maybe_enter(
     uw_bundle: dict[str, Any] | None,
     market: MarketContext | None = None,
 ) -> dict[str, Any] | None:
-    pack = compute_entry_candidates(exposure, previous, spot=spot)
+    pack = compute_entry_candidates(exposure, previous, spot=spot, ticker=ticker)
     if not pack.get("available"):
         return None
 

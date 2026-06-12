@@ -129,6 +129,7 @@ def _signal_strike_trail(
     *,
     wall_mode: bool,
     window_pct: float,
+    ticker: str | None = None,
 ) -> list[dict[str, Any]]:
     markers: list[dict[str, Any]] = []
     for item in trail:
@@ -141,7 +142,7 @@ def _signal_strike_trail(
         if wall_mode:
             pack = compute_low_gex_signal(series, spot=spot_val or None, window_pct=window_pct)
         else:
-            pack = compute_gamma_signals(series, None, spot=spot_val or None)
+            pack = compute_gamma_signals(series, None, spot=spot_val or None, ticker=ticker)
         rec = pack.get("recommended") or {}
         strike = safe_float(rec.get("strike"), 0.0)
         if strike <= 0:
@@ -168,6 +169,7 @@ def _decorate_gex_strike_panel(
     previous_exposure: pd.Series | None,
     wall_mode: bool,
     window_pct: float,
+    ticker: str | None = None,
     row: int = 1,
     col: int = 1,
 ) -> None:
@@ -234,7 +236,7 @@ def _decorate_gex_strike_panel(
         )
 
     # Signal / wall strike trail (violet breadcrumbs left of zero).
-    for marker in _signal_strike_trail(trail, wall_mode=wall_mode, window_pct=window_pct):
+    for marker in _signal_strike_trail(trail, wall_mode=wall_mode, window_pct=window_pct, ticker=ticker):
         age = int(marker.get("age") or 1)
         x_pos = -peak * 0.07 * age
         fig.add_trace(
@@ -303,7 +305,7 @@ def build_strategy_state(
     if spot_val <= 0:
         spot_val = safe_float(snap.get("spot"), 0.0)
 
-    signals = compute_gamma_signals(exposure, previous_exposure, spot=spot_val)
+    signals = compute_gamma_signals(exposure, previous_exposure, spot=spot_val, ticker=ticker)
     market = MarketContext(
         spot=spot_val,
         prev_spot=prev_spot,
@@ -354,6 +356,7 @@ def build_strategy_state(
         )
 
     return {
+        "ticker": ticker.upper(),
         "spot": spot_val,
         "signals": signals,
         "filters": filters,
@@ -456,6 +459,7 @@ def build_strategy_chart(
             previous_exposure=previous_exposure,
             wall_mode=wall_mode,
             window_pct=window_pct,
+            ticker=state.get("ticker"),
         )
         fig.add_vline(
             x=0,

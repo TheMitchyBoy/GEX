@@ -163,9 +163,22 @@ def backtest_delta_sign_accuracy(
 
 
 def calibrated_prediction_confidence(ticker: str, raw_confidence: float) -> float:
-    """Calibrate a raw forecast confidence against the rolling backtest hit-rate."""
+    """Calibrate a raw forecast confidence against backtest + logged LLM outcomes."""
     bt = backtest_delta_sign_accuracy(ticker)
-    return calibrate_confidence(raw_confidence, bt.get("accuracy"), bt.get("n", 0) or 0)
+    calibrated = calibrate_confidence(raw_confidence, bt.get("accuracy"), bt.get("n", 0) or 0)
+    try:
+        from gex_core.prediction_log import get_llm_calibration_stats
+
+        llm_stats = get_llm_calibration_stats(ticker)
+        if (llm_stats.get("n") or 0) >= int(os.environ.get("GEX_LLM_CALIB_MIN_SAMPLES", "5")):
+            return calibrate_confidence(
+                calibrated,
+                llm_stats.get("sign_accuracy"),
+                llm_stats.get("n", 0) or 0,
+            )
+    except Exception:
+        pass
+    return calibrated
 
 
 def clear_cache() -> None:

@@ -131,6 +131,31 @@ def test_max_gamma_only_blocks_declining_magnet(monkeypatch):
     assert out["skip_reason"] == "gamma_declined"
 
 
+def test_signal_performance_weights_boost_winning_type(monkeypatch, tmp_path):
+    monkeypatch.setenv("GEX_TRADING_DB", str(tmp_path / "journal.db"))
+    from gex_core.trading.journal import open_trade, close_trade
+    from gex_core.trading.signals import signal_performance_weights
+
+    for _ in range(4):
+        tid = open_trade(
+            ticker="SPX",
+            option_type="call",
+            strike=7390.0,
+            entry_spot=7385.0,
+            entry_premium=10.0,
+            signal_type="max_positive_gamma",
+            signal_strike=7390.0,
+            signal_gamma=1.5,
+            gamma_delta=0.2,
+            ai_confidence=0.7,
+            ai_reason="test",
+        )
+        close_trade(tid, exit_spot=7395.0, exit_premium=12.0, pnl_pct=0.2, pnl_usd=200.0, exit_reason="take_profit")
+
+    weights = signal_performance_weights("SPX")
+    assert weights["max_positive_gamma"] > 1.0
+
+
 def test_magnet_anchored_strike_uses_magnet(monkeypatch):
     monkeypatch.setenv("GEX_TRADER_MAX_GAMMA_ONLY", "1")
     monkeypatch.setenv("GEX_TRADER_MAGNET_ANCHORED_STRIKES", "1")

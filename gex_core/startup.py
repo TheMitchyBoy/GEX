@@ -49,6 +49,14 @@ def deferred_web_startup(
                 extra_fn()
             except Exception:
                 logger.exception("Deferred extra startup hook failed")
+        try:
+            from gex_core.chat_store import prune_old_sessions
+
+            pruned = prune_old_sessions()
+            if pruned:
+                logger.info("Pruned %d stale chat sessions", pruned)
+        except Exception:
+            logger.debug("Chat session prune skipped", exc_info=True)
 
     threading.Thread(target=_run, name="gex-deferred-startup", daemon=True).start()
 

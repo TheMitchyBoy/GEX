@@ -241,7 +241,28 @@ def predict_from_uw_data(
     else:
         llm_result = _rule_based_predictions(base, bundle)
 
+    from gex_core.prediction_log import calibrated_llm_confidence, log_llm_prediction
     from gex_core.uw_context_bundle import bundle_token_estimate
+
+    anchor_ts = None
+    if history:
+        anchor_ts = history[-1].get("ts")
+    source = "llm" if llm_result.get("llm_enhanced") else str(llm_result.get("prediction_source", "rule_based"))
+    log_llm_prediction(
+        ticker=ticker,
+        source=source,
+        prediction=llm_result,
+        snapshot_ts=anchor_ts,
+        market_date=bundle.get("market_date"),
+    )
+    if llm_result.get("confidence") is not None:
+        llm_result = dict(llm_result)
+        llm_result["raw_confidence"] = llm_result["confidence"]
+        llm_result["confidence"] = calibrated_llm_confidence(
+            float(llm_result["confidence"]),
+            ticker,
+            source=source if source == "llm" else None,
+        )
 
     return {
         **llm_result,

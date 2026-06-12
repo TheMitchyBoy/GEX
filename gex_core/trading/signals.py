@@ -177,8 +177,43 @@ def _candidate_key(rec: dict[str, Any]) -> tuple[float, str]:
     return (round(float(rec["strike"]), 2), str(rec["option_type"]).lower())
 
 
-def _rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def signal_performance_weights(ticker: str | None = None) -> dict[str, float]:
+    """Map signal_type → score multiplier from paper-trade PnL history."""
+    try:
+        from gex_core.trading.journal import get_performance_summary
+
+        perf = get_performance_summary(ticker)
+        weights: dict[str, float] = {}
+        for sig, stats in (perf.get("by_signal") or {}).items():
+            count = int(stats.get("count") or 0)
+            if count < 3:
+                weights[sig] = 1.0
+                continue
+            win_rate = float(stats.get("win_rate") or 0.5)
+            avg_pnl = float(stats.get("avg_pnl_pct") or 0.0)
+            weight = 0.85 + 0.3 * win_rate + max(-0.15, min(0.15, avg_pnl * 2.0))
+            weights[sig] = max(0.5, min(1.5, weight))
+        return weights
+    except Exception:
+        return {}
+
+
+def _apply_performance_weight(rec: dict[str, Any], weights: dict[str, float]) -> dict[str, Any]:
+    if not weights:
+        return rec
+    sig = str(rec.get("signal_type") or "")
+    multiplier = weights.get(sig, 1.0)
+    if multiplier == 1.0:
+        return rec
+    out = dict(rec)
+    out["score"] = float(rec.get("score", 0.0)) * multiplier
+    out["performance_weight"] = multiplier
+    return out
+
+
+def _rank_candidates(candidates: list[dict[str, Any]], *, weights: dict[str, float] | None = None) -> list[dict[str, Any]]:
     preferred = prefer_signal_type()
+    weights = weights or {}
 
     def sort_key(rec: dict[str, Any]) -> tuple:
         sig = str(rec.get("signal_type", "")).lower()
@@ -187,7 +222,8 @@ def _rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         score = float(rec.get("score", 0.0))
         return (pref_rank, -delta, -score)
 
-    return sorted(candidates, key=sort_key)
+    weighted = [_apply_performance_weight(rec, weights) for rec in candidates]
+    return sorted(weighted, key=sort_key)
 
 
 def _unavailable(
@@ -224,8 +260,10 @@ def _compute_max_gamma_only(
     min_neg_signal: GammaSignal | None,
     fastest_signal: GammaSignal,
     max_pos_delta: float,
+    perf_weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Single dominant |gamma| candidate — highest +γ or lowest −γ near spot."""
+    perf_weights = perf_weights or {}
     extreme = _extreme_gamma_magnet(search)
     if extreme is None:
         return _unavailable(
@@ -271,12 +309,13 @@ def _compute_max_gamma_only(
             min_neg_signal=min_neg_signal,
         )
 
+    base_score = abs(magnet_gamma) * perf_weights.get(magnet_sig_type, 1.0)
     sig = GammaSignal(
         signal_type=magnet_sig_type,
         strike=trade_strike,
         gamma_bn=magnet_gamma,
         gamma_delta=magnet_delta,
-        score=abs(magnet_gamma),
+        score=base_score,
         option_type=master_direction,
         rationale=(
             f"{magnet_label} gamma {magnet_gamma:+.3f} Bn at {magnet_strike:.0f} "
@@ -315,8 +354,10 @@ def _compute_legacy_candidates(
     fastest_delta: float,
     fast_trade_strike: float | None,
     delta: pd.Series,
+    perf_weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     limit = multi_strike_count()
+    perf_weights = perf_weights or {}
     master_direction = _option_type_for_strike(max_pos_strike, spot_val)
     seen: set[tuple[float, str]] = set()
     candidates: list[dict[str, Any]] = []
@@ -338,7 +379,7 @@ def _compute_legacy_candidates(
             strike=trade_strike,
             gamma_bn=float(gamma_bn),
             gamma_delta=magnet_delta,
-            score=float(gamma_bn),
+            score=float(gamma_bn) * perf_weights.get("max_positive_gamma", 1.0),
             option_type=option_type,
             rationale=f"Positive gamma magnet {magnet_f:.0f}, trading {trade_strike:.0f}",
             magnet_strike=magnet_f,
@@ -396,7 +437,7 @@ def _compute_legacy_candidates(
             max_pos_delta=max_pos_delta,
         )
 
-    candidates = _rank_candidates(candidates)[:limit]
+    candidates = _rank_candidates(candidates, weights=perf_weights)[:limit]
     selection_reason = "max_positive_gamma"
     recommended_dict = candidates[0]
     if max_pos_delta < 0 and recommended_dict.get("signal_type") == "fastest_gamma_increase":
@@ -421,11 +462,13 @@ def compute_entry_candidates(
     previous: pd.Series | None,
     *,
     spot: float | None,
+    ticker: str | None = None,
 ) -> dict[str, Any]:
     """Return up to N near-spot positive-gamma entry candidates per bar."""
     cur = _clean(exposure)
     prev = _clean(previous)
     spot_val = float(spot or 0.0)
+    perf_weights = signal_performance_weights(ticker)
 
     if cur.empty:
         return {"available": False, "reason": "No gamma exposure data"}
@@ -505,10 +548,13 @@ def compute_entry_candidates(
             min_neg_signal=min_neg_signal,
             fastest_signal=fastest_signal,
             max_pos_delta=max_pos_delta,
+            perf_weights=perf_weights,
         )
         if result.get("available"):
             delta_slice = delta.nlargest(8)
             result["gamma_delta_by_strike"] = {float(k): float(v) for k, v in delta_slice.items()}
+            if perf_weights and result.get("recommended"):
+                result["recommended"] = _apply_performance_weight(result["recommended"], perf_weights)
         return result
 
     return _compute_legacy_candidates(
@@ -523,6 +569,7 @@ def compute_entry_candidates(
         fastest_delta=fastest_delta,
         fast_trade_strike=fast_trade_strike,
         delta=delta,
+        perf_weights=perf_weights,
     )
 
 
@@ -531,6 +578,7 @@ def compute_gamma_signals(
     previous: pd.Series | None,
     *,
     spot: float | None,
+    ticker: str | None = None,
 ) -> dict[str, Any]:
     """Primary gamma signal bundle (first entry candidate)."""
-    return compute_entry_candidates(exposure, previous, spot=spot)
+    return compute_entry_candidates(exposure, previous, spot=spot, ticker=ticker)
