@@ -536,9 +536,15 @@ def _periscope_minimal_load(
 ) -> bool:
     from gex_core.periscope_api import page_minimal_load_enabled
 
-    if not page_minimal_load_enabled():
-        return False
-    return not selected_ts and not selected_date and not include_trail
+    del selected_ts, selected_date, include_trail
+    return page_minimal_load_enabled()
+
+
+def _periscope_slice_params() -> tuple[str | None, str | None]:
+    """Replay query params are ignored when page minimal load is enabled."""
+    if _periscope_minimal_load():
+        return None, None
+    return request.args.get("ts"), request.args.get("date")
 
 
 def _render_periscope_dashboard(
@@ -553,8 +559,7 @@ def _render_periscope_dashboard(
     near_spot_view = _is_near_spot_window(strike_window_pct)
     wall_mode = strategy_mode == "wall"
     exposure = request.args.get("exposure", "gamma").lower()
-    requested_ts = request.args.get("ts")
-    requested_date = request.args.get("date")
+    requested_ts, requested_date = _periscope_slice_params()
     bootstrap_status = request.args.get("bootstrap")
     refresh_message = None
 
@@ -722,6 +727,7 @@ def _render_periscope_dashboard(
         vanna_charm_available=ctx.get("vanna_charm_available", False),
         auto_trader=auto_trader,
         defer_strategy_chart=minimal,
+        current_only=minimal,
     )
 
 
@@ -1045,10 +1051,9 @@ def api_spot_stream():
 def api_periscope():
     ticker = PRIMARY_TICKER
     exposure = request.args.get("exposure", "gamma")
-    requested_ts = request.args.get("ts")
-    requested_date = request.args.get("date")
+    requested_ts, requested_date = _periscope_slice_params()
     uw_entry = _uw_entry_for_request(ticker, blocking=False)
-    minimal = _periscope_minimal_load(selected_ts=requested_ts, selected_date=requested_date)
+    minimal = _periscope_minimal_load()
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -1142,9 +1147,9 @@ def api_trader_run():
 def api_trader_strategy():
     """Live strategy signals, filter state, and chart spec for dashboard refresh."""
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
-    requested_ts = request.args.get("ts")
-    include_trail = request.args.get("trail") == "1"
-    minimal = _periscope_minimal_load(selected_ts=requested_ts, include_trail=include_trail)
+    requested_ts, _requested_date = _periscope_slice_params()
+    include_trail = request.args.get("trail") == "1" and not _periscope_minimal_load()
+    minimal = _periscope_minimal_load()
     live = request.args.get("live") == "1"
     skip_advisor = not live
     blocking = live or not minimal or include_trail
@@ -1562,9 +1567,9 @@ def api_webull_order_sell():
 def api_periscope_timeline():
     """Available dates and intraday slices for the session picker."""
     ticker = PRIMARY_TICKER
-    timestamps = list_periscope_timestamps(ticker, api_key=uw_api_key())
-    requested_ts = request.args.get("ts")
-    requested_date = request.args.get("date")
+    minimal = _periscope_minimal_load()
+    timestamps = list_periscope_timestamps(ticker, api_key=uw_api_key(), minimal=minimal)
+    requested_ts, requested_date = _periscope_slice_params()
     resolved = resolve_selected_timestamp(timestamps, ts=requested_ts, date=requested_date)
     timeline = build_timeline_navigation(timestamps, resolved, ticker=ticker)
     active_date = timeline.get("selected_date")

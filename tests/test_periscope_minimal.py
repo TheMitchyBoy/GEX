@@ -56,4 +56,16 @@ def test_list_periscope_timestamps_minimal_uses_index_not_api():
     ):
         ts = list_periscope_timestamps("SPX", minimal=True)
     api_ts.assert_not_called()
-    assert ts == ["2026-06-04_200000", "2026-06-05_193000"]
+    assert ts == ["2026-06-05_193000"]
+
+
+def test_list_periscope_timestamps_minimal_falls_back_to_latest():
+    with (
+        patch("gex_core.periscope_api.list_indexed_timestamps_for_date", return_value=[]),
+        patch("gex_core.periscope_api.get_latest_ts", return_value="2026-06-05_193000"),
+        patch("gex_core.periscope_api.list_indexed_timestamps_before_date") as hist,
+        patch("gex_core.periscope_api.market_today", return_value="2026-06-05"),
+    ):
+        ts = list_periscope_timestamps("SPX", minimal=True)
+    hist.assert_not_called()
+    assert ts == ["2026-06-05_193000"]

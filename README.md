@@ -155,7 +155,7 @@ docker compose --profile tools run --rm refresh
 3. Start command: `bash scripts/start_web.sh` (default in the Dockerfile).
 4. Optional first deploy: `GEX_STARTUP_BACKFILL=1` to pull 90 days of intraday history.
 5. `GEX_DASHBOARD_SKIP_BACKTEST=1` (set in `start_web.sh`) keeps HTML page loads fast on small instances.
-6. `GEX_PAGE_MINIMAL_LOAD=1` (default) serves only the **current gamma snapshot** on dashboard pages; scheduled refresh still writes every export to `data/exports/`. Replay (`?ts=…`) or `?trail=1` loads prior slices on demand.
+6. `GEX_PAGE_MINIMAL_LOAD=1` (default) loads **only the current gamma snapshot** on dashboard pages — no historical replay catalog or prior-slice trails. Scheduled refresh still writes every export to `data/exports/` for backfill, training, and backtests.
 7. `GEX_PAGE_UW_PEEK_ONLY=1` (default) avoids blocking HTML on live UW HTTP — pages paint from exports/cache immediately; the browser fetches fresh UW data via `?live=1` on strategy/status refresh (4s timeout via `GEX_UW_FETCH_TIMEOUT_SEC`).
 8. After the first backfill, consider `GEX_DASHBOARD_HISTORY_DAYS=30`, `GEX_AUTO_BACKFILL_IF_EMPTY=0`, and `GEX_STARTUP_BACKFILL=0` to reduce disk I/O on deploy.
 
@@ -279,7 +279,7 @@ python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 | `GEX_DASHBOARD_HISTORY_MAX` | `240` | Max strike CSVs loaded per dashboard request |
 | `GEX_PAGE_UW_PEEK_ONLY` | `1` | HTML/API handlers use cached UW only; JS refresh passes `live=1` |
 | `GEX_UW_FETCH_TIMEOUT_SEC` | `4` | Max seconds to block on live UW fetch when `live=1` |
-| `GEX_PAGE_MINIMAL_LOAD` | `1` | Load only the current gamma slice on dashboard pages |
+| `GEX_PAGE_MINIMAL_LOAD` | `1` | Current slice only on pages (no historical replay); exports still saved |
 | `GEX_AGENT_FETCH_EXTRAS` | `0` | Skip extra UW API calls per chat message |
 | `GEX_PREDICTION_LOOKBACK_DAYS` | `90` | KNN / forecast training window on dashboard |
 | `GEX_TRAIN_LOOKBACK_DAYS` | `90` | Default lookback for `train_gex_model.py` |

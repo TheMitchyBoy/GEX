@@ -296,21 +296,19 @@ def list_periscope_timestamps(
     Timestamp catalog for Periscope without scanning thousands of CSV files.
 
     Historical days come from the SQLite index; today uses UW intraday API unless
-  ``minimal`` (indexed exports + latest save only — avoids full intraday fetch).
+  ``minimal`` (today's indexed slices or latest export only — no prior days).
     """
     ticker = ticker.upper()
     today = today or market_today()
-    historical = list_indexed_timestamps_before_date(ticker, today)
-
     today_indexed = list_indexed_timestamps_for_date(ticker, today)
     if minimal:
+        # Current slice only — historical exports stay on disk for backfill/training.
         if today_indexed:
-            return historical + today_indexed
+            return today_indexed
         latest = get_latest_ts(ticker)
-        if latest and ts_market_date(latest) == today:
-            return historical + [latest]
-        return historical
+        return [latest] if latest else []
 
+    historical = list_indexed_timestamps_before_date(ticker, today)
     if uw_api_configured() or api_key:
         api_today = list_api_intraday_timestamps(ticker, today, api_key=api_key)
         if api_today:

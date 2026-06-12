@@ -556,7 +556,7 @@
         </div>
       </header>
 
-      {% if timeline.available_dates %}
+      {% if timeline.available_dates and not current_only %}
       <section class="uw-panel p-3 mb-3 time-nav">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <div class="small fw-semibold">Session replay · 10-min slices (ET)</div>
@@ -815,6 +815,7 @@
       const chatWelcome = {{ chat_welcome|tojson }};
       const exposureType = {{ exposure|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
+      const currentOnly = {{ current_only|default(false)|tojson }};
       const ticker = '{{ ticker }}';
       const strikeWindowPct = {{ strike_window_pct|tojson }};
       const wallMode = {{ wall_mode|default(false)|tojson }};
@@ -838,13 +839,18 @@
       function loadLayerPrefs() {
         try {
           const raw = localStorage.getItem(LAYER_STORAGE_KEY);
-          if (!raw) return;
-          const prefs = JSON.parse(raw);
-          Object.entries(LAYER_IDS).forEach(([layer, id]) => {
-            const el = document.getElementById(id);
-            if (el && prefs[layer] != null) el.checked = !!prefs[layer];
-          });
+          if (raw) {
+            const prefs = JSON.parse(raw);
+            Object.entries(LAYER_IDS).forEach(([layer, id]) => {
+              const el = document.getElementById(id);
+              if (el && prefs[layer] != null) el.checked = !!prefs[layer];
+            });
+          }
         } catch (_) {}
+        if (currentOnly) {
+          const gammaHist = document.getElementById(LAYER_IDS.gamma_history);
+          if (gammaHist) gammaHist.checked = false;
+        }
       }
 
       function saveLayerPrefs() {
@@ -885,7 +891,7 @@
           document.getElementById(id)?.addEventListener('change', () => {
             saveLayerPrefs();
             const gammaHist = document.getElementById(LAYER_IDS.gamma_history);
-            if (gammaHist?.checked && !timelineData?.prev_ts) {
+            if (!currentOnly && gammaHist?.checked && !timelineData?.prev_ts) {
               refreshStrategyWithTrail();
               return;
             }

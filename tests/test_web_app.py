@@ -282,6 +282,14 @@ def test_uw_failure_reason_none_when_no_error_recorded(monkeypatch):
     assert web_app._uw_failure_reason("SPX") is None
 
 
+def test_periscope_slice_params_ignore_replay_when_minimal_load(monkeypatch):
+    import web_app
+
+    monkeypatch.setenv("GEX_PAGE_MINIMAL_LOAD", "1")
+    with web_app.APP.test_request_context("/gamma?ts=2026-06-05_120000&date=2026-06-05"):
+        assert web_app._periscope_slice_params() == (None, None)
+
+
 def test_peek_only_cold_cache_does_not_show_stale_banner(monkeypatch):
     import web_app
 
