@@ -155,11 +155,11 @@ def _classify_uw_error(exc: Exception) -> str:
     return "error"
 
 
-def _uw_failure_reason(ticker: str) -> str:
+def _uw_failure_reason(ticker: str) -> str | None:
     if not uw_api_configured():
         return "not_configured"
     with _uw_lock:
-        return _LAST_UW_ERROR.get(ticker.upper(), "error")
+        return _LAST_UW_ERROR.get(ticker.upper())
 
 _uw_lock = threading.Lock()
 _WALL_GEX_LIVE_CACHE: dict[str, tuple[float, tuple[float | None, pd.Series | None, dict[str, Any]]]] = {}
@@ -302,6 +302,8 @@ def get_uw_data_with_timeout(
         return future.result(timeout=timeout)
     except FuturesTimeoutError:
         logger.warning("UW refresh timed out for %s after %.0fs — using exports only", ticker, timeout)
+        with _uw_lock:
+            _LAST_UW_ERROR[ticker.upper()] = "network"
         return _peek_uw_data(ticker)
     except Exception:
         logger.exception("UW refresh failed for %s", ticker)
@@ -582,7 +584,7 @@ def _render_periscope_dashboard(
         and timeline.get("is_latest", False)
     ):
         reason = _uw_failure_reason(ticker)
-        if reason != "not_configured":
+        if reason and reason != "not_configured":
             bootstrap_status = "stale"
             refresh_message = _REFRESH_REASON_MESSAGES.get(reason, _REFRESH_REASON_MESSAGES["error"])
 
@@ -1749,7 +1751,10 @@ def api_agent_predict():
         return jsonify(
             {
                 "error": "Live Unusual Whales data unavailable",
-                "detail": _REFRESH_REASON_MESSAGES.get(_uw_failure_reason(ticker), "Configure UW_API_KEY"),
+                "detail": _REFRESH_REASON_MESSAGES.get(
+                    _uw_failure_reason(ticker) or "error",
+                    "Configure UW_API_KEY",
+                ),
             }
         ), 503
 

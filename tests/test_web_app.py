@@ -273,6 +273,47 @@ def test_uw_failure_reason_not_configured(monkeypatch):
     assert web_app._uw_failure_reason("SPX") == "not_configured"
 
 
+def test_uw_failure_reason_none_when_no_error_recorded(monkeypatch):
+    import web_app
+
+    web_app._LAST_UW_ERROR.clear()
+    monkeypatch.setenv("UW_API_KEY", "dummy-key")
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
+    assert web_app._uw_failure_reason("SPX") is None
+
+
+def test_peek_only_cold_cache_does_not_show_stale_banner(monkeypatch):
+    import web_app
+
+    web_app._LAST_UW_ERROR.clear()
+    web_app._UW_CACHE.clear()
+    monkeypatch.setenv("UW_API_KEY", "dummy-key")
+    monkeypatch.setenv("GEX_PAGE_UW_PEEK_ONLY", "1")
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
+    monkeypatch.setattr(web_app, "_uw_live_enabled", lambda: True)
+    monkeypatch.setattr(web_app, "_schedule_uw_refresh", lambda *_a, **_k: None)
+    monkeypatch.setattr(web_app, "list_periscope_timestamps", lambda *_a, **_k: ["2026-06-12T12:00:00"])
+    monkeypatch.setattr(
+        web_app,
+        "build_periscope_context",
+        lambda **_k: {
+            "spot": 6000.0,
+            "selected": {},
+            "history": [],
+            "timeline": {"is_latest": True},
+            "selected_ts": "2026-06-12T12:00:00",
+            "selected_label": "latest",
+            "timestamps": ["2026-06-12T12:00:00"],
+            "regime": "long",
+            "total_gex": 1.0,
+        },
+    )
+
+    response = web_app.APP.test_client().get("/gamma")
+    assert response.status_code == 200
+    assert b"Showing last saved snapshot" not in response.data
+
+
 def test_post_refresh_without_token_is_forbidden(monkeypatch):
     import web_app
 
