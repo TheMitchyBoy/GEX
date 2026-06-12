@@ -17,6 +17,7 @@ def deferred_web_startup(
     *,
     refresh_fn,
     price_stream_fn,
+    extra_fn=None,
     delay_seconds: float | None = None,
 ) -> None:
     """Start scheduler + UW price websocket after a short delay (once per worker)."""
@@ -43,6 +44,11 @@ def deferred_web_startup(
             price_stream_fn()
         except Exception:
             logger.exception("UW price websocket failed to start")
+        if extra_fn is not None:
+            try:
+                extra_fn()
+            except Exception:
+                logger.exception("Deferred extra startup hook failed")
 
     threading.Thread(target=_run, name="gex-deferred-startup", daemon=True).start()
 

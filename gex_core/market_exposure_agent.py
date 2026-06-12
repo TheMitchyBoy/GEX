@@ -113,6 +113,30 @@ def _hermes_analyze(user_prompt: str, *, system_prompt: str | None = None) -> st
         return None
 
 
+def _pattern_matches_from_learning(uw_bundle: dict[str, Any] | None) -> list[str]:
+    learning = (uw_bundle or {}).get("daily_learning") or {}
+    out: list[str] = []
+    for lesson in learning.get("recent_lessons") or []:
+        text = lesson.get("lesson")
+        if text:
+            out.append(f"{lesson.get('market_date', '?')}: {text}")
+    return out[:5]
+
+
+def _trading_notes_from_strategy(uw_bundle: dict[str, Any] | None) -> list[str]:
+    strategy = ((uw_bundle or {}).get("daily_learning") or {}).get("today_strategy") or {}
+    notes: list[str] = []
+    if strategy.get("summary"):
+        notes.append(str(strategy["summary"]))
+    for play in strategy.get("plays") or []:
+        if isinstance(play, dict) and play.get("name"):
+            notes.append(
+                f"{play['name']}: {play.get('trigger', '')} → {play.get('target', '')}".strip()
+            )
+    notes.extend(str(n) for n in (strategy.get("risk_notes") or [])[:3])
+    return notes[:6]
+
+
 def _default_who_what(total_gex_bn: float) -> tuple[str, str, str]:
     who = "Dealers / market makers"
     whom = "Directional traders"
@@ -242,8 +266,8 @@ def analyze_market_exposure(
         "put_wall": base.put_wall,
         "predictions": base.predictions,
         "signals": [s.label for s in base.signals[:6]],
-        "pattern_matches": [],
-        "trading_notes": [],
+        "pattern_matches": _pattern_matches_from_learning(uw_bundle),
+        "trading_notes": _trading_notes_from_strategy(uw_bundle),
         "narrative": narrative,
         "hermes_enhanced": hermes_active,
         "llm_enhanced": hermes_active,

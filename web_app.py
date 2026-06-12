@@ -538,6 +538,9 @@ def _render_periscope_dashboard(
     strategy_chart_json = strategy["chart_json"]
     strategy_state = strategy["state"]
 
+    daily_strategy = None
+    if uw_bundle:
+        daily_strategy = (uw_bundle.get("daily_learning") or {}).get("today_strategy")
     chat_welcome = build_welcome_message(
         ticker=ticker,
         spot=safe_float(spot, 0.0) or None,
@@ -545,6 +548,7 @@ def _render_periscope_dashboard(
         total_gex=safe_float(ctx.get("total_gex"), 0.0),
         gamma_flip=gamma_flip,
         exposure=exposure,
+        daily_strategy=daily_strategy,
     )
 
     csv_source = selected.get("data_source") or ctx.get("data_path") or "unusual_whales"
@@ -1518,6 +1522,51 @@ def api_agent_monte_carlo_confidence():
     return jsonify(result)
 
 
+@APP.get("/api/agent/daily-strategy")
+def api_agent_daily_strategy():
+    """Today's dealer-gamma strategy with lessons from prior sessions."""
+    from gex_core.daily_learning import get_or_create_today_strategy, list_recent_lessons
+
+    ticker = PRIMARY_TICKER
+    exposure = request.args.get("exposure", "gamma")
+    requested_ts = request.args.get("ts")
+    force = request.args.get("refresh", "0").lower() in {"1", "true", "yes"}
+    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    ctx = build_periscope_context(
+        ticker=ticker,
+        selected_ts=requested_ts,
+        exposure=exposure,
+        uw_entry=uw_entry,
+        api_key=uw_api_key(),
+    )
+    pred_history = _prediction_history(ticker)
+    knn = predict_next_snapshot(pred_history, lookback_days=prediction_lookback_days(ticker))
+    uw_bundle = _uw_bundle_for_context(
+        ticker=ticker,
+        ctx=ctx,
+        uw_entry=uw_entry,
+        fetch_extras=True,
+        knn_prediction=knn,
+    )
+    strategy = get_or_create_today_strategy(
+        ticker=ticker,
+        uw_bundle=uw_bundle,
+        force_refresh=force,
+    )
+    return jsonify(
+        {
+            "ticker": ticker,
+            "strategy": strategy,
+            "recent_lessons": list_recent_lessons(ticker),
+            "uw_data_fed": uw_bundle is not None,
+            "context_summary": {
+                "strike_rows": len((uw_bundle or {}).get("greek_exposure_by_strike", [])),
+                "has_intraday": bool((uw_bundle or {}).get("intraday")),
+            },
+        }
+    )
+
+
 @APP.get("/api/agent/predict")
 def api_agent_predict():
     """Feed all Unusual Whales data to the AI and return structured predictions."""
@@ -1571,6 +1620,13 @@ def _chat_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
         if uw_agg
         else None
     )
+    uw_bundle = _uw_bundle_for_context(
+        ticker=ticker,
+        ctx=ctx,
+        uw_entry=uw_entry,
+        fetch_extras=True,
+        knn_prediction=knn,
+    )
     return {
         "ctx": ctx,
         "selected": selected,
@@ -1579,6 +1635,7 @@ def _chat_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
         "uw_agg": uw_agg,
         "pred_history": pred_history,
         "knn": knn,
+        "uw_bundle": uw_bundle,
     }
 
 
@@ -1614,9 +1671,11 @@ def api_chat():
         exposure_type=exposure,
         agg=uw_agg,
         spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
-        history=chat_ctx["pred_history"] if uw_agg else None,
+        history=chat_ctx["pred_history"],
         knn_prediction=chat_ctx["knn"],
-        api_key=uw_api_key() if uw_agg else None,
+        api_key=uw_api_key(),
+        uw_bundle=chat_ctx.get("uw_bundle"),
+        daily_strategy=((chat_ctx.get("uw_bundle") or {}).get("daily_learning") or {}).get("today_strategy"),
     )
     if "error" in result:
         return jsonify(result), 400
@@ -1725,18 +1784,37 @@ def _uw_bundle_for_context(
     ctx: dict[str, Any],
     uw_entry: dict[str, Any] | None,
     fetch_extras: bool = False,
+    knn_prediction: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    from gex_core.uw_context_bundle import try_build_uw_bundle_from_entry
+    from gex_core.uw_context_bundle import (
+        build_context_bundle_from_snapshot,
+        try_build_uw_bundle_from_entry,
+    )
 
     spot = safe_float(ctx.get("spot"), 0.0)
     if spot <= 0:
         return None
-    return try_build_uw_bundle_from_entry(
+    bundle = try_build_uw_bundle_from_entry(
         ticker=ticker,
         spot=spot,
         uw_entry=uw_entry,
         gamma_flip=ctx.get("gamma_flip"),
         history=ctx.get("history"),
+        knn_prediction=knn_prediction,
+        api_key=uw_api_key(),
+        fetch_extras=fetch_extras,
+    )
+    if bundle is not None:
+        return bundle
+    selected = ctx.get("selected") or {}
+    strike = selected.get("strike")
+    if strike is None:
+        return None
+    return build_context_bundle_from_snapshot(
+        ticker=ticker,
+        snapshot=selected,
+        history=ctx.get("history"),
+        knn_prediction=knn_prediction,
         api_key=uw_api_key(),
         fetch_extras=fetch_extras,
     )
@@ -1975,9 +2053,19 @@ def start_background_refresh():
         )
 
 
+def _run_daily_learning_bootstrap() -> None:
+    try:
+        from gex_core.daily_learning import run_daily_learning_cycle
+
+        run_daily_learning_cycle(PRIMARY_TICKER)
+    except Exception:
+        logger.exception("Daily learning bootstrap failed")
+
+
 deferred_web_startup(
     refresh_fn=start_background_refresh,
     price_stream_fn=lambda: start_uw_price_stream(_price_stream_tickers()),
+    extra_fn=_run_daily_learning_bootstrap,
 )
 
 

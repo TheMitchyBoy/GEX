@@ -752,9 +752,20 @@
             <div class="d-flex justify-content-between align-items-center mb-2">
               <div>
                 <h2 class="h6 mb-0 fw-semibold">GEX Assistant</h2>
-                <div class="small muted">Ask about levels, regime, entries</div>
+                <div class="small muted">Daily strategy + full UW context</div>
               </div>
               <button class="btn btn-sm btn-outline-secondary btn-nav" id="chatReset" type="button">New chat</button>
+            </div>
+            <div class="mb-2 p-2 rounded border border-secondary-subtle" id="dailyStrategyCard" style="display:none;">
+              <div class="d-flex justify-content-between align-items-start gap-2">
+                <div>
+                  <div class="small fw-semibold text-uppercase muted mb-1">Today's strategy</div>
+                  <div class="small" id="dailyStrategySummary">Loading…</div>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary btn-nav" id="dailyStrategyRefresh" type="button" title="Refresh strategy">↻</button>
+              </div>
+              <ul class="small mb-0 mt-2 ps-3" id="dailyStrategyPlays"></ul>
+              <div class="small muted mt-2" id="dailyStrategyLessons"></div>
             </div>
             <div class="chat-panel">
               <div class="chat-messages" id="chatMessages"></div>
@@ -982,6 +993,42 @@
       document.getElementById('strategyRefreshBtn')?.addEventListener('click', refreshStrategy);
 
       let chatSessionId = null, chatBusy = false;
+
+      async function loadDailyStrategy(refresh) {
+        const card = document.getElementById('dailyStrategyCard');
+        const summaryEl = document.getElementById('dailyStrategySummary');
+        const playsEl = document.getElementById('dailyStrategyPlays');
+        const lessonsEl = document.getElementById('dailyStrategyLessons');
+        if (!card || !summaryEl) return;
+        card.style.display = 'block';
+        summaryEl.textContent = 'Loading strategy…';
+        try {
+          const qs = new URLSearchParams(window.location.search);
+          if (refresh) qs.set('refresh', '1');
+          const res = await fetch('/api/agent/daily-strategy?' + qs.toString());
+          const data = await res.json();
+          const strategy = data.strategy || {};
+          summaryEl.textContent = strategy.summary || 'No strategy generated yet.';
+          if (playsEl) {
+            playsEl.innerHTML = '';
+            (strategy.plays || []).slice(0, 3).forEach(play => {
+              const li = document.createElement('li');
+              li.textContent = `${play.name || 'setup'}: ${play.trigger || ''} → ${play.target || ''}`;
+              playsEl.appendChild(li);
+            });
+          }
+          if (lessonsEl) {
+            const lessons = (data.recent_lessons || []).slice(0, 2);
+            lessonsEl.textContent = lessons.length
+              ? 'Recent lessons: ' + lessons.map(l => l.lesson || l.market_date).join(' · ')
+              : '';
+          }
+        } catch (e) {
+          summaryEl.textContent = 'Strategy unavailable — chat still has export context.';
+        }
+      }
+      document.getElementById('dailyStrategyRefresh')?.addEventListener('click', () => loadDailyStrategy(true));
+      loadDailyStrategy(false);
       function appendChatBubble(role, text) {
         const box = document.getElementById('chatMessages');
         const el = document.createElement('div');

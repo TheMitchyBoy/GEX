@@ -10,6 +10,7 @@ token-budgeted JSON structure suitable for LLM consumption.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any
 
@@ -22,6 +23,8 @@ from gex_core.features import resolve_gamma_flip, safe_float
 from gex_core.market_features import attach_market_features, fetch_cross_asset_returns, fetch_vol_regime
 from gex_core.pipeline import GexAggregates
 from gex_core.spot_exposure import spot_exposure_mm_positions, spot_exposure_net_series
+
+logger = logging.getLogger(__name__)
 
 
 def _max_strikes() -> int:
@@ -378,7 +381,62 @@ def build_uw_context_bundle(
     except Exception:
         pass
 
+    try:
+        from gex_core.daily_learning import attach_learning_to_bundle
+
+        attach_learning_to_bundle(bundle, ticker)
+    except Exception:
+        logger.debug("Daily learning attachment skipped", exc_info=True)
+
     return bundle
+
+
+def build_context_bundle_from_snapshot(
+    *,
+    ticker: str,
+    snapshot: dict[str, Any],
+    history: list[dict] | None = None,
+    knn_prediction: dict[str, Any] | None = None,
+    api_key: str | None = None,
+    fetch_extras: bool = True,
+) -> dict[str, Any]:
+    """Build an LLM context bundle from a periscope/export snapshot (no live agg)."""
+    spot = safe_float(snapshot.get("spot"), 0.0)
+    strike = snapshot.get("strike")
+    if not isinstance(strike, pd.Series):
+        strike = pd.Series(dtype=float)
+    cumulative = snapshot.get("cumulative")
+    if not isinstance(cumulative, pd.Series):
+        cumulative = strike.cumsum() if not strike.empty else pd.Series(dtype=float)
+
+    greek_df = snapshot.get("greek_exposure_df")
+    spot_df = snapshot.get("spot_exposures_df")
+    market_date = snapshot.get("market_date") or snapshot.get("ts", "")[:10]
+
+    class _SnapshotAgg:
+        def __init__(self) -> None:
+            self.gex_by_strike = strike.rename("gex_bn_per_pct") if not strike.empty else pd.Series(dtype=float)
+            self.gex_by_strike.attrs = {
+                "greek_exposure_df": greek_df if isinstance(greek_df, pd.DataFrame) else None,
+                "spot_exposures_df": spot_df if isinstance(spot_df, pd.DataFrame) else None,
+            }
+            self.cumulative_gex = cumulative
+            self.gex_by_expiration = snapshot.get("expiration") or pd.Series(dtype=float)
+            self.surface_data = snapshot.get("surface_df") if isinstance(snapshot.get("surface_df"), pd.DataFrame) else pd.DataFrame()
+            self.total_gex_bn = safe_float(snapshot.get("total_gex"), float(strike.sum()) if not strike.empty else 0.0)
+
+    agg = _SnapshotAgg()
+    return build_uw_context_bundle(
+        ticker=ticker,
+        spot=spot,
+        agg=agg,
+        gamma_flip=snapshot.get("gamma_flip"),
+        spot_gamma_bn=None,
+        history=history,
+        knn_prediction=knn_prediction,
+        api_key=api_key,
+        fetch_extras=fetch_extras and bool(api_key),
+    )
 
 
 def try_build_uw_bundle_from_entry(

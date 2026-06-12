@@ -41,6 +41,11 @@ _CHAT_SYSTEM = (
     "snapshots, date range, trades, win rate, and return when the user asks for a backtest.\n"
     "- When confidence_monte_carlo is present, it swept min-entry and strong-confidence "
     "advisor thresholds on history. Recommend the best_roi row for ROI optimization.\n"
+    "- When daily_learning is present, read today_strategy for the session plan and "
+    "recent_lessons for what worked or failed on prior days. Suggest concrete intraday "
+    "plays (direction, trigger, target) aligned with dealer gamma regime.\n"
+    "- Learn incrementally: cite prior lessons when they apply; note when today's "
+    "structure contradicts yesterday's playbook.\n"
 )
 
 _MAX_SESSIONS = int(os.environ.get("GEX_CHAT_MAX_SESSIONS", "200"))
@@ -105,17 +110,24 @@ def build_welcome_message(
     total_gex: float,
     gamma_flip: float | None,
     exposure: str,
+    daily_strategy: dict[str, Any] | None = None,
 ) -> str:
     spot_str = f"${spot:,.0f}" if spot else "N/A"
     flip_str = f"{gamma_flip:.0f}" if gamma_flip else "N/A"
-    return (
+    lines = [
         f"Hi — I'm your **GEX assistant** for {ticker}. "
         f"I have Unusual Whales {exposure} exposure for this snapshot "
-        f"(spot {spot_str}, {regime}, net GEX {total_gex:+.2f} Bn$/%, flip {flip_str}).\n\n"
-        "Ask me about regime, key levels, predictions, charm/vanna, or trade setups. "
-        "Ask me to **backtest** the strategy to simulate current auto-trader settings on history. "
-        "Ask me to **optimize confidence** for a Monte Carlo sweep over advisor thresholds."
+        f"(spot {spot_str}, {regime}, net GEX {total_gex:+.2f} Bn$/%, flip {flip_str}).",
+    ]
+    if daily_strategy:
+        from gex_core.daily_learning import format_strategy_brief
+
+        lines.append(format_strategy_brief(daily_strategy))
+    lines.append(
+        "Ask about today's strategy, regime, key levels, charm/vanna, or trade setups. "
+        "Ask me to **backtest** the strategy or **optimize confidence** over advisor thresholds."
     )
+    return "\n\n".join(lines)
 
 
 def _build_system_message(
@@ -267,6 +279,8 @@ def chat_reply(
     history: list[dict] | None = None,
     knn_prediction: dict[str, Any] | None = None,
     api_key: str | None = None,
+    uw_bundle: dict[str, Any] | None = None,
+    daily_strategy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Process a user message and return assistant reply with session state."""
     user_message = (user_message or "").strip()
@@ -301,8 +315,7 @@ def chat_reply(
         use_openai=False,
     )
 
-    uw_bundle = None
-    if agg is not None:
+    if uw_bundle is None and agg is not None:
         uw_bundle = build_uw_context_bundle(
             ticker=ticker,
             spot=spot,
@@ -388,6 +401,7 @@ def chat_reply(
         "llm_error": llm_errors[0] if llm_errors and llm_source == "rule_based" else None,
         "openai_configured": _resolve_openai_config() is not None,
         "uw_data_fed": uw_bundle is not None,
+        "daily_strategy": (uw_bundle or {}).get("daily_learning", {}).get("today_strategy") or daily_strategy,
         "trader_backtest": trader_backtest,
         "confidence_monte_carlo": confidence_monte_carlo,
         "messages": list(session.messages),

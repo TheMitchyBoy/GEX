@@ -64,7 +64,8 @@ def _build_advisor_context(
             "candidate_signals": signals,
             "trade_memory": memory,
             "uw_summary": (uw_bundle or {}).get("summary"),
-            "uw_strikes_near_spot": (uw_bundle or {}).get("strikes_near_spot"),
+            "uw_greek_strikes": (uw_bundle or {}).get("greek_exposure_by_strike"),
+            "uw_spot_strikes": (uw_bundle or {}).get("spot_exposures_by_strike"),
             "knn_forecast": (uw_bundle or {}).get("knn_forecast"),
         }
         text = bundle_to_prompt_json(compact)

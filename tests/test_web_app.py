@@ -34,6 +34,18 @@ def test_ticker_page_does_not_block_on_live_wall_gex_data(monkeypatch):
     assert calls["n"] == 0
 
 
+def test_api_agent_daily_strategy():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/api/agent/daily-strategy")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ticker"] == "SPX"
+    assert "strategy" in data
+    assert "recent_lessons" in data
+
+
 def test_ticker_api_payload_skips_backtest_when_configured(monkeypatch):
     from web_app import _ticker_api_payload
 
