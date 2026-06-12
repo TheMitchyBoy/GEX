@@ -317,6 +317,28 @@
         background: #67e8f9;
         opacity: 0.65;
       }
+      .layer-toggles {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1rem;
+        padding: 0.55rem 1rem 0.35rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.68rem;
+        color: var(--muted);
+      }
+      .layer-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        cursor: pointer;
+        user-select: none;
+      }
+      .layer-toggle input { accent-color: var(--accent); cursor: pointer; }
+      .chart-click-hint {
+        font-size: 0.62rem;
+        color: var(--muted);
+        padding: 0 1rem 0.5rem;
+      }
 
       /* Time nav */
       .time-nav .form-control, .time-nav .form-select {
@@ -547,7 +569,7 @@
         </div>
         <div class="d-flex flex-wrap gap-2 mb-3">
           {% if timeline.prev_ts %}<a class="btn btn-sm btn-primary btn-nav" id="rewindBtn" href="?ts={{ timeline.prev_ts }}">← 10 min</a>{% else %}<button class="btn btn-sm btn-primary btn-nav" disabled>← 10 min</button>{% endif %}
-          {% if timeline.next_ts %}<a class="btn btn-sm btn-outline-light btn-nav" href="?ts={{ timeline.next_ts }}">10 min →</a>{% else %}<button class="btn btn-sm btn-outline-light btn-nav" disabled>10 min →</button>{% endif %}
+          {% if timeline.next_ts %}<a class="btn btn-sm btn-outline-light btn-nav" id="forwardBtn" href="?ts={{ timeline.next_ts }}">10 min →</a>{% else %}<button class="btn btn-sm btn-outline-light btn-nav" disabled>10 min →</button>{% endif %}
           {% if not timeline.is_latest %}<a class="btn btn-sm btn-outline-info btn-nav" href="?">Jump to latest</a>{% endif %}
         </div>
         <div class="row g-2">
@@ -572,6 +594,16 @@
               <span class="chip" style="font-size:0.58rem;">±{{ '%.1f'|format(strike_window_pct * 100) }}% window</span>
             </div>
             <div class="uw-panel-body"><div id="strategyChart"></div></div>
+            <div class="layer-toggles" id="layerToggles">
+              <label class="layer-toggle"><input type="checkbox" id="layerGammaHistory" checked> γ history</label>
+              <label class="layer-toggle"><input type="checkbox" id="layerDeltaPulse" checked> Δγ pulses</label>
+              <label class="layer-toggle"><input type="checkbox" id="layerSignalTrail" checked> Signal path</label>
+              <label class="layer-toggle"><input type="checkbox" id="layerWalls" checked> Walls / signals</label>
+              <label class="layer-toggle"><input type="checkbox" id="layerLevels" checked> Level guides</label>
+              <label class="layer-toggle"><input type="checkbox" id="layerSpot" checked> Spot</label>
+              <label class="layer-toggle"><input type="checkbox" id="layerPositions" checked> Positions</label>
+            </div>
+            <div class="chart-click-hint">Click a strike bar to open Quick Trade with that strike prefilled</div>
             <div class="chart-legend">
               <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> +γ now</span>
               <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> −γ now</span>
@@ -771,18 +803,104 @@
     <script>
       const strategySpec = {{ strategy_chart_json|safe if strategy_chart_json else 'null' }};
       const plotConfig = {responsive: true, displayModeBar: false};
-      const timelineData = {{ timeline|tojson }};
       const chatWelcome = {{ chat_welcome|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
       const ticker = '{{ ticker }}';
       const strikeWindowPct = {{ strike_window_pct|tojson }};
       const wallMode = {{ wall_mode|default(false)|tojson }};
+      const selectedTsInitial = {{ selected_ts|tojson }};
+      const LAYER_STORAGE_KEY = 'gex_strategy_map_layers';
+      let timelineData = {{ timeline|tojson }};
+      let currentChartSpec = strategySpec;
 
       const chartEl = document.getElementById('strategyChart');
 
+      const LAYER_IDS = {
+        gamma_history: 'layerGammaHistory',
+        delta_pulse: 'layerDeltaPulse',
+        signal_trail: 'layerSignalTrail',
+        walls: 'layerWalls',
+        levels: 'layerLevels',
+        spot: 'layerSpot',
+        positions: 'layerPositions',
+      };
+
+      function loadLayerPrefs() {
+        try {
+          const raw = localStorage.getItem(LAYER_STORAGE_KEY);
+          if (!raw) return;
+          const prefs = JSON.parse(raw);
+          Object.entries(LAYER_IDS).forEach(([layer, id]) => {
+            const el = document.getElementById(id);
+            if (el && prefs[layer] != null) el.checked = !!prefs[layer];
+          });
+        } catch (_) {}
+      }
+
+      function saveLayerPrefs() {
+        const prefs = {};
+        Object.entries(LAYER_IDS).forEach(([layer, id]) => {
+          const el = document.getElementById(id);
+          if (el) prefs[layer] = el.checked;
+        });
+        try { localStorage.setItem(LAYER_STORAGE_KEY, JSON.stringify(prefs)); } catch (_) {}
+      }
+
+      function applyLayerVisibility(spec) {
+        if (!spec?.data) return spec;
+        const data = spec.data.map(trace => {
+          const layer = trace.meta?.layer;
+          if (!layer || layer === 'gamma_bars' || layer === 'equity') return trace;
+          const toggleId = LAYER_IDS[layer];
+          if (!toggleId) return trace;
+          const el = document.getElementById(toggleId);
+          const visible = el ? el.checked : true;
+          return { ...trace, visible: !!visible };
+        });
+        return { ...spec, data };
+      }
+
       function renderStrategyChart(spec) {
         if (!spec || !chartEl) return;
-        Plotly.react(chartEl, spec.data, spec.layout || {}, plotConfig);
+        currentChartSpec = spec;
+        const layered = applyLayerVisibility(spec);
+        Plotly.react(chartEl, layered.data, layered.layout || {}, plotConfig);
+      }
+
+      function bindLayerToggles() {
+        Object.values(LAYER_IDS).forEach(id => {
+          document.getElementById(id)?.addEventListener('change', () => {
+            saveLayerPrefs();
+            if (currentChartSpec) renderStrategyChart(currentChartSpec);
+          });
+        });
+      }
+
+      function spotPriceForTrade() {
+        const txt = document.getElementById('spotValue')?.textContent || '';
+        const val = parseFloat(txt.replace(/,/g, ''));
+        return Number.isFinite(val) ? val : 0;
+      }
+
+      function openQuickTradeForStrike(strike) {
+        if (!strike || strike <= 0) return;
+        const spot = spotPriceForTrade();
+        const optType = strike >= spot ? 'call' : 'put';
+        const p = new URLSearchParams({ strike: String(Math.round(strike)), type: optType });
+        window.location.href = '/trade?' + p.toString();
+      }
+
+      function bindChartStrikeClick() {
+        if (!chartEl) return;
+        chartEl.on('plotly_click', (ev) => {
+          const pt = ev.points?.[0];
+          if (!pt || pt.y == null) return;
+          const trace = currentChartSpec?.data?.[pt.curveNumber];
+          const layer = trace?.meta?.layer;
+          if (layer && layer !== 'gamma_bars') return;
+          if (trace?.type !== 'bar' && layer !== 'gamma_bars') return;
+          openQuickTradeForStrike(Number(pt.y));
+        });
       }
 
       function updateLastUpdated() {
@@ -937,6 +1055,46 @@
         return params;
       }
 
+      function applyStrategyPayload(data) {
+        if (data.chart_json) renderStrategyChart(JSON.parse(data.chart_json));
+        const st = data.state || {};
+        const spotVal = data.spot || st.spot;
+        if (spotVal) updateSpotDisplay(spotVal);
+        if (st.performance) updateKpis(st.performance);
+        updateFilterPanel(st.filters, st.signals, st.advice);
+        renderOpenPositions(st.open_positions);
+        renderRecentTrades(st.recent_trades);
+        const rec = st.signals?.recommended;
+        const qt = document.getElementById('quickTradeLink');
+        if (qt && rec?.strike) {
+          const p = new URLSearchParams({ load_signal: '1' });
+          qt.href = '/trade?' + p.toString();
+        }
+        if (data.timeline) {
+          timelineData = { ...timelineData, ...data.timeline };
+        }
+        if (data.selected_ts) {
+          const sel = document.getElementById('sessionTime');
+          if (sel && [...sel.options].some(o => o.value === data.selected_ts)) {
+            sel.value = data.selected_ts;
+          }
+        }
+        updateLastUpdated();
+      }
+
+      async function loadStrategySlice({ ts = null, date = null, pushUrl = true } = {}) {
+        const params = strategyQueryParams();
+        if (ts) params.set('ts', ts);
+        else if (date) params.delete('ts'), params.set('date', date);
+        const qs = params.toString() ? '?' + params.toString() : '';
+        try {
+          const res = await fetch('/api/trader/strategy' + qs);
+          const data = await res.json();
+          applyStrategyPayload(data);
+          if (pushUrl) history.replaceState(null, '', '?' + params.toString());
+        } catch (_) {}
+      }
+
       async function refreshStrategy() {
         const btn = document.getElementById('strategyRefreshBtn');
         btn?.classList.add('loading');
@@ -944,40 +1102,41 @@
         const qs = params.toString() ? '?' + params.toString() : '';
         try {
           const res = await fetch('/api/trader/strategy' + qs);
-          const data = await res.json();
-          if (data.chart_json) renderStrategyChart(JSON.parse(data.chart_json));
-          const st = data.state || {};
-          if (st.spot) updateSpotDisplay(st.spot);
-          if (st.performance) updateKpis(st.performance);
-          updateFilterPanel(st.filters, st.signals, st.advice);
-          renderOpenPositions(st.open_positions);
-          renderRecentTrades(st.recent_trades);
-          const rec = st.signals?.recommended;
-          const qt = document.getElementById('quickTradeLink');
-          if (qt && rec?.strike) {
-            const p = new URLSearchParams({ load_signal: '1' });
-            qt.href = '/trade?' + p.toString();
-          }
-          updateLastUpdated();
+          applyStrategyPayload(await res.json());
         } catch (_) {}
         finally { btn?.classList.remove('loading'); }
       }
 
+      loadLayerPrefs();
+      bindLayerToggles();
       renderStrategyChart(strategySpec);
+      bindChartStrikeClick();
       updateLastUpdated();
       startSpotStream();
       if (isLiveSlice) window.setInterval(refreshStrategy, 60000);
 
       function navigateTime({ ts = null, date = null } = {}) {
-        const params = strategyQueryParams();
-        if (ts) params.set('ts', ts);
-        else if (date) params.set('date', date);
-        window.location.href = '?' + params.toString();
+        if (date) {
+          const params = strategyQueryParams();
+          if (date) params.set('date', date);
+          window.location.href = '?' + params.toString();
+          return;
+        }
+        if (ts) loadStrategySlice({ ts, pushUrl: true });
       }
       document.getElementById('sessionDate')?.addEventListener('change', e => e.target.value && navigateTime({date: e.target.value}));
-      document.getElementById('sessionTime')?.addEventListener('change', e => e.target.value && navigateTime({ts: e.target.value}));
+      document.getElementById('sessionTime')?.addEventListener('change', e => e.target.value && loadStrategySlice({ ts: e.target.value }));
       document.getElementById('rewindBtn')?.addEventListener('click', e => {
-        if (timelineData?.prev_ts) { e.preventDefault(); navigateTime({ts: timelineData.prev_ts}); }
+        if (timelineData?.prev_ts) {
+          e.preventDefault();
+          loadStrategySlice({ ts: timelineData.prev_ts });
+        }
+      });
+      document.getElementById('forwardBtn')?.addEventListener('click', e => {
+        if (timelineData?.next_ts) {
+          e.preventDefault();
+          loadStrategySlice({ ts: timelineData.next_ts });
+        }
       });
       document.getElementById('strategyRefreshBtn')?.addEventListener('click', refreshStrategy);
 

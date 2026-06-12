@@ -2,6 +2,7 @@ import pandas as pd
 
 from gex_core.trading.strategy_viz import (
     _chart_exposure_window,
+    _gamma_bar_marker_styles,
     _gamma_change_points,
     build_strategy_chart,
     build_strategy_dashboard,
@@ -123,6 +124,13 @@ def test_build_wall_strategy_state_finds_low_and_high_walls(monkeypatch):
     assert state["signals"]["max_gamma_strike"]["signal_type"] == "max_gamma_strike"
 
 
+def test_gamma_bar_marker_styles_heats_large_delta():
+    window = pd.Series([1.0, -0.5, 0.2], index=[7380.0, 7390.0, 7400.0])
+    prior = pd.Series([0.2, -0.5, 0.2], index=[7380.0, 7390.0, 7400.0])
+    _colors, opacities = _gamma_bar_marker_styles(window, prior)
+    assert max(opacities) > min(opacities)
+
+
 def test_gamma_change_points_detects_largest_moves():
     current = pd.Series([1.0, -0.5, 0.2], index=[7380.0, 7390.0, 7400.0])
     trail = [
@@ -162,6 +170,37 @@ def test_build_strategy_chart_includes_gamma_history_traces(monkeypatch):
     )
     scatter_traces = [t for t in fig.data if getattr(t, "mode", "") and "markers" in t.mode]
     assert len(scatter_traces) >= 2
+    layers = {t.meta.get("layer") for t in fig.data if getattr(t, "meta", None)}
+    assert "gamma_bars" in layers
+    assert "gamma_history" in layers
+
+
+def test_build_strategy_chart_includes_signal_path_trace(monkeypatch):
+    monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: None)
+    monkeypatch.setenv("GEX_TRADER_CLEAR_FILTERS", "0")
+    cur = pd.Series([-2.0, 0.5, 1.0], index=[7375.0, 7385.0, 7395.0])
+    trail_series = [
+        {"label": "t-3", "series": pd.Series([-1.5, 0.4, 0.8], index=[7375.0, 7385.0, 7395.0]), "age": 3, "spot": 7385.0},
+        {"label": "t-2", "series": pd.Series([-1.8, 0.45, 0.9], index=[7375.0, 7385.0, 7395.0]), "age": 2, "spot": 7385.0},
+        {"label": "t-1", "series": pd.Series([-1.9, 0.48, 0.95], index=[7375.0, 7385.0, 7395.0]), "age": 1, "spot": 7385.0},
+    ]
+    state = build_strategy_state(
+        ticker="SPX",
+        spot=7385.0,
+        exposure=cur,
+        previous_exposure=trail_series[-1]["series"],
+        snapshot={"regime": "LONG gamma"},
+    )
+    fig = build_strategy_chart(
+        spot=7385.0,
+        exposure=cur,
+        state=state,
+        exposure_trail=trail_series,
+        wall_mode=True,
+        window_pct=0.01,
+    )
+    encoded = fig.to_json()
+    assert "Signal path" in encoded or "signal_trail" in encoded
 
 
 def test_build_wall_strategy_dashboard_returns_chart(monkeypatch):
