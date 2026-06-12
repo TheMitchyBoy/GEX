@@ -26,15 +26,31 @@ def _health_cache_ttl() -> float:
         return 30.0
 
 
-def build_system_status(ticker: str | None = None, *, use_cache: bool = True) -> dict:
+def build_system_status(
+    ticker: str | None = None,
+    *,
+    use_cache: bool = True,
+    light: bool = False,
+) -> dict:
     ticker = (ticker or PRIMARY_TICKER).upper()
+    cache_key = f"{ticker}:{'light' if light else 'full'}"
     if use_cache:
-        cached = _HEALTH_CACHE.get(ticker)
+        cached = _HEALTH_CACHE.get(cache_key)
         if cached and (time.monotonic() - cached[0]) < _health_cache_ttl():
             return dict(cached[1])
     latest_ts = get_latest_ts(ticker, EXPORT_DIR)
     age_min = export_age_minutes(ticker, EXPORT_DIR)
-    timestamps = list_export_timestamps(ticker, EXPORT_DIR)
+    if light:
+        try:
+            from gex_core.storage import list_indexed_timestamps
+
+            timestamps = list_indexed_timestamps(ticker)
+        except Exception:
+            timestamps = []
+        if not timestamps and latest_ts:
+            timestamps = [latest_ts]
+    else:
+        timestamps = list_export_timestamps(ticker, EXPORT_DIR)
     history_loaded = 0
     if timestamps:
         latest_dt = parse_timestamp(timestamps[-1])
@@ -54,13 +70,15 @@ def build_system_status(ticker: str | None = None, *, use_cache: bool = True) ->
         stale = True
 
     strike_csv_on_disk = None
-    catalog_timestamps = len(list_export_timestamps(ticker, EXPORT_DIR))
-    try:
-        sync_ticker_exports(ticker, EXPORT_DIR)
-        strike_csv_on_disk = count_strike_exports_on_disk(ticker, EXPORT_DIR)
+    catalog_timestamps = len(timestamps)
+    if not light:
         catalog_timestamps = len(list_export_timestamps(ticker, EXPORT_DIR))
-    except Exception:
-        pass
+        try:
+            sync_ticker_exports(ticker, EXPORT_DIR)
+            strike_csv_on_disk = count_strike_exports_on_disk(ticker, EXPORT_DIR)
+            catalog_timestamps = len(list_export_timestamps(ticker, EXPORT_DIR))
+        except Exception:
+            pass
 
     ready = history_loaded > 0
     payload = {
@@ -94,5 +112,5 @@ def build_system_status(ticker: str | None = None, *, use_cache: bool = True) ->
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     if use_cache:
-        _HEALTH_CACHE[ticker] = (time.monotonic(), dict(payload))
+        _HEALTH_CACHE[cache_key] = (time.monotonic(), dict(payload))
     return payload

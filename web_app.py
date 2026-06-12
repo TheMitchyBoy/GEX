@@ -800,9 +800,15 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
     }
 
 
+@APP.get("/health/live")
+def health_live():
+    """Instant liveness probe — no disk scan (Railway/Docker)."""
+    return jsonify({"ok": True, "ticker": PRIMARY_TICKER}), 200
+
+
 @APP.get("/health")
 def health():
-    status = build_system_status(PRIMARY_TICKER)
+    status = build_system_status(PRIMARY_TICKER, light=True)
     # Liveness: always 200 when the process responds. Use ``ready`` / ``healthy``
     # in the JSON for readiness probes (fresh deploys have no exports yet).
     return jsonify(status), 200
@@ -811,7 +817,7 @@ def health():
 @APP.get("/health/ready")
 def health_ready():
     """Strict readiness probe — 503 until export history exists."""
-    status = build_system_status(PRIMARY_TICKER)
+    status = build_system_status(PRIMARY_TICKER, light=False)
     code = 200 if status.get("ready") else 503
     return jsonify(status), code
 

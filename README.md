@@ -158,6 +158,7 @@ docker compose --profile tools run --rm refresh
 6. `GEX_PAGE_MINIMAL_LOAD=1` (default) loads **only the current gamma snapshot** on dashboard pages — no historical replay catalog or prior-slice trails. Scheduled refresh still writes every export to `data/exports/` for backfill, training, and backtests.
 7. `GEX_PAGE_UW_PEEK_ONLY=1` (default) avoids blocking HTML on live UW HTTP — pages paint from exports/cache immediately; the browser fetches fresh UW data via `?live=1` on strategy/status refresh (4s timeout via `GEX_UW_FETCH_TIMEOUT_SEC`).
 8. After the first backfill, consider `GEX_DASHBOARD_HISTORY_DAYS=30`, `GEX_AUTO_BACKFILL_IF_EMPTY=0`, and `GEX_STARTUP_BACKFILL=0` to reduce disk I/O on deploy.
+9. Railway health check uses `/health/live` (instant). If the site shows `ERR_CONNECTION_ABORTED`, open **Deployments → Logs** — common causes are OOM during model retrain (`GEX_RETRAIN_ON_START=1`), missing volume at `/app/data`, or a crashed gunicorn worker. Set `GEX_DATA_DIR=/app/data` and mount a persistent volume.
 
 ### 7. Pages and auto-traders
 

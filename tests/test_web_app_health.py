@@ -1,3 +1,12 @@
+def test_health_live_is_instant():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/health/live")
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "ticker": "SPX"}
+
+
 def test_health_endpoint_always_live():
     from web_app import APP
 

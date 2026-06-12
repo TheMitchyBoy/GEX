@@ -14,15 +14,20 @@ export GEX_PAGE_MINIMAL_LOAD="${GEX_PAGE_MINIMAL_LOAD:-1}"
 export GEX_PAGE_UW_PEEK_ONLY="${GEX_PAGE_UW_PEEK_ONLY:-1}"
 export GEX_UW_FETCH_TIMEOUT_SEC="${GEX_UW_FETCH_TIMEOUT_SEC:-4}"
 export GEX_AGENT_FETCH_EXTRAS="${GEX_AGENT_FETCH_EXTRAS:-0}"
+export GEX_AUTO_BACKFILL_IF_EMPTY="${GEX_AUTO_BACKFILL_IF_EMPTY:-0}"
 
 _should_backfill() {
   python3 - <<'PY'
 import os
-from gex_core.storage import count_strike_exports_on_disk
+from gex_core.storage import list_indexed_timestamps
 
+ticker = os.environ.get("TICKERS", "SPX").split(",")[0].strip() or "SPX"
 min_rows = int(os.environ.get("GEX_FORECAST_MIN_SNAPSHOTS", "4"))
-disk = count_strike_exports_on_disk(os.environ.get("TICKERS", "SPX").split(",")[0].strip() or "SPX")
-raise SystemExit(0 if disk < min_rows else 1)
+try:
+    indexed = len(list_indexed_timestamps(ticker))
+except Exception:
+    indexed = 0
+raise SystemExit(0 if indexed < min_rows else 1)
 PY
 }
 
