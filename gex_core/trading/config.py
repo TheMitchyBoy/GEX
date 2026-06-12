@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from gex_core.env_bootstrap import parse_env_minutes
 
@@ -330,6 +331,51 @@ def near_wall_shift_min_pts() -> float:
 def near_wall_reenter_on_shift() -> bool:
     """Near-spot: MC suggests disabling shift flatten (same PnL, fewer churn exits)."""
     return _flag("GEX_NEAR_WALL_REENTER_ON_SHIFT", "0")
+
+
+DEFAULT_WALL_WINDOW_PCT = 0.12
+
+
+@dataclass(frozen=True)
+class WallGexProfile:
+    """Resolved SL/TP/hold/shift settings for a wall GEX strike window."""
+
+    window_pct: float
+    stop_loss_pct: float
+    take_profit_pct: float
+    max_hold_bars: int
+    reenter_on_shift: bool
+    shift_min_pts: float
+    near: bool
+
+
+def is_near_wall_window(window_pct: float) -> bool:
+    """True when the strike search band is the /near ±1% view."""
+    return float(window_pct) <= near_wall_window_pct() + 1e-9
+
+
+def wall_gex_profile(window_pct: float | None = None) -> WallGexProfile:
+    """Return wall GEX params for full (12%) or near-spot (±1%) windows."""
+    wp = DEFAULT_WALL_WINDOW_PCT if window_pct is None else float(window_pct)
+    if is_near_wall_window(wp):
+        return WallGexProfile(
+            window_pct=wp,
+            stop_loss_pct=near_wall_stop_loss_pct(),
+            take_profit_pct=near_wall_take_profit_pct(),
+            max_hold_bars=near_wall_max_hold_bars(),
+            reenter_on_shift=near_wall_reenter_on_shift(),
+            shift_min_pts=near_wall_shift_min_pts(),
+            near=True,
+        )
+    return WallGexProfile(
+        window_pct=wp,
+        stop_loss_pct=wall_stop_loss_pct(),
+        take_profit_pct=wall_take_profit_pct(),
+        max_hold_bars=wall_max_hold_bars(),
+        reenter_on_shift=wall_reenter_on_shift(),
+        shift_min_pts=0.5,
+        near=False,
+    )
 
 
 def wall_reentry_after_stop() -> bool:

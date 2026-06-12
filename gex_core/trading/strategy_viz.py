@@ -759,8 +759,10 @@ def build_wall_strategy_state(
     window_pct: float = 0.01,
 ) -> dict[str, Any]:
     """Wall GEX signals, quality filters, and open positions for the near-spot dashboard."""
-    from gex_core.trading.config import wall_max_hold_bars, wall_stop_loss_pct, wall_take_profit_pct
+    from gex_core.trading.config import wall_gex_profile
     from gex_core.trading.low_gex_engine import is_wall_gex_trade, wall_gex_open_trades
+
+    profile = wall_gex_profile(window_pct)
 
     spot_val = safe_float(spot, 0.0)
     snap = snapshot or {}
@@ -805,13 +807,13 @@ def build_wall_strategy_state(
                 current_spot=spot_val,
                 strike=float(pos["strike"]),
             )
-        stop = wall_stop_loss_pct()
+        stop = profile.stop_loss_pct
         open_positions.append(
             {
                 **pos,
                 "pnl_pct": pnl,
                 "stop_pct": -stop,
-                "target_pct": wall_take_profit_pct(),
+                "target_pct": profile.take_profit_pct,
             }
         )
 
@@ -838,13 +840,15 @@ def build_wall_strategy_state(
         "performance": performance,
         "recent_trades": closed[:15],
         "rules": {
-            "stop_loss_pct": wall_stop_loss_pct(),
-            "take_profit_pct": wall_take_profit_pct(),
+            "stop_loss_pct": profile.stop_loss_pct,
+            "take_profit_pct": profile.take_profit_pct,
             "partial_take_profit_pct": 0.0,
             "trail_trigger_pct": 0.0,
             "trail_floor_pct": 0.0,
-            "max_strike_distance_pct": window_pct,
-            "max_hold_bars": wall_max_hold_bars(),
+            "max_strike_distance_pct": profile.window_pct,
+            "max_hold_bars": profile.max_hold_bars,
+            "reenter_on_shift": profile.reenter_on_shift,
+            "near_wall": profile.near,
         },
         "exit_profile": None,
         "levels": {

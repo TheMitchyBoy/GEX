@@ -10,6 +10,8 @@ import pandas as pd
 from gex_core.market_time import is_entry_window_active, is_trader_session_active, market_today
 from gex_core.trading.broker import broker_mode_label, get_broker
 from gex_core.trading.config import (
+    DEFAULT_WALL_WINDOW_PCT,
+    WallGexProfile,
     execution_ticker,
     live_trading_allowed,
     low_gex_reenter_each_bar,
@@ -19,12 +21,9 @@ from gex_core.trading.config import (
     wall_entry_time_filter,
     wall_gex_auto_enabled,
     wall_gex_cycle_seconds,
+    wall_gex_profile,
     wall_intraday_session,
-    wall_max_hold_bars,
-    wall_reenter_on_shift,
     wall_signal_filters_enabled,
-    wall_stop_loss_pct,
-    wall_take_profit_pct,
     webull_underlying,
 )
 from gex_core.trading.exits import build_simple_exit_profile
@@ -82,11 +81,12 @@ def _wall_gex_performance(ticker: str) -> dict[str, Any]:
     }
 
 
-def wall_gex_status(ticker: str = "SPX") -> dict[str, Any]:
+def wall_gex_status(ticker: str = "SPX", *, window_pct: float | None = None) -> dict[str, Any]:
     """Dashboard status payload for the wall GEX live trader."""
     from gex_core.trading.webull_broker import webull_auth_status
 
     ticker = ticker.upper()
+    profile = wall_gex_profile(window_pct)
     return {
         "ticker": ticker,
         "enabled": wall_gex_auto_enabled(),
@@ -97,10 +97,13 @@ def wall_gex_status(ticker: str = "SPX") -> dict[str, Any]:
         "signal_ticker": signal_ticker(),
         "execution_ticker": execution_ticker(),
         "webull_underlying": webull_underlying(),
-        "stop_loss_pct": wall_stop_loss_pct(),
-        "take_profit_pct": wall_take_profit_pct(),
-        "max_hold_bars": wall_max_hold_bars(),
-        "reenter_on_shift": wall_reenter_on_shift(),
+        "window_pct": profile.window_pct,
+        "near_wall": profile.near,
+        "stop_loss_pct": profile.stop_loss_pct,
+        "take_profit_pct": profile.take_profit_pct,
+        "max_hold_bars": profile.max_hold_bars,
+        "reenter_on_shift": profile.reenter_on_shift,
+        "shift_min_pts": profile.shift_min_pts,
         "entry_time_filter": wall_entry_time_filter(),
         "intraday_session": wall_intraday_session(),
         "signal_filters": wall_signal_filters_enabled(),
@@ -161,9 +164,15 @@ def _has_open_duplicate(ticker: str, *, strike: float, option_type: str) -> bool
     return False
 
 
-def _flatten_on_wall_shift(ticker: str, *, spot: float, wall_strike: float) -> list[dict[str, Any]]:
+def _flatten_on_wall_shift(
+    ticker: str,
+    *,
+    spot: float,
+    wall_strike: float,
+    profile: WallGexProfile,
+) -> list[dict[str, Any]]:
     """Close wall GEX positions when the target GEX wall strike moves."""
-    if not wall_reenter_on_shift():
+    if not profile.reenter_on_shift:
         return []
 
     exec_spot = float(spot)
@@ -174,10 +183,11 @@ def _flatten_on_wall_shift(ticker: str, *, spot: float, wall_strike: float) -> l
         exec_spot = float(mapped)
 
     broker = get_broker()
+    min_shift = max(0.5, float(profile.shift_min_pts))
     closed: list[dict[str, Any]] = []
     for pos in wall_gex_open_trades(ticker):
         prior_wall = float(pos.get("signal_strike") or pos.get("strike") or 0.0)
-        if prior_wall <= 0 or abs(prior_wall - wall_strike) < 0.5:
+        if prior_wall <= 0 or abs(prior_wall - wall_strike) < min_shift:
             continue
         pnl_pct = broker.position_pnl_pct(pos, spot=exec_spot)
         if pnl_pct is None:
@@ -226,13 +236,17 @@ def run_low_gex_trade(
     session_check: bool = True,
     reenter_each_bar: bool | None = None,
     entry_time_filter: bool | None = None,
+    window_pct: float | None = None,
 ) -> dict[str, Any]:
     """Evaluate lowest-GEX signal and optionally open a position."""
     ticker = ticker.upper()
+    profile = wall_gex_profile(window_pct)
     out: dict[str, Any] = {
         "ticker": ticker,
         "broker_mode": broker_mode_label(),
         "executed": False,
+        "window_pct": profile.window_pct,
+        "near_wall": profile.near,
     }
 
     if (session_check or wall_intraday_session()) and not is_trader_session_active():
@@ -251,7 +265,7 @@ def run_low_gex_trade(
     out["spot"] = float(spot)
     out["exits"] = manage_wall_gex_exits(ticker, spot=float(spot))
 
-    signal_pack = compute_low_gex_signal(exposure, spot=spot)
+    signal_pack = compute_low_gex_signal(exposure, spot=spot, window_pct=profile.window_pct)
     out["signal"] = signal_pack
     if not signal_pack.get("available"):
         out["ran"] = True
@@ -313,6 +327,7 @@ def run_low_gex_trade(
         ticker,
         spot=float(spot),
         wall_strike=wall_strike,
+        profile=profile,
     )
 
     rotate = low_gex_reenter_each_bar() if reenter_each_bar is None else reenter_each_bar
@@ -356,10 +371,10 @@ def run_low_gex_trade(
         else None
     )
 
-    hold_bars = wall_max_hold_bars()
+    hold_bars = profile.max_hold_bars
     exit_profile = build_simple_exit_profile(
-        stop_loss=wall_stop_loss_pct(),
-        take_profit=wall_take_profit_pct(),
+        stop_loss=profile.stop_loss_pct,
+        take_profit=profile.take_profit_pct,
         time_stop_bars=hold_bars,
         max_hold_bars=hold_bars,
     )
@@ -493,6 +508,7 @@ def run_wall_gex_cycle(
     exposure: pd.Series | None = None,
     execute: bool = False,
     force: bool = False,
+    window_pct: float | None = DEFAULT_WALL_WINDOW_PCT,
 ) -> dict[str, Any]:
     """One wall GEX evaluation cycle for the dashboard scheduler or manual run."""
     result = run_low_gex_trade(
@@ -501,6 +517,7 @@ def run_wall_gex_cycle(
         exposure=exposure,
         execute=execute,
         force=force,
+        window_pct=window_pct,
     )
-    result["status"] = wall_gex_status(ticker)
+    result["status"] = wall_gex_status(ticker, window_pct=window_pct)
     return result

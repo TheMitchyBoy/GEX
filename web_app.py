@@ -735,10 +735,11 @@ def _wall_gex_live_data(ticker: str) -> tuple[float | None, pd.Series | None, di
 
 
 def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
+    from gex_core.trading.config import DEFAULT_WALL_WINDOW_PCT
     from gex_core.trading.low_gex_engine import wall_gex_status
 
     ticker = ticker.upper()
-    status = wall_gex_status(ticker)
+    status = wall_gex_status(ticker, window_pct=DEFAULT_WALL_WINDOW_PCT)
     # Shell HTML only — live signal loads via /api/wall-gex/status (avoids Railway 502 timeouts).
     spot: float | None = None
     last_cycle: dict[str, Any] = {"ran": False, "reason": "Loading signal…"}
@@ -1092,8 +1093,15 @@ def api_trader_suggestions():
 def api_wall_gex_status():
     from gex_core.trading.low_gex_engine import wall_gex_status
 
+    from gex_core.trading.config import DEFAULT_WALL_WINDOW_PCT
+
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
-    status = wall_gex_status(ticker)
+    window_pct = (
+        _dashboard_strike_window_pct()
+        if request.args.get("window_pct") is not None
+        else DEFAULT_WALL_WINDOW_PCT
+    )
+    status = wall_gex_status(ticker, window_pct=window_pct)
     spot: float | None = None
     last_cycle: dict[str, Any] = {"ran": False, "reason": "Loading signal"}
     try:
@@ -1119,9 +1127,19 @@ def api_wall_gex_arm():
                 "live_mode": True,
             }
         ), 400
+    from gex_core.trading.config import DEFAULT_WALL_WINDOW_PCT
+
     arm_trader(armed)
     ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
-    return jsonify({"armed": armed, "status": wall_gex_status(ticker)})
+    window_pct = payload.get("window_pct")
+    if window_pct is not None:
+        try:
+            window_pct = max(0.005, min(0.25, float(window_pct)))
+        except (TypeError, ValueError):
+            window_pct = DEFAULT_WALL_WINDOW_PCT
+    else:
+        window_pct = DEFAULT_WALL_WINDOW_PCT
+    return jsonify({"armed": armed, "status": wall_gex_status(ticker, window_pct=window_pct)})
 
 
 @APP.post("/api/wall-gex/run")
@@ -1137,12 +1155,23 @@ def api_wall_gex_run():
             return jsonify({"error": "No spot price available", "last_cycle": preview}), 503
         if exposure is None:
             return jsonify({"error": "No gamma exposure available", "last_cycle": preview}), 503
+        from gex_core.trading.config import DEFAULT_WALL_WINDOW_PCT
+
+        window_pct = payload.get("window_pct")
+        if window_pct is not None:
+            try:
+                window_pct = max(0.005, min(0.25, float(window_pct)))
+            except (TypeError, ValueError):
+                window_pct = DEFAULT_WALL_WINDOW_PCT
+        else:
+            window_pct = DEFAULT_WALL_WINDOW_PCT
         result = run_wall_gex_cycle(
             ticker=ticker,
             spot=float(spot),
             exposure=exposure,
             execute=True,
             force=True,
+            window_pct=window_pct,
         )
         return jsonify(result)
     except Exception as exc:

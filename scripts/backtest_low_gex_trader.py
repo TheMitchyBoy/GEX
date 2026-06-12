@@ -35,8 +35,18 @@ def main() -> None:
     parser.add_argument("--max-snapshots", type=int, default=500)
     parser.add_argument("--dedupe", action="store_true", help="Skip identical consecutive strike profiles")
     parser.add_argument("--json", action="store_true", help="Print full JSON result")
-    parser.add_argument("--stop-loss", type=float, default=0.03, help="Stop loss fraction (default 3%%)")
-    parser.add_argument("--take-profit", type=float, default=0.22, help="Take profit fraction (default 22%%)")
+    parser.add_argument(
+        "--stop-loss",
+        type=float,
+        default=None,
+        help="Stop loss fraction (default: profile for --window-pct; full=3%%, near=3%%)",
+    )
+    parser.add_argument(
+        "--take-profit",
+        type=float,
+        default=None,
+        help="Take profit fraction (default: profile for --window-pct; full=22%%, near=28%%)",
+    )
     parser.add_argument("--starting-capital", type=float, default=500.0)
     parser.add_argument(
         "--max-hold-bars",
@@ -88,7 +98,11 @@ def main() -> None:
 
     print(f"\n=== Low-GEX backtest · {result.get('ticker', args.ticker.upper())} ===")
     if result.get("window_pct") is not None:
-        print(f"strike window: ±{result['window_pct'] * 100:.1f}% of spot")
+        near = result.get("near_wall")
+        label = "near-wall profile" if near else "full-wall profile"
+        print(f"strike window: ±{result['window_pct'] * 100:.1f}% of spot ({label})")
+    if result.get("reenter_on_shift") is not None:
+        print(f"re-enter on wall shift: {'on' if result['reenter_on_shift'] else 'off'}")
     if result.get("reenter_each_bar"):
         print("mode: re-enter each bar (close + open toward lowest GEX)")
     if result.get("date_from") and result.get("date_to"):

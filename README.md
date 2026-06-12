@@ -166,7 +166,7 @@ docker compose --profile tools run --rm refresh
 | `/trade` | **Webull quick-trade desk** — live quotes + one-click orders | manual / API | Webull credentials |
 | `/ticker/<TICKER>/...` | Per-ticker variants of the above | same | same |
 
-Both auto-traders read **SPX** gamma signals (`GEX_SIGNAL_TICKER=SPX`) and execute **SPY** 0DTE options by default (`GEX_EXECUTION_TICKER=SPY`). Default exits are **3% stop / 22% take profit** on Wall GEX; Gamma Magnet uses **20% / 60%** unless overridden via `GEX_TRADER_STOP_LOSS_PCT` / `GEX_TRADER_TAKE_PROFIT_PCT`.
+Both auto-traders read **SPX** gamma signals (`GEX_SIGNAL_TICKER=SPX`) and execute **SPY** 0DTE options by default (`GEX_EXECUTION_TICKER=SPY`). Default exits are **3% stop / 22% take profit** on full-window Wall GEX (`/`); **near-spot walls** (`/near`, ±1%) use **3% / 28%** with **10-bar max hold** and **wall-shift re-entry off** (`GEX_NEAR_WALL_*`). Gamma Magnet uses **20% / 60%** unless overridden via `GEX_TRADER_STOP_LOSS_PCT` / `GEX_TRADER_TAKE_PROFIT_PCT`.
 
 **Scheduler loops** (when not disabled):
 
