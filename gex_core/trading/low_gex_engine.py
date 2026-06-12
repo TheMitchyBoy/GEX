@@ -38,7 +38,11 @@ from gex_core.trading.journal import (
     patch_trade_meta,
     record_decision,
 )
-from gex_core.trading.low_gex_signals import compute_low_gex_signal, wall_entry_quality_ok
+from gex_core.trading.low_gex_signals import (
+    compute_low_gex_signal,
+    compute_near_wall_gex_signal,
+    wall_entry_quality_ok,
+)
 from gex_core.trading.paper_broker import estimate_entry_premium, mark_to_market_premium, pnl_usd
 from gex_core.trading.sizing import resolve_contract_qty
 from gex_core.trading.webull_broker import limit_price_for_buy
@@ -50,7 +54,10 @@ _last_wall_strike: dict[str, float] = {}
 
 def is_wall_gex_trade(trade: dict[str, Any]) -> bool:
     meta = trade.get("meta") or {}
-    return meta.get("strategy") == "low_gex" or trade.get("signal_type") == "min_gamma_strike"
+    return meta.get("strategy") == "low_gex" or trade.get("signal_type") in {
+        "min_gamma_strike",
+        "max_gamma_strike",
+    }
 
 
 def wall_gex_open_trades(ticker: str) -> list[dict[str, Any]]:
@@ -265,7 +272,12 @@ def run_low_gex_trade(
     out["spot"] = float(spot)
     out["exits"] = manage_wall_gex_exits(ticker, spot=float(spot))
 
-    signal_pack = compute_low_gex_signal(exposure, spot=spot, window_pct=profile.window_pct)
+    if profile.near:
+        signal_pack = compute_near_wall_gex_signal(
+            exposure, spot=spot, window_pct=profile.window_pct
+        )
+    else:
+        signal_pack = compute_low_gex_signal(exposure, spot=spot, window_pct=profile.window_pct)
     out["signal"] = signal_pack
     if not signal_pack.get("available"):
         out["ran"] = True
@@ -464,7 +476,7 @@ def run_low_gex_trade(
         strike=exec_strike,
         entry_spot=exec_spot if _uses_execution_mapping() else float(spot),
         entry_premium=premium,
-        signal_type="min_gamma_strike",
+        signal_type=str(rec.get("signal_type") or "min_gamma_strike"),
         signal_strike=trade_strike,
         signal_gamma=float(rec["gamma_bn"]),
         gamma_delta=0.0,

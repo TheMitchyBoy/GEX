@@ -16,7 +16,7 @@ from gex_core.trading.config import (
 )
 from gex_core.trading.signals import _clean, _option_type_for_strike
 
-WallTarget = Literal["min", "max"]
+WallTarget = Literal["min", "max", "extreme"]
 
 
 @dataclass(frozen=True)
@@ -83,9 +83,10 @@ def compute_wall_gex_signal(
     target: WallTarget = "min",
     window_pct: float = 0.12,
 ) -> dict[str, Any]:
-    """Pick call/put toward the min or max net GEX strike near spot.
+    """Pick call/put toward a gamma wall near spot.
 
-    Wall below spot → puts; wall above spot → calls.
+    ``min`` / ``max`` target that wall; ``extreme`` picks whichever has the
+    largest |γ|. Wall below spot → puts; wall above spot → calls.
     """
     cur = _clean(exposure)
     spot_val = float(spot or 0.0)
@@ -106,6 +107,19 @@ def compute_wall_gex_signal(
         wall_gamma = float(search.max())
         label = "Highest"
         signal_type = "max_gamma_strike"
+    elif target == "extreme":
+        max_strike = float(search.idxmax())
+        max_gamma = float(search.max())
+        min_strike = float(search.idxmin())
+        min_gamma = float(search.min())
+        if abs(max_gamma) >= abs(min_gamma):
+            wall_strike, wall_gamma = max_strike, max_gamma
+            label = "Highest"
+            signal_type = "max_gamma_strike"
+        else:
+            wall_strike, wall_gamma = min_strike, min_gamma
+            label = "Lowest"
+            signal_type = "min_gamma_strike"
     else:
         wall_strike = float(search.idxmin())
         wall_gamma = float(search.min())
@@ -156,3 +170,13 @@ def compute_high_gex_signal(
     window_pct: float = 0.12,
 ) -> dict[str, Any]:
     return compute_wall_gex_signal(exposure, spot=spot, target="max", window_pct=window_pct)
+
+
+def compute_near_wall_gex_signal(
+    exposure: pd.Series | None,
+    *,
+    spot: float | None,
+    window_pct: float = 0.01,
+) -> dict[str, Any]:
+    """Pick the dominant |γ| wall in the near-spot band and trade toward it."""
+    return compute_wall_gex_signal(exposure, spot=spot, target="extreme", window_pct=window_pct)

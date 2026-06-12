@@ -33,6 +33,7 @@ from gex_core.trading.paper_broker import estimate_option_pnl_pct
 from gex_core.trading.low_gex_signals import (
     compute_high_gex_signal,
     compute_low_gex_signal,
+    compute_near_wall_gex_signal,
     wall_entry_quality_ok,
 )
 from gex_core.trading.signals import compute_gamma_signals
@@ -801,14 +802,19 @@ def build_wall_strategy_state(
 
     low = compute_low_gex_signal(exposure, spot=spot_val, window_pct=window_pct)
     high = compute_high_gex_signal(exposure, spot=spot_val, window_pct=window_pct)
-    rec = low.get("recommended") or {}
+    if profile.near:
+        active = compute_near_wall_gex_signal(exposure, spot=spot_val, window_pct=window_pct)
+    else:
+        active = low
+    rec = active.get("recommended") or {}
     signals: dict[str, Any] = {
-        "available": bool(low.get("available")),
-        "reason": low.get("reason"),
-        "recommended": rec if low.get("available") else None,
+        "available": bool(active.get("available")),
+        "reason": active.get("reason"),
+        "recommended": rec if active.get("available") else None,
         "min_gamma_strike": low.get("min_gamma_strike"),
         "max_gamma_strike": high.get("max_gamma_strike") if high.get("available") else None,
-        "master_direction": low.get("master_direction"),
+        "master_direction": active.get("master_direction"),
+        "wall_target": "extreme" if profile.near else "min",
     }
 
     filters = {"approve": False, "reason": "No signal"}

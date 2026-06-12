@@ -1324,6 +1324,7 @@
       document.getElementById('traderArmBtn')?.addEventListener('click', async () => {
         const live = {{ auto_trader.live_mode|tojson }};
         const body = {armed: true, ticker};
+        if (wallMode && strikeWindowPct != null) body.window_pct = strikeWindowPct;
         if (live && !window.confirm('Arm LIVE Webull trading?')) return;
         if (live) body.live_confirm = true;
         const data = await traderPost(traderArmUrl, body);
@@ -1343,7 +1344,9 @@
       });
       document.getElementById('traderRunBtn')?.addEventListener('click', async () => {
         document.getElementById('traderStatusMsg').textContent = 'Running cycle…';
-        const data = await traderPost(traderRunUrl, {ticker});
+        const runBody = {ticker};
+        if (wallMode && strikeWindowPct != null) runBody.window_pct = strikeWindowPct;
+        const data = await traderPost(traderRunUrl, runBody);
         const entry = data.entry;
         let msg = data.reason || data.last_cycle?.reason || 'Cycle complete.';
         if (entry?.action === 'opened') msg = `Opened ${entry.option_type?.toUpperCase()} @ ${entry.strike}`;

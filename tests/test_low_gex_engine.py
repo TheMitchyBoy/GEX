@@ -60,6 +60,26 @@ def test_run_low_gex_trade_skips_late_session_entry(monkeypatch):
     mock_open.assert_not_called()
 
 
+def test_run_low_gex_trade_near_window_uses_extreme_gamma():
+    exposure = pd.Series(
+        [-1.0, 0.5, 3.0, 1.0],
+        index=[7440.0, 7450.0, 7460.0, 7470.0],
+    )
+    with patch("gex_core.trading.low_gex_engine.is_trader_session_active", return_value=True):
+        result = run_low_gex_trade(
+            ticker="SPX",
+            spot=7460.0,
+            exposure=exposure,
+            execute=False,
+            window_pct=0.01,
+        )
+    assert result["near_wall"] is True
+    rec = result["signal"]["recommended"]
+    assert rec["strike"] == 7460.0
+    assert rec["gamma_bn"] == 3.0
+    assert rec["option_type"] == "call"
+
+
 def test_run_low_gex_trade_manages_exits_each_cycle():
     exposure = pd.Series([-2.0, 0.5, 1.0], index=[7440.0, 7460.0, 7480.0])
     with (
