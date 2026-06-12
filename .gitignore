@@ -3,6 +3,14 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# CLI-generated chart artifacts (written to repo root by main.py)
+/gamma_by_expiration.png
+/gamma_by_strike.png
+/surface.png
+
+# SDK / runtime logs
+webull_trade_sdk.log
+
 # Legacy per-contract option-chain caches (CBOE-style JSON)
 *.json
 !data/exports/*.json

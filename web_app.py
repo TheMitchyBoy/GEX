@@ -75,7 +75,13 @@ from gex_core.env_bootstrap import bootstrap_env, parse_env_minutes, uw_api_conf
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_ticker, refresh_tickers
 from gex_core.export_diagnostics import prediction_lookback_days
 from gex_core.system_status import build_system_status
-from gex_core.tickers import PRIMARY_TICKER, find_available_tickers, is_supported_ticker, supported_tickers
+from gex_core.tickers import (
+    PRIMARY_TICKER,
+    find_available_tickers,
+    is_supported_ticker,
+    normalize_ticker,
+    supported_tickers,
+)
 
 APP = Flask(__name__)
 app = APP
@@ -1980,11 +1986,13 @@ def api_watchlist():
 
 @APP.get("/widget/<ticker>")
 def ticker_widget(ticker: str):
-    ticker = PRIMARY_TICKER
+    ticker = normalize_ticker(ticker)
     payload = _ticker_api_payload(ticker, request.args.get("ts"))
     summary = payload.get("summary") or {}
     confluence = payload.get("confluence") or {"score": 0.0, "label": "low"}
     theme = request.args.get("theme", "dark")
+    if theme not in {"dark", "light"}:
+        theme = "dark"
     compact = request.args.get("compact", "0") == "1"
     return render_template(
         "widget.html",

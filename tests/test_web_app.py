@@ -639,3 +639,15 @@ def test_refresh_uw_data_does_not_compute_gamma_flip(monkeypatch):
 
     assert entry is not None
     assert entry["gamma_flip"] is None
+
+
+def test_widget_supports_theme_and_compact():
+    from web_app import APP
+
+    client = APP.test_client()
+    response = client.get("/widget/SPX?theme=light&compact=1")
+    assert response.status_code == 200
+    body = response.data
+    assert b'data-theme="light"' in body
+    assert b"compact" in body
+    assert b"SPX" in body

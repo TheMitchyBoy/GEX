@@ -1,36 +1,88 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ ticker }} · GEX Widget</title>
     <style>
+      :root {
+        --bg: #07090f;
+        --panel: rgba(10, 14, 24, 0.95);
+        --border: rgba(255, 255, 255, 0.10);
+        --text: #c9d1d9;
+        --muted: #8b949e;
+        --long: #00d97e;
+        --short: #ff4757;
+        --pad: 12px;
+        --gap: 6px;
+        --font-size: 14px;
+        --label-size: 12px;
+      }
+
+      [data-theme="light"] {
+        --bg: #f6f8fa;
+        --panel: #ffffff;
+        --border: rgba(27, 31, 36, 0.15);
+        --text: #24292f;
+        --muted: #57606a;
+        --long: #1a7f37;
+        --short: #cf222e;
+      }
+
       body {
         margin: 0;
         padding: 0;
-        background: #07090f;
-        color: #c9d1d9;
+        background: var(--bg);
+        color: var(--text);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: var(--font-size);
       }
+
       .wrap {
-        border: 1px solid rgba(255,255,255,0.10);
+        border: 1px solid var(--border);
         border-radius: 10px;
-        padding: 12px;
-        background: rgba(10,14,24,0.95);
+        padding: var(--pad);
+        background: var(--panel);
       }
+
+      .wrap.compact {
+        --pad: 8px;
+        --gap: 4px;
+        --font-size: 12px;
+        --label-size: 11px;
+        border-radius: 8px;
+      }
+
       .row {
         display: flex;
         justify-content: space-between;
-        margin-bottom: 6px;
+        margin-bottom: var(--gap);
       }
-      .muted { color: #8b949e; font-size: 12px; }
-      .value { font-weight: 600; }
-      .long { color: #00d97e; }
-      .short { color: #ff4757; }
+
+      .row:last-child {
+        margin-bottom: 0;
+      }
+
+      .muted {
+        color: var(--muted);
+        font-size: var(--label-size);
+      }
+
+      .value {
+        font-weight: 600;
+      }
+
+      .long {
+        color: var(--long);
+      }
+
+      .short {
+        color: var(--short);
+      }
     </style>
   </head>
   <body>
-    <div class="wrap">
+    <div class="wrap{% if compact %} compact{% endif %}">
       <div class="row">
         <div class="value">{{ ticker }} · GEX</div>
         <div class="muted">{{ updated_at }}</div>
