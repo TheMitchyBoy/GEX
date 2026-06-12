@@ -1954,6 +1954,26 @@ def img_file(filename):
 
 
 _scheduler: BackgroundScheduler | None = None
+_refresh_job_lock = threading.Lock()
+_trader_job_lock = threading.Lock()
+_wall_gex_job_lock = threading.Lock()
+
+
+def _run_scheduler_job(name: str, lock: threading.Lock, fn) -> None:
+    """Run a scheduler callback in a daemon thread so APScheduler slots free immediately."""
+    if not lock.acquire(blocking=False):
+        logger.info("%s skipped — previous run still in progress", name)
+        return
+
+    def _work() -> None:
+        try:
+            fn()
+        except Exception:
+            logger.exception("%s failed", name)
+        finally:
+            lock.release()
+
+    threading.Thread(target=_work, name=name, daemon=True).start()
 _scheduler_lock_path = Path(os.environ.get("GEX_SCHEDULER_LOCK", "data/.gex_scheduler.lock"))
 
 
@@ -2107,13 +2127,25 @@ def _run_auto_trader(ticker: str) -> dict[str, Any] | None:
     )
 
 
+def _scheduler_alert_history(ticker: str) -> list[dict]:
+    """Small recent window for background alert checks (avoid loading 240 snapshots)."""
+    from gex_core.history import build_history
+
+    return build_history(
+        ticker,
+        lookback_days=3,
+        max_snapshots=6,
+        dedupe_identical_strikes=True,
+    )
+
+
 def _auto_dispatch_alerts(ticker: str) -> None:
     """Generate alerts and run auto-dispatch. Background scheduler only."""
-    history = _dashboard_history(ticker)
+    history = _scheduler_alert_history(ticker)
     if not history:
         return
     selected = _select_snapshot(history, None)
-    prediction_history = _prediction_history(ticker)
+    prediction_history = history
     prediction = predict_next_snapshot(
         prediction_history,
         lookback_days=prediction_lookback_days(ticker),
@@ -2122,17 +2154,13 @@ def _auto_dispatch_alerts(ticker: str) -> None:
     maybe_dispatch_alerts(ticker, alerts, manual=False)
 
 
-def _scheduled_refresh():
+def _scheduled_refresh_work() -> None:
     # Staleness-gated (not force=True): when a manual/page refresh already wrote
     # a fresh snapshot this interval, skip the redundant UW fetch. This avoids
     # burning the UW per-minute/daily request budget on duplicate pulls.
     from gex_core.trading.config import trader_cycle_seconds
 
-    try:
-        refresh_tickers(REFRESH_TICKERS)
-    except Exception:
-        logger.exception("Scheduled GEX refresh failed")
-        return
+    refresh_tickers(REFRESH_TICKERS)
     for ticker in REFRESH_TICKERS:
         try:
             _auto_dispatch_alerts(ticker)
@@ -2145,7 +2173,11 @@ def _scheduled_refresh():
                 logger.exception("Auto-trader cycle failed for %s", ticker)
 
 
-def _scheduled_trader_tick():
+def _scheduled_refresh():
+    _run_scheduler_job("gex-scheduled-refresh", _refresh_job_lock, _scheduled_refresh_work)
+
+
+def _scheduled_trader_tick_work() -> None:
     """High-frequency trader loop — exits on live spot, entries on latest gamma."""
     from gex_core.trading.config import auto_trader_enabled, trader_cycle_seconds
 
@@ -2158,7 +2190,11 @@ def _scheduled_trader_tick():
             logger.exception("Auto-trader tick failed for %s", ticker)
 
 
-def _scheduled_wall_gex_tick():
+def _scheduled_trader_tick():
+    _run_scheduler_job("gex-trader-tick", _trader_job_lock, _scheduled_trader_tick_work)
+
+
+def _scheduled_wall_gex_tick_work() -> None:
     """Wall GEX trader loop — exits on live spot, entries on lowest-γ wall."""
     from gex_core.trading.config import wall_gex_auto_enabled, wall_gex_cycle_seconds
 
@@ -2169,6 +2205,10 @@ def _scheduled_wall_gex_tick():
             _run_wall_gex_trader(ticker)
         except Exception:
             logger.exception("Wall GEX tick failed for %s", ticker)
+
+
+def _scheduled_wall_gex_tick():
+    _run_scheduler_job("gex-wall-gex-tick", _wall_gex_job_lock, _scheduled_wall_gex_tick_work)
 
 
 def _acquire_scheduler_lock() -> bool:
@@ -2201,15 +2241,24 @@ def start_background_refresh():
         logger.info("Another process owns the GEX refresh scheduler lock")
         return
 
+    refresh_seconds = max(60.0, float(REFRESH_MINUTES) * 60.0)
+    if refresh_seconds > float(REFRESH_MINUTES) * 60.0:
+        logger.info(
+            "GEX refresh interval clamped to %.0fs (requested %.0fs)",
+            refresh_seconds,
+            float(REFRESH_MINUTES) * 60.0,
+        )
+
     _scheduler = BackgroundScheduler(daemon=True)
     _scheduler.add_job(
         _scheduled_refresh,
         trigger="interval",
-        minutes=REFRESH_MINUTES,
+        seconds=refresh_seconds,
         id="gex_refresh",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=120,
     )
     _scheduler.start()
     atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
@@ -2224,6 +2273,7 @@ def start_background_refresh():
             replace_existing=True,
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=max(60, cycle_sec * 2),
         )
         logger.info("Auto-trader high-frequency loop every %ss", cycle_sec)
 
@@ -2237,6 +2287,7 @@ def start_background_refresh():
             replace_existing=True,
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=max(60, wall_cycle_sec * 2),
         )
         logger.info("Wall GEX trader loop every %ss", wall_cycle_sec)
 

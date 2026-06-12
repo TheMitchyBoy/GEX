@@ -86,7 +86,7 @@ export UW_API_KEY=your-key-here
 | `UW_API_KEY` | (none) | **Required** — Unusual Whales API access |
 | `GEX_DATA_DIR` | `data/` | Exports, SQLite DBs; use `/app/data` on Railway with a volume |
 | `GEX_DEFAULT_TICKERS` | `SPX` | Symbols refreshed by the scheduler |
-| `GEX_REFRESH_INTERVAL_MINUTES` | `2` | How often new GEX snapshots are fetched |
+| `GEX_REFRESH_INTERVAL_MINUTES` | `2` | How often new GEX snapshots are fetched (minimum 60s in scheduler) |
 | `GEX_DISABLE_SCHEDULER` | off | Set `1` to disable background refresh |
 
 Full variable list: [config/spx.env.example](config/spx.env.example).
