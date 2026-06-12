@@ -200,6 +200,31 @@ def test_reconnect_webull_auth_clears_error_state(tmp_path, monkeypatch):
     assert webull_auth_status()["show_banner"] is False
 
 
+def test_webull_auth_status_quote_subscription_banner(tmp_path, monkeypatch):
+    clear_webull_error_state()
+    reset_webull_clients()
+    monkeypatch.setenv("GEX_TRADER_PAPER", "0")
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("WEBULL_OPENAPI_TOKEN_DIR", str(tmp_path))
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("abc123\n1700000000\nNORMAL\n", encoding="utf-8")
+
+    note_webull_error(
+        "HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, "
+        "please subscribe to US_OPTION quotes., RequestID: x"
+    )
+
+    assert token_file.exists()
+    auth = webull_auth_status()
+    assert auth["quote_subscription_required"] is True
+    assert auth["invalid_token"] is False
+    assert auth["show_banner"] is True
+    assert auth["can_reconnect"] is False
+    assert "US options quotes not subscribed" in auth["headline"]
+
+
 def test_webull_auth_status_rate_limit_banner(monkeypatch):
     clear_webull_error_state()
     monkeypatch.setenv("GEX_TRADER_PAPER", "0")

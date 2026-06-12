@@ -496,6 +496,15 @@ The trade desk banner means Webull rejected the stored OAuth token. The app clea
 4. **Retry** — disarm the trader, wait ~30 seconds, then click **Retry connection** on `/trade` or the Wall GEX page. If `GEX_ADMIN_TOKEN` is set, enter it in the trade desk admin field first.
 5. **Logs** — look for `init_token` / `check_token` lines from the Webull SDK; `status=PENDING` means approval is still waiting.
 
+### Webull 401 `subscribe to US_OPTION quotes`
+
+If the last error says **Insufficient permission, please subscribe to US_OPTION quotes**, auth is working but your OpenAPI app lacks the **US options quote** market-data entitlement. This is not a stale token — retrying connection will not help.
+
+1. Open the [Webull OpenAPI developer portal](https://developer.webull.com/) and select your **production** app (the one matching `GEX_WEBULL_APP_KEY`).
+2. Subscribe to **US options quotes** (`US_OPTION` / option market data). Wait for approval if the portal shows a pending state.
+3. Confirm the linked brokerage account has options permissions and any required Webull data subscriptions.
+4. Redeploy is not required; refresh `/trade` after the entitlement is active. Live bid/ask should populate; until then the desk uses estimated marks.
+
 Compact aged strike CSVs (keeps summaries + cumulative):
 
 ```bash

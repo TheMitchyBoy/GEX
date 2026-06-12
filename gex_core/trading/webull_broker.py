@@ -131,16 +131,28 @@ def _is_rate_limited_message(message: str) -> bool:
     return "429" in upper or "TOO_MANY_REQUESTS" in upper or "TOO MANY REQUESTS" in upper
 
 
+def _is_quote_subscription_message(message: str) -> bool:
+    upper = message.upper()
+    return (
+        "SUBSCRIBE TO US_OPTION" in upper
+        or "SUBSCRIBE TO US OPTION" in upper
+        or ("INSUFFICIENT PERMISSION" in upper and "SUBSCRIBE" in upper)
+        or ("PLEASE SUBSCRIBE" in upper and "OPTION" in upper and "QUOTE" in upper)
+    )
+
+
 def _is_invalid_token_message(message: str) -> bool:
+    if _is_quote_subscription_message(message):
+        return False
     upper = message.upper()
     return (
         "INVALID_TOKEN" in upper
         or "ERROR_INIT_TOKEN" in upper
         or "ERROR_CREATE_TOKEN" in upper
-        or ("HTTP STATUS: 401" in upper and "UNAUTHORIZED" in upper)
-        or ("CODE: 401" in upper and "INVALID" in upper)
         or ("CODE: INVALID_TOKEN" in upper)
-        or ("PERMISSION DENIED" in upper and "401" in upper)
+        or ("HTTP STATUS: 401" in upper and "INVALID_TOKEN" in upper)
+        or ("CODE: 401" in upper and "INVALID_TOKEN" in upper)
+        or ("PERMISSION DENIED" in upper and "401" in upper and "SUBSCRIBE" not in upper)
     )
 
 
@@ -168,10 +180,15 @@ def _classify_webull_error(exc: Exception | str | dict[str, Any]) -> dict[str, A
         if http_status and not message.startswith("HTTP Status:"):
             message = f"HTTP Status: {http_status}, Code: {code}, Msg: {msg}"
 
+    quote_subscription = _is_quote_subscription_message(message)
+    invalid_token = (not quote_subscription) and (
+        _is_invalid_token_message(message) or _is_invalid_token_code(code)
+    )
     return {
         "message": message,
         "rate_limited": _is_rate_limited_message(message),
-        "invalid_token": _is_invalid_token_message(message) or _is_invalid_token_code(code),
+        "invalid_token": invalid_token,
+        "quote_subscription_required": quote_subscription,
     }
 
 
@@ -226,6 +243,7 @@ def webull_auth_status() -> dict[str, Any]:
         and recent_age < _RATE_LIMIT_COOLDOWN_SEC
     )
     invalid_token = bool(recent.get("invalid_token")) and recent_active
+    quote_subscription = bool(recent.get("quote_subscription_required")) and recent_active
     invalid_token_cooldown = (
         bool(recent.get("invalid_token"))
         and recent_age is not None
@@ -239,10 +257,21 @@ def webull_auth_status() -> dict[str, Any]:
             "message": "UAT sandbox — use GEX_WEBULL_USE_UAT=1 with sandbox credentials.",
         }
 
-    show_banner = rate_limited or invalid_token
+    show_banner = rate_limited or invalid_token or quote_subscription
     token_path = _token_file_path()
     token_present = token_path.is_file()
-    if invalid_token:
+    option_category = webull_option_category()
+    if quote_subscription:
+        headline = "Webull US options quotes not subscribed"
+        detail = (
+            f"Your OpenAPI app is authenticated but lacks the {option_category} market-data "
+            "subscription required for live option bid/ask quotes. In the Webull developer "
+            "portal, open your production OpenAPI application and subscribe to US options "
+            "quotes (US_OPTION). Approval can take a short time after you enable it. "
+            "Retry connection will not fix this — the token is fine; the data entitlement is missing. "
+            "Until quotes are enabled, the trade desk falls back to estimated marks for display only."
+        )
+    elif invalid_token:
         headline = "Webull token rejected (401)"
         detail = (
             "Webull returned INVALID_TOKEN / permission denied. The stale token file was cleared. "
@@ -270,8 +299,9 @@ def webull_auth_status() -> dict[str, Any]:
         "show_banner": show_banner,
         "pause_api": rate_limited or invalid_token_cooldown,
         "invalid_token": invalid_token,
+        "quote_subscription_required": quote_subscription,
         "rate_limited": rate_limited,
-        "can_reconnect": invalid_token,
+        "can_reconnect": invalid_token and not quote_subscription,
         "headline": headline,
         "message": detail,
         "last_error": recent.get("message") if recent_active else None,
