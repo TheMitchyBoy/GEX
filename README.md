@@ -318,7 +318,11 @@ Enable the trader with `GEX_AUTO_TRADER=1`. Backtest and tune filters:
 ```bash
 python scripts/backtest_auto_trader.py --lookback-days 14 --starting-capital 500
 python scripts/backtest_improvement_sweep.py --lookback-days 14
+python scripts/backtest_low_gex_trader.py --lookback-days 14 --window-pct 0.01
+python scripts/compare_wall_gex_backtest.py --lookback-days 14 --window-pct 0.01
 ```
+
+The compare script runs min vs max γ wall on the same history; for `/near` (±1%) it auto-applies the near-wall profile and keeps all snapshots (`dedupe` off). Use `--dedupe` only for full-window bar-collapse experiments.
 
 ### 1. Export data-quality filters
 

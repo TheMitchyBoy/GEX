@@ -30,6 +30,7 @@ from gex_core.trading.backtest import (
     bars_between_timestamps,
 )
 from gex_core.trading.config import (
+    DEFAULT_WALL_WINDOW_PCT,
     WallGexProfile,
     low_gex_reenter_each_bar,
     max_entries_per_cycle,
@@ -486,35 +487,77 @@ def compare_wall_gex_backtest(
     lookback_days: int = 7,
     starting_capital: float = 500.0,
     reenter_each_bar: bool = False,
+    window_pct: float = DEFAULT_WALL_WINDOW_PCT,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    max_hold_bars: int | None = None,
+    max_snapshots: int | None = 5000,
+    dedupe_identical_strikes: bool | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Run min vs max wall GEX backtests on the same history window."""
-    dedupe = kwargs.get("dedupe_identical_strikes")
-    if dedupe is None:
-        dedupe = not reenter_each_bar
+    profile = wall_gex_profile(window_pct)
+    if dedupe_identical_strikes is None:
+        # Near-window profiles change slowly; dedupe collapses too many bars.
+        dedupe_identical_strikes = False if profile.near else not reenter_each_bar
     history = _build_history_impl(
         ticker.upper(),
         EXPORT_DIR,
         lookback_days=lookback_days,
-        max_snapshots=kwargs.get("max_snapshots", 5000),
-        dedupe_identical_strikes=dedupe,
+        max_snapshots=max_snapshots,
+        dedupe_identical_strikes=dedupe_identical_strikes,
     )
     shared = {
         "history": history,
         "lookback_days": lookback_days,
         "starting_capital": starting_capital,
         "reenter_each_bar": reenter_each_bar,
-        **{k: v for k, v in kwargs.items() if k not in ("max_snapshots", "dedupe_identical_strikes")},
+        "window_pct": window_pct,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "max_hold_bars": max_hold_bars,
+        **{
+            k: v
+            for k, v in kwargs.items()
+            if k
+            not in (
+                "max_snapshots",
+                "dedupe_identical_strikes",
+                "window_pct",
+                "stop_loss",
+                "take_profit",
+                "max_hold_bars",
+            )
+        },
     }
     low = backtest_wall_gex_trader(ticker, target="min", **shared)
     high = backtest_wall_gex_trader(ticker, target="max", **shared)
+    low_return = (low.get("account") or {}).get("return_pct")
+    high_return = (high.get("account") or {}).get("return_pct")
+    if low_return is not None and high_return is not None:
+        if low_return > high_return + 0.005:
+            recommended = "min"
+        elif high_return > low_return + 0.005:
+            recommended = "max"
+        else:
+            recommended = "tie"
+    else:
+        recommended = None
     return {
         "ticker": ticker.upper(),
         "lookback_days": lookback_days,
+        "window_pct": window_pct,
+        "near_wall": profile.near,
+        "dedupe_identical_strikes": dedupe_identical_strikes,
         "snapshots": low.get("snapshots", 0),
         "date_from": low.get("date_from"),
         "date_to": low.get("date_to"),
         "reenter_each_bar": reenter_each_bar,
+        "stop_loss_pct": low.get("stop_loss_pct"),
+        "take_profit_pct": low.get("take_profit_pct"),
+        "max_hold_bars": low.get("max_hold_bars"),
+        "reenter_on_shift": low.get("reenter_on_shift"),
+        "recommended_side": recommended,
         "low_gex": low,
         "high_gex": high,
         "comparison": {
@@ -524,8 +567,8 @@ def compare_wall_gex_backtest(
             "high_win_rate": high.get("win_rate"),
             "low_pnl_usd": low.get("total_pnl_usd"),
             "high_pnl_usd": high.get("total_pnl_usd"),
-            "low_return_pct": (low.get("account") or {}).get("return_pct"),
-            "high_return_pct": (high.get("account") or {}).get("return_pct"),
+            "low_return_pct": low_return,
+            "high_return_pct": high_return,
             "low_max_dd": (low.get("account") or {}).get("max_drawdown_pct"),
             "high_max_dd": (high.get("account") or {}).get("max_drawdown_pct"),
             "low_skipped_distance": low.get("skipped_strike_distance", 0),
