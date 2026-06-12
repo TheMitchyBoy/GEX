@@ -289,6 +289,49 @@ def wall_reenter_on_shift() -> bool:
     return _flag("GEX_WALL_REENTER_ON_SHIFT", "1")
 
 
+def near_wall_window_pct() -> float:
+    """Strike search window for /near wall GEX view and backtests."""
+    try:
+        return max(0.005, min(0.05, float(os.environ.get("GEX_NEAR_WALL_WINDOW_PCT", "0.01"))))
+    except (TypeError, ValueError):
+        return 0.01
+
+
+def near_wall_stop_loss_pct() -> float:
+    """MC-tuned default for ±1% wall GEX (14d backtest)."""
+    try:
+        return max(0.01, float(os.environ.get("GEX_NEAR_WALL_STOP_LOSS_PCT", "0.03")))
+    except (TypeError, ValueError):
+        return 0.03
+
+
+def near_wall_take_profit_pct() -> float:
+    try:
+        return max(0.05, float(os.environ.get("GEX_NEAR_WALL_TAKE_PROFIT_PCT", "0.28")))
+    except (TypeError, ValueError):
+        return 0.28
+
+
+def near_wall_max_hold_bars() -> int:
+    try:
+        return max(1, int(os.environ.get("GEX_NEAR_WALL_MAX_HOLD_BARS", "10")))
+    except (TypeError, ValueError):
+        return 10
+
+
+def near_wall_shift_min_pts() -> float:
+    """Min wall strike move (pts) before flatten-on-shift fires for /near."""
+    try:
+        return max(0.5, float(os.environ.get("GEX_NEAR_WALL_SHIFT_MIN_PTS", "0.5")))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def near_wall_reenter_on_shift() -> bool:
+    """Near-spot: MC suggests disabling shift flatten (same PnL, fewer churn exits)."""
+    return _flag("GEX_NEAR_WALL_REENTER_ON_SHIFT", "0")
+
+
 def wall_reentry_after_stop() -> bool:
     """Allow a fresh entry at the same strike after a stop-loss (no strike cooldown)."""
     return _flag("GEX_WALL_REENTRY_AFTER_STOP", "1")

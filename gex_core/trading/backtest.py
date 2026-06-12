@@ -155,7 +155,9 @@ class BacktestState:
     skipped_wall_weak_gamma: int = 0
     skipped_wall_regime: int = 0
     skipped_wall_drift: int = 0
+    skipped_wall_shift_cooldown: int = 0
     last_wall_strike: float | None = None
+    entry_blocked_until_idx: int = 0
     strike_cooldown: dict[tuple[float, str], str] = field(default_factory=dict)
     account: AccountLedger | None = None
 

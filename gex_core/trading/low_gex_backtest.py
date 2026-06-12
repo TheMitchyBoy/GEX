@@ -61,16 +61,20 @@ def _flatten_on_wall_shift(
     signal_spot: float,
     row: dict,
     wall_strike: float,
+    min_shift_pts: float = 0.5,
+    shift_cooldown_bars: int = 0,
 ) -> None:
     """Close positions tied to a prior wall when the GEX wall strike moves."""
     mark_spot = _mark_spot(signal_spot)
     if mark_spot is None or mark_spot <= 0 or not state.open_positions:
         return
     bar_minutes = _snapshot_bar_minutes(row)
+    shifted = False
     for pos in list(state.open_positions):
         prior_wall = float(pos.magnet_strike or pos.signal_strike or 0.0)
-        if prior_wall <= 0 or abs(prior_wall - wall_strike) < 0.5:
+        if prior_wall <= 0 or abs(prior_wall - wall_strike) < max(0.5, float(min_shift_pts)):
             continue
+        shifted = True
         pnl_pct = _position_pnl(pos, mark_spot)
         bars_held = bars_between_timestamps(pos.entry_ts, ts, bar_minutes=bar_minutes)
         _apply_backtest_exit(
@@ -84,6 +88,8 @@ def _flatten_on_wall_shift(
             bars_held=bars_held,
         )
     state.open_positions = [p for p in state.open_positions if p.qty > 0]
+    if shifted and shift_cooldown_bars > 0:
+        state.entry_blocked_until_idx = max(state.entry_blocked_until_idx, idx + int(shift_cooldown_bars))
     if state.account:
         state.account.record_equity(ts, state.open_positions, mark_spot)
 
@@ -133,9 +139,18 @@ def _maybe_enter_wall_gex(
     reentry_after_stop: bool | None = None,
     entry_time_filter: bool | None = None,
     signal_filters: bool | None = None,
+    min_gamma_bn: float | None = None,
+    min_entry_drift_pts: float | None = None,
     stop_loss: float | None = None,
     take_profit: float | None = None,
+    max_hold_bars: int | None = None,
+    wall_shift_min_pts: float | None = None,
+    wall_shift_cooldown_bars: int | None = None,
 ) -> None:
+    if idx < state.entry_blocked_until_idx:
+        state.skipped_wall_shift_cooldown += 1
+        return
+
     if not export_ts_is_trading_day(ts):
         state.skipped_weekends += 1
         return
@@ -165,6 +180,8 @@ def _maybe_enter_wall_gex(
         regime=regime,
         last_wall_strike=state.last_wall_strike,
         signal_filters=signal_filters,
+        min_gamma_bn=min_gamma_bn,
+        min_drift_pts=min_entry_drift_pts,
     )
     state.last_wall_strike = wall_strike
     if not quality_ok:
@@ -202,6 +219,8 @@ def _maybe_enter_wall_gex(
             signal_spot=spot,
             row=row,
             wall_strike=wall_strike,
+            min_shift_pts=0.5 if wall_shift_min_pts is None else float(wall_shift_min_pts),
+            shift_cooldown_bars=0 if wall_shift_cooldown_bars is None else int(wall_shift_cooldown_bars),
         )
 
     if not reenter_each_bar and _has_open_duplicate(
@@ -235,7 +254,7 @@ def _maybe_enter_wall_gex(
 
     sl = stop_loss if stop_loss is not None else wall_stop_loss_pct()
     tp = take_profit if take_profit is not None else wall_take_profit_pct()
-    hold_bars = wall_max_hold_bars()
+    hold_bars = wall_max_hold_bars() if max_hold_bars is None else max(1, int(max_hold_bars))
     profile = build_simple_exit_profile(
         stop_loss=sl,
         take_profit=tp,
@@ -284,6 +303,11 @@ def backtest_wall_gex_trader(
     intraday_session: bool | None = None,
     entry_time_filter: bool | None = None,
     signal_filters: bool | None = None,
+    min_gamma_bn: float | None = None,
+    min_entry_drift_pts: float | None = None,
+    max_hold_bars: int | None = None,
+    wall_shift_min_pts: float | None = None,
+    wall_shift_cooldown_bars: int | None = None,
 ) -> dict[str, Any]:
     """Simulate min/max GEX wall trades over export snapshot history."""
     ticker = ticker.upper()
@@ -369,8 +393,13 @@ def backtest_wall_gex_trader(
             reentry_after_stop=after_stop,
             entry_time_filter=time_filter,
             signal_filters=quality_filter,
+            min_gamma_bn=min_gamma_bn,
+            min_entry_drift_pts=min_entry_drift_pts,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            max_hold_bars=max_hold_bars,
+            wall_shift_min_pts=wall_shift_min_pts,
+            wall_shift_cooldown_bars=wall_shift_cooldown_bars,
         )
 
     if state.open_positions:
@@ -417,11 +446,17 @@ def backtest_wall_gex_trader(
     result["intraday_session"] = intraday
     result["entry_time_filter"] = time_filter
     result["off_hours_snapshots_excluded"] = off_hours_snapshots_excluded
-    result["max_hold_bars"] = wall_max_hold_bars()
+    result["max_hold_bars"] = wall_max_hold_bars() if max_hold_bars is None else max_hold_bars
     result["signal_filters"] = quality_filter
+    result["min_gamma_bn"] = min_gamma_bn
+    result["min_entry_drift_pts"] = min_entry_drift_pts
+    result["wall_shift_min_pts"] = wall_shift_min_pts
+    result["wall_shift_cooldown_bars"] = wall_shift_cooldown_bars
     result["skipped_wall_weak_gamma"] = state.skipped_wall_weak_gamma
     result["skipped_wall_regime"] = state.skipped_wall_regime
     result["skipped_wall_drift"] = state.skipped_wall_drift
+    result["skipped_wall_shift_cooldown"] = state.skipped_wall_shift_cooldown
+    result["blocked_duplicate"] = state.blocked_duplicate
     return result
 
 
