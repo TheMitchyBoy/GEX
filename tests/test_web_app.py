@@ -539,7 +539,7 @@ def test_uw_entry_for_request_blocking_true_fetches(monkeypatch):
     assert calls == {"timeout": 1, "schedule": 0}
 
 
-def test_api_trader_strategy_live_param_blocks_uw(monkeypatch):
+def test_api_trader_strategy_live_param_does_not_block_uw(monkeypatch):
     from web_app import APP
 
     calls = {"blocking": []}
@@ -563,7 +563,29 @@ def test_api_trader_strategy_live_param_blocks_uw(monkeypatch):
 
     calls["blocking"].clear()
     client.get("/api/trader/strategy?live=1")
-    assert calls["blocking"] == [True]
+    assert calls["blocking"] == [False]
+
+
+def test_ticker_api_payload_uses_lightweight_history_when_minimal(monkeypatch):
+    from web_app import _ticker_api_payload
+
+    calls = {"dashboard": 0, "light": 0}
+
+    monkeypatch.setenv("GEX_PAGE_MINIMAL_LOAD", "1")
+
+    def _dashboard(*_a, **_k):
+        calls["dashboard"] += 1
+        return []
+
+    def _light(*_a, **_k):
+        calls["light"] += 1
+        return []
+
+    monkeypatch.setattr("web_app._dashboard_history", _dashboard)
+    monkeypatch.setattr("web_app._lightweight_api_history", _light)
+    _ticker_api_payload("SPX")
+    assert calls["light"] >= 1
+    assert calls["dashboard"] == 0
 
 
 def test_refresh_uw_data_does_not_compute_gamma_flip(monkeypatch):

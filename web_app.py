@@ -168,9 +168,23 @@ _UW_FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="uw-fe
 
 def _wall_gex_live_cache_seconds() -> float:
     try:
-        return max(3.0, float(os.environ.get("GEX_WALL_GEX_LIVE_CACHE_SEC", "15")))
+        return max(15.0, float(os.environ.get("GEX_WALL_GEX_LIVE_CACHE_SEC", "60")))
     except (TypeError, ValueError):
-        return 15.0
+        return 60.0
+
+
+def _strategy_poll_seconds() -> int:
+    try:
+        return max(30, int(os.environ.get("GEX_STRATEGY_POLL_SEC", "120")))
+    except (TypeError, ValueError):
+        return 120
+
+
+def _wall_gex_status_poll_seconds() -> int:
+    try:
+        return max(30, int(os.environ.get("GEX_WALL_GEX_STATUS_POLL_SEC", "90")))
+    except (TypeError, ValueError):
+        return 90
 
 
 def _uw_fetch_timeout_seconds() -> float:
@@ -406,6 +420,21 @@ def _dashboard_history(ticker: str) -> list[dict]:
         max_snapshots=int(os.environ.get("GEX_DASHBOARD_HISTORY_MAX", "240")),
         dedupe_identical_strikes=True,
     )
+
+
+def _lightweight_api_history(ticker: str) -> list[dict]:
+    """Latest snapshot only — avoids loading 240 CSVs on polling APIs."""
+    latest = get_latest_ts(ticker)
+    if not latest:
+        return []
+    snap = load_snapshot_at_ts(ticker, latest)
+    return [snap] if snap else []
+
+
+def _api_history(ticker: str) -> list[dict]:
+    if _periscope_minimal_load():
+        return _lightweight_api_history(ticker)
+    return _dashboard_history(ticker)
 
 
 def _prediction_history(ticker: str) -> list[dict]:
@@ -733,6 +762,7 @@ def _render_periscope_dashboard(
         defer_strategy_chart=minimal,
         current_only=minimal,
         daily_learning_enabled=_daily_learning_enabled(),
+        strategy_poll_sec=_strategy_poll_seconds(),
     )
 
 
@@ -744,7 +774,7 @@ def _daily_learning_enabled() -> bool:
 
 def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
     ticker = PRIMARY_TICKER
-    history = _dashboard_history(ticker)
+    history = _api_history(ticker)
     if not history:
         selected = {
             "regime": "N/A",
@@ -769,7 +799,7 @@ def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
             "watchlist": [],
         }
     selected = _select_snapshot(history, selected_ts, ticker=ticker)
-    prediction_history = _prediction_history(ticker)
+    prediction_history = _api_history(ticker) if _periscope_minimal_load() else _prediction_history(ticker)
     prediction_lookback = prediction_lookback_days(ticker)
     prediction = predict_next_snapshot(prediction_history, lookback_days=prediction_lookback)
     flow_overlay = None
@@ -896,6 +926,7 @@ def _render_wall_gex_dashboard(ticker: str = PRIMARY_TICKER):
         status=status,
         last_cycle=last_cycle,
         api_urls=_wall_gex_api_urls(),
+        status_poll_sec=_wall_gex_status_poll_seconds(),
     )
 
 
@@ -1168,8 +1199,8 @@ def api_trader_strategy():
     include_trail = request.args.get("trail") == "1" and not _periscope_minimal_load()
     minimal = _periscope_minimal_load()
     live = request.args.get("live") == "1"
-    skip_advisor = not live
-    blocking = live or not minimal or include_trail
+    skip_advisor = True
+    blocking = include_trail and not minimal
     uw_entry = _uw_entry_for_request(ticker, blocking=blocking)
     ctx = build_periscope_context(
         ticker=ticker,
@@ -2095,7 +2126,7 @@ def _run_wall_gex_trader(ticker: str) -> dict[str, Any] | None:
 
     if not wall_gex_auto_enabled() or not is_trader_armed():
         return None
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    uw_entry = _uw_entry_for_request(ticker, blocking=False) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         exposure="gamma",

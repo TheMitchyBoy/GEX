@@ -23,7 +23,7 @@ def auto_trader_enabled() -> bool:
 
 def wall_gex_auto_enabled() -> bool:
     """Background wall GEX loop in the web dashboard scheduler."""
-    return _flag("GEX_WALL_GEX_AUTO", "1")
+    return _flag("GEX_WALL_GEX_AUTO", "0")
 
 
 def wall_gex_cycle_seconds() -> int:
@@ -34,7 +34,10 @@ def wall_gex_cycle_seconds() -> int:
             return max(5, int(explicit))
         except (TypeError, ValueError):
             pass
-    return max(5, trader_cycle_seconds())
+    try:
+        return max(30, int(os.environ.get("GEX_WALL_GEX_CYCLE_SECONDS", "120")))
+    except (TypeError, ValueError):
+        return 120
 
 
 def trader_cycle_seconds() -> int:

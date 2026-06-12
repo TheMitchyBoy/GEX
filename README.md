@@ -159,19 +159,19 @@ docker compose --profile tools run --rm refresh
 7. `GEX_PAGE_MINIMAL_LOAD=1` (default) loads **only the current gamma snapshot** on dashboard pages — no historical replay catalog or prior-slice trails. Scheduled refresh still writes every export to `data/exports/` for backfill, training, and backtests. When minimal load is on, `/api/agent/daily-strategy` also skips `_prediction_history` (240 snapshots).
 8. `GEX_PAGE_UW_PEEK_ONLY=1` (default) avoids blocking HTML on live UW HTTP — pages paint from exports/cache immediately; the browser fetches fresh UW data via `?live=1` on strategy/status refresh (4s timeout via `GEX_UW_FETCH_TIMEOUT_SEC`).
 9. After the first backfill, consider `GEX_DASHBOARD_HISTORY_DAYS=30`, `GEX_AUTO_BACKFILL_IF_EMPTY=0`, and `GEX_STARTUP_BACKFILL=0` to reduce disk I/O on deploy.
-10. Railway health check uses `/health/live` (instant). If the site shows `ERR_CONNECTION_ABORTED`, open **Deployments → Logs** — common causes are OOM during model retrain (`GEX_RETRAIN_ON_START=1`), missing volume at `/app/data`, or a crashed gunicorn worker. Set `GEX_DATA_DIR=/app/data` and mount a persistent volume.
+10. Railway health check uses `/health/live` only — never `/health/ready` (full disk sync). If the site freezes or shows `ERR_CONNECTION_ABORTED`, keep `GEX_WALL_GEX_AUTO=0`, avoid `GEX_RETRAIN_ON_START=1`, mount `GEX_DATA_DIR=/app/data`, and leave client polls on exports (`GEX_STRATEGY_POLL_SEC=120`, no blocking `live=1` on auto-refresh).
 
 ### 7. Pages and auto-traders
 
 | URL | Dashboard | Background trader | Enable with |
 |-----|-----------|-------------------|-------------|
-| `/` | **Wall GEX** — trade toward the lowest-\|γ\| wall | `low_gex_engine.py` | `GEX_WALL_GEX_AUTO=1` (default on) |
+| `/` | **Wall GEX** — trade toward the lowest-\|γ\| wall | `low_gex_engine.py` | `GEX_WALL_GEX_AUTO=1` (off by default on Railway) |
 | `/gamma`, `/periscope` | **Gamma Magnet** — max-positive-γ magnet strategy | `engine.py` | `GEX_AUTO_TRADER=1` |
 | `/gamma/near`, `/near` | **Near-Spot Walls** — trades toward the dominant \|γ\| wall (highest or lowest) within ±1% of spot | `low_gex_engine.py` | `GEX_WALL_GEX_AUTO=1` |
 | `/trade` | **Webull quick-trade desk** — live quotes + one-click orders | manual / API | Webull credentials |
 | `/ticker/<TICKER>/...` | Per-ticker variants of the above | same | same |
 
-Both auto-traders read **SPX** gamma signals (`GEX_SIGNAL_TICKER=SPX`) and execute **SPY** 0DTE options by default (`GEX_EXECUTION_TICKER=SPY`). Default exits are **3% stop / 22% take profit** on full-window Wall GEX (`/`); **near-spot walls** (`/near`, ±1%) use **3% / 28%** with **10-bar max hold** and **wall-shift re-entry off** (`GEX_NEAR_WALL_*`). Gamma Magnet uses **20% / 60%** unless overridden via `GEX_TRADER_STOP_LOSS_PCT` / `GEX_TRADER_TAKE_PROFIT_PCT`.
+Both auto-traders read **SPX** gamma signals (`GEX_SIGNAL_TICKER=SPX`) and execute **SPY** 0DTE options by default (`GEX_EXECUTION_TICKER=SPY`). Default exits are **3% stop / 22% take profit** on full-window Wall GEX (`/`, lowest-γ wall); **near-spot walls** (`/near`, ±1%) pick whichever of the highest or lowest γ strike has the larger \|γ\| and buy calls/puts toward that wall. Near exits use **3% / 28%** with **10-bar max hold** and **wall-shift re-entry off** (`GEX_NEAR_WALL_*`). Gamma Magnet uses **20% / 60%** unless overridden via `GEX_TRADER_STOP_LOSS_PCT` / `GEX_TRADER_TAKE_PROFIT_PCT`.
 
 **Scheduler loops** (when not disabled):
 

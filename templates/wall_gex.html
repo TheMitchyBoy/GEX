@@ -114,6 +114,7 @@
 
     <script>
       const TICKER = {{ ticker|tojson }};
+      const statusPollMs = {{ status_poll_sec|default(90)|tojson }} * 1000;
       const LIVE_MODE = {{ status.live_mode|tojson }};
       const API = {{ api_urls|tojson }};
 
@@ -174,7 +175,7 @@
               renderAuthBanner(data.webull_auth || {});
               if (data.ok) {
                 setMsg('Webull reconnect OK', 'ok');
-                await refresh();
+                await refresh(true);
               } else {
                 setMsg(data.error || data.reason || 'Reconnect failed', 'err');
               }
@@ -218,9 +219,10 @@
         }
       }
 
-      async function refresh() {
+      async function refresh(live) {
         try {
-          const res = await fetch(`${API.status}?ticker=${encodeURIComponent(TICKER)}&live=1`);
+          const liveQs = live ? '&live=1' : '';
+          const res = await fetch(`${API.status}?ticker=${encodeURIComponent(TICKER)}${liveQs}`);
           const data = await readJson(res);
           if (!res.ok) throw new Error(data.error || 'status ' + res.status);
           renderStatus(data);
@@ -275,8 +277,8 @@
       });
 
       renderAuthBanner({{ status|tojson }});
-      refresh();
-      setInterval(refresh, 30000);
+      refresh(false);
+      setInterval(() => refresh(false), statusPollMs);
     </script>
   </body>
 </html>

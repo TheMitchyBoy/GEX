@@ -822,6 +822,7 @@
       const isLiveSlice = {{ is_live_slice|tojson }};
       const currentOnly = {{ current_only|default(false)|tojson }};
       const dailyLearningEnabled = {{ daily_learning_enabled|default(false)|tojson }};
+      const strategyPollMs = {{ strategy_poll_sec|default(120)|tojson }} * 1000;
       const ticker = '{{ ticker }}';
       const strikeWindowPct = {{ strike_window_pct|tojson }};
       const wallMode = {{ wall_mode|default(false)|tojson }};
@@ -1146,10 +1147,10 @@
         finally { setStrategyChartLoading(false); }
       }
 
-      async function refreshStrategy() {
+      async function refreshStrategy(live) {
         const btn = document.getElementById('strategyRefreshBtn');
         btn?.classList.add('loading');
-        const params = strategyQueryParams(true);
+        const params = strategyQueryParams(!!live);
         const qs = params.toString() ? '?' + params.toString() : '';
         try {
           const res = await fetch('/api/trader/strategy' + qs);
@@ -1169,7 +1170,7 @@
       bindChartStrikeClick();
       updateLastUpdated();
       startSpotStream();
-      if (isLiveSlice) window.setInterval(refreshStrategy, 60000);
+      if (isLiveSlice) window.setInterval(() => refreshStrategy(false), strategyPollMs);
 
       function navigateTime({ ts = null, date = null } = {}) {
         if (date) {
@@ -1194,7 +1195,7 @@
           loadStrategySlice({ ts: timelineData.next_ts });
         }
       });
-      document.getElementById('strategyRefreshBtn')?.addEventListener('click', refreshStrategy);
+      document.getElementById('strategyRefreshBtn')?.addEventListener('click', () => refreshStrategy(true));
 
       let chatSessionId = null, chatBusy = false;
 
