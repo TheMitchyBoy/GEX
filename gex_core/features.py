@@ -488,6 +488,40 @@ def select_dense_atm_strike_series(
     return window.sort_index()
 
 
+def thin_strike_series_for_chart(
+    series: pd.Series,
+    spot: float | None,
+    *,
+    max_strikes: int,
+) -> pd.Series:
+    """Evenly thin a dense ATM ladder so horizontal bars stay readable."""
+    if series is None or series.empty or len(series) <= max(1, int(max_strikes)):
+        return series.sort_index() if series is not None else pd.Series(dtype=float)
+
+    window = series.sort_index()
+    strikes = [float(s) for s in window.index]
+    spot_val = safe_float(spot, 0.0)
+
+    pinned: set[float] = set()
+    if spot_val > 0:
+        idx_vals = window.index.astype(float)
+        pinned.add(float(window.index[np.abs(idx_vals - spot_val).argmin()]))
+    for idx in window.abs().nlargest(min(3, len(window))).index:
+        pinned.add(float(idx))
+    for idx in window.abs().nsmallest(min(2, len(window))).index:
+        pinned.add(float(idx))
+
+    remaining = max(1, int(max_strikes) - len(pinned))
+    pool = [s for s in strikes if s not in pinned]
+    if len(pool) <= remaining:
+        keep = sorted(pinned | set(pool))
+    else:
+        positions = np.linspace(0, len(pool) - 1, remaining, dtype=int)
+        keep = sorted(pinned | {pool[int(i)] for i in positions})
+
+    return window.loc[sorted(keep)].sort_index()
+
+
 def spot_covers_strike_grid(series: pd.Series, spot: float, *, tolerance_pct: float = 0.015) -> bool:
     """True when spot lies inside the strike index range (with a small margin)."""
     if series is None or series.empty or spot <= 0:

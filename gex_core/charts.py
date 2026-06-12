@@ -154,13 +154,14 @@ def _strike_axis_layout(
         zerolinecolor="rgba(255,255,255,0.15)",
     )
     n = len(strikes)
-    if n <= 20:
-        tick_every = 1 if n <= 10 else 2
-        layout["tickmode"] = "array"
-        layout["tickvals"] = strikes[::tick_every]
+    if n <= 10:
+        tick_every = 1
+    elif n <= 18:
+        tick_every = 2
     else:
-        # Match the strike increment (typically 5 for SPX), not a coarse 25/50 grid.
-        layout["dtick"] = step
+        tick_every = max(1, int(round(n / 10)))
+    layout["tickmode"] = "array"
+    layout["tickvals"] = strikes[::tick_every]
     return layout
 
 

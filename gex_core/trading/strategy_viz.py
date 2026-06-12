@@ -11,7 +11,12 @@ from plotly.subplots import make_subplots
 from plotly.utils import PlotlyJSONEncoder
 
 from gex_core.charts import _bar_width, _strike_axis_layout
-from gex_core.features import parse_gamma_flip_value, safe_float, select_dense_atm_strike_series
+from gex_core.features import (
+    parse_gamma_flip_value,
+    safe_float,
+    select_dense_atm_strike_series,
+    thin_strike_series_for_chart,
+)
 from gex_core.trading.advisor import advise_entry
 from gex_core.trading.config import (
     max_strike_distance_pct,
@@ -63,17 +68,29 @@ def _chart_exposure_window(
     spot: float,
     *,
     window_pct: float = 0.04,
-    max_strikes: int = 65,
+    max_strikes: int = 28,
 ) -> pd.Series:
-    """Dense ATM strike ladder for the magnet map (no peak-skip gaps)."""
+    """ATM strike ladder trimmed for readable strategy-map bars."""
     if series is None or series.empty or spot <= 0:
         return pd.Series(dtype=float)
-    return select_dense_atm_strike_series(
+    dense = select_dense_atm_strike_series(
         pd.Series(series, dtype=float).sort_index(),
         spot,
         window_pct=window_pct,
-        max_strikes=max_strikes,
+        max_strikes=max(max_strikes * 3, 40),
     )
+    return thin_strike_series_for_chart(dense, spot, max_strikes=max_strikes)
+
+
+def _gamma_bar_width(strikes: list[float]) -> float | None:
+    fill = 0.68 if len(strikes) > 18 else 0.82
+    return _bar_width(strikes, fill_ratio=fill)
+
+
+def _strategy_chart_height(n_strikes: int) -> int:
+    """Scale chart height with strike count so bars are not stacked on top of each other."""
+    strike_rows = max(8, n_strikes)
+    return max(640, min(1100, 18 * strike_rows + 260))
 
 
 def _normalize_exposure_trail(
@@ -178,7 +195,7 @@ def _add_gamma_bars(
             x=window.values,
             y=strikes,
             orientation="h",
-            width=_bar_width(strikes),
+            width=_gamma_bar_width(strikes),
             marker=dict(
                 color=colors,
                 opacity=opacities,
@@ -519,7 +536,7 @@ def build_strategy_chart(
     exposure: pd.Series | None,
     state: dict[str, Any],
     window_pct: float = 0.04,
-    max_strikes: int = 65,
+    max_strikes: int = 28,
     exposure_trail: list[dict[str, Any]] | None = None,
     previous_exposure: pd.Series | None = None,
     wall_mode: bool = False,
@@ -681,8 +698,8 @@ def build_strategy_chart(
         paper_bgcolor=_BG,
         plot_bgcolor=_PANEL,
         font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
-        margin=dict(l=68, r=24, t=42, b=44),
-        height=700,
+        margin=dict(l=72, r=28, t=42, b=44),
+        height=_strategy_chart_height(len(window)),
         showlegend=False,
         clickmode="event+select",
         title=dict(
@@ -721,7 +738,7 @@ def build_strategy_dashboard(
     prev_spot: float | None = None,
     uw_bundle: dict[str, Any] | None = None,
     window_pct: float = 0.04,
-    max_strikes: int = 65,
+    max_strikes: int = 28,
     exposure_trail: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     state = build_strategy_state(
@@ -867,7 +884,7 @@ def build_wall_strategy_chart(
     exposure: pd.Series | None,
     state: dict[str, Any],
     window_pct: float = 0.01,
-    max_strikes: int = 40,
+    max_strikes: int = 16,
     exposure_trail: list[dict[str, Any]] | None = None,
     previous_exposure: pd.Series | None = None,
 ) -> go.Figure:
@@ -1025,8 +1042,8 @@ def build_wall_strategy_chart(
         paper_bgcolor=_BG,
         plot_bgcolor=_PANEL,
         font=dict(family="Inter, system-ui, sans-serif", size=11, color=_TEXT),
-        margin=dict(l=68, r=24, t=42, b=44),
-        height=700,
+        margin=dict(l=72, r=28, t=42, b=44),
+        height=_strategy_chart_height(len(window)),
         showlegend=False,
         clickmode="event+select",
         title=dict(
@@ -1062,7 +1079,7 @@ def build_wall_strategy_dashboard(
     exposure: pd.Series | None,
     snapshot: dict[str, Any] | None = None,
     window_pct: float = 0.01,
-    max_strikes: int = 40,
+    max_strikes: int = 16,
     exposure_trail: list[dict[str, Any]] | None = None,
     previous_exposure: pd.Series | None = None,
 ) -> dict[str, Any]:
