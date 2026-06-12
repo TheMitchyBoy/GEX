@@ -20,6 +20,16 @@ from gex_core.uw_context_bundle import bundle_to_prompt_json
 
 logger = logging.getLogger(__name__)
 
+
+def daily_learning_enabled() -> bool:
+    """Off by default — lesson/strategy loops are optional for dashboard speed."""
+    return os.environ.get("GEX_DAILY_LEARNING", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 _INSIGHT_SCHEMA = """
         CREATE TABLE IF NOT EXISTS daily_insights (
             ticker TEXT NOT NULL,
@@ -566,7 +576,7 @@ def get_today_strategy_for_context(
 
 def attach_learning_to_bundle(bundle: dict[str, Any], ticker: str) -> dict[str, Any]:
     """Mutate bundle with cached daily lessons + today's strategy for LLM context."""
-    if not bundle:
+    if not bundle or not daily_learning_enabled():
         return bundle
     bundle["daily_learning"] = {
         "recent_lessons": list_recent_lessons(ticker),

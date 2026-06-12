@@ -52,16 +52,50 @@ def test_ticker_page_does_not_block_on_live_wall_gex_data(monkeypatch):
     assert calls["n"] == 0
 
 
-def test_api_agent_daily_strategy():
+def test_api_agent_daily_strategy_disabled_by_default(monkeypatch):
     from web_app import APP
 
+    monkeypatch.delenv("GEX_DAILY_LEARNING", raising=False)
     client = APP.test_client()
     response = client.get("/api/agent/daily-strategy")
     assert response.status_code == 200
     data = response.get_json()
     assert data["ticker"] == "SPX"
+    assert data["disabled"] is True
+    assert data["strategy"] is None
+    assert data["recent_lessons"] == []
+
+
+def test_api_agent_daily_strategy_when_enabled(monkeypatch):
+    from web_app import APP
+
+    monkeypatch.setenv("GEX_DAILY_LEARNING", "1")
+    client = APP.test_client()
+    response = client.get("/api/agent/daily-strategy")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ticker"] == "SPX"
+    assert data.get("disabled") is not True
     assert "strategy" in data
     assert "recent_lessons" in data
+
+
+def test_daily_strategy_skips_prediction_history_when_minimal_load(monkeypatch):
+    import web_app
+
+    calls = {"n": 0}
+
+    def _track(*_a, **_k):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setenv("GEX_DAILY_LEARNING", "1")
+    monkeypatch.setenv("GEX_PAGE_MINIMAL_LOAD", "1")
+    monkeypatch.setattr(web_app, "_prediction_history", _track)
+    client = web_app.APP.test_client()
+    response = client.get("/api/agent/daily-strategy")
+    assert response.status_code == 200
+    assert calls["n"] == 0
 
 
 def test_ticker_api_payload_skips_backtest_when_configured(monkeypatch):

@@ -382,9 +382,10 @@ def build_uw_context_bundle(
         pass
 
     try:
-        from gex_core.daily_learning import attach_learning_to_bundle
+        from gex_core.daily_learning import attach_learning_to_bundle, daily_learning_enabled
 
-        attach_learning_to_bundle(bundle, ticker)
+        if daily_learning_enabled():
+            attach_learning_to_bundle(bundle, ticker)
     except Exception:
         logger.debug("Daily learning attachment skipped", exc_info=True)
 

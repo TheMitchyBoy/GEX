@@ -786,17 +786,22 @@
               </div>
               <button class="btn btn-sm btn-outline-secondary btn-nav" id="chatReset" type="button">New chat</button>
             </div>
-            <div class="mb-2 p-2 rounded border border-secondary-subtle" id="dailyStrategyCard" style="display:none;">
-              <div class="d-flex justify-content-between align-items-start gap-2">
-                <div>
-                  <div class="small fw-semibold text-uppercase muted mb-1">Today's strategy</div>
-                  <div class="small" id="dailyStrategySummary">Loading…</div>
+            {% if daily_learning_enabled %}
+            <div class="mb-2" id="dailyStrategyPanel">
+              <button class="btn btn-sm btn-outline-secondary btn-nav w-100" id="dailyStrategyLoad" type="button">Load today's strategy</button>
+              <div class="mt-2 p-2 rounded border border-secondary-subtle" id="dailyStrategyCard" style="display:none;">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                  <div>
+                    <div class="small fw-semibold text-uppercase muted mb-1">Today's strategy</div>
+                    <div class="small" id="dailyStrategySummary"></div>
+                  </div>
+                  <button class="btn btn-sm btn-outline-secondary btn-nav" id="dailyStrategyRefresh" type="button" title="Refresh strategy">↻</button>
                 </div>
-                <button class="btn btn-sm btn-outline-secondary btn-nav" id="dailyStrategyRefresh" type="button" title="Refresh strategy">↻</button>
+                <ul class="small mb-0 mt-2 ps-3" id="dailyStrategyPlays"></ul>
+                <div class="small muted mt-2" id="dailyStrategyLessons"></div>
               </div>
-              <ul class="small mb-0 mt-2 ps-3" id="dailyStrategyPlays"></ul>
-              <div class="small muted mt-2" id="dailyStrategyLessons"></div>
             </div>
+            {% endif %}
             <div class="chat-panel">
               <div class="chat-messages" id="chatMessages"></div>
               <div class="chat-input-row">
@@ -816,6 +821,7 @@
       const exposureType = {{ exposure|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
       const currentOnly = {{ current_only|default(false)|tojson }};
+      const dailyLearningEnabled = {{ daily_learning_enabled|default(false)|tojson }};
       const ticker = '{{ ticker }}';
       const strikeWindowPct = {{ strike_window_pct|tojson }};
       const wallMode = {{ wall_mode|default(false)|tojson }};
@@ -1117,16 +1123,6 @@
           }
         }
         updateLastUpdated();
-        queueDailyStrategy(false);
-      }
-
-      let dailyStrategyQueued = false;
-      function queueDailyStrategy(refresh) {
-        if (dailyStrategyQueued && !refresh) return;
-        dailyStrategyQueued = true;
-        const run = () => loadDailyStrategy(refresh);
-        if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 3000 });
-        else setTimeout(run, 200);
       }
 
       function setStrategyChartLoading(on) {
@@ -1166,7 +1162,6 @@
       bindLayerToggles();
       if (strategySpec) {
         renderStrategyChart(strategySpec);
-        queueDailyStrategy(false);
       } else {
         setStrategyChartLoading(true);
         loadStrategySlice({ pushUrl: false });
@@ -1204,11 +1199,14 @@
       let chatSessionId = null, chatBusy = false;
 
       async function loadDailyStrategy(refresh) {
+        if (!dailyLearningEnabled) return;
         const card = document.getElementById('dailyStrategyCard');
+        const loadBtn = document.getElementById('dailyStrategyLoad');
         const summaryEl = document.getElementById('dailyStrategySummary');
         const playsEl = document.getElementById('dailyStrategyPlays');
         const lessonsEl = document.getElementById('dailyStrategyLessons');
         if (!card || !summaryEl) return;
+        if (loadBtn) loadBtn.style.display = 'none';
         card.style.display = 'block';
         summaryEl.textContent = 'Loading strategy…';
         if (playsEl) playsEl.innerHTML = '';
@@ -1220,6 +1218,10 @@
           const res = await fetch('/api/agent/daily-strategy?' + qs.toString());
           let data = {};
           try { data = await res.json(); } catch (_) {}
+          if (data.disabled) {
+            summaryEl.textContent = 'Daily learning is disabled on this server.';
+            return;
+          }
           if (!res.ok) {
             summaryEl.textContent = data.error || 'Strategy unavailable — chat still has export context.';
             return;
@@ -1243,6 +1245,7 @@
           summaryEl.textContent = 'Strategy unavailable — chat still has export context.';
         }
       }
+      document.getElementById('dailyStrategyLoad')?.addEventListener('click', () => loadDailyStrategy(false));
       document.getElementById('dailyStrategyRefresh')?.addEventListener('click', () => loadDailyStrategy(true));
       function appendChatBubble(role, text) {
         const box = document.getElementById('chatMessages');

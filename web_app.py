@@ -732,7 +732,14 @@ def _render_periscope_dashboard(
         auto_trader=auto_trader,
         defer_strategy_chart=minimal,
         current_only=minimal,
+        daily_learning_enabled=_daily_learning_enabled(),
     )
+
+
+def _daily_learning_enabled() -> bool:
+    from gex_core.daily_learning import daily_learning_enabled
+
+    return daily_learning_enabled()
 
 
 def _ticker_api_payload(ticker: str, selected_ts: str | None = None) -> dict:
@@ -1721,11 +1728,26 @@ def api_agent_daily_strategy():
     from gex_core.daily_learning import get_or_create_today_strategy, list_recent_lessons
 
     ticker = PRIMARY_TICKER
+    if not _daily_learning_enabled():
+        return jsonify(
+            {
+                "ticker": ticker,
+                "disabled": True,
+                "strategy": None,
+                "recent_lessons": [],
+                "uw_data_fed": False,
+            }
+        )
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
     force = request.args.get("refresh", "0").lower() in {"1", "true", "yes"}
     try:
-        agent_ctx = _agent_context(ticker, exposure, requested_ts)
+        agent_ctx = _agent_context(
+            ticker,
+            exposure,
+            requested_ts,
+            skip_prediction_history=_periscope_minimal_load(),
+        )
         uw_bundle = agent_ctx["uw_bundle"]
         strategy = get_or_create_today_strategy(
             ticker=ticker,
@@ -1794,7 +1816,13 @@ def api_agent_predict():
     return jsonify(result)
 
 
-def _agent_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
+def _agent_context(
+    ticker: str,
+    exposure: str,
+    requested_ts: str | None,
+    *,
+    skip_prediction_history: bool = False,
+) -> dict:
     """Build export-first periscope + UW context for chat/agent endpoints."""
     uw_entry = _uw_entry_for_request(ticker, blocking=False)
     ctx = build_periscope_context(
@@ -1808,10 +1836,10 @@ def _agent_context(ticker: str, exposure: str, requested_ts: str | None) -> dict
     selected = ctx.get("selected") or {}
     gex_series = ctx.get("exposure_series")
     uw_agg = uw_entry.get("agg") if uw_entry else None
-    pred_history = _prediction_history(ticker)
+    pred_history = [] if skip_prediction_history else _prediction_history(ticker)
     knn = (
         predict_next_snapshot(pred_history, lookback_days=prediction_lookback_days(ticker))
-        if uw_agg
+        if uw_agg and pred_history
         else None
     )
     uw_bundle = _uw_bundle_for_context(
@@ -2306,6 +2334,8 @@ def start_background_refresh():
 
 
 def _run_daily_learning_bootstrap() -> None:
+    if not _daily_learning_enabled():
+        return
     try:
         from gex_core.daily_learning import run_daily_learning_cycle
 
