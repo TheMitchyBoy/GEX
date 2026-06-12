@@ -15,6 +15,24 @@ def test_index_renders_wall_gex_dashboard():
     assert response.status_code == 200
     assert b"Wall GEX Trader" in response.data
     assert b"/api/wall-gex/status" in response.data
+    assert b"gex-main-nav" in response.data
+    assert b"Gamma Magnet" in response.data
+
+
+def test_main_nav_on_gamma_and_trade_pages():
+    from web_app import APP
+
+    client = APP.test_client()
+    for path, active_label in [
+        ("/gamma", b"Gamma Magnet"),
+        ("/gamma/near", b"Near Walls"),
+        ("/webull", b"Quick Trade"),
+    ]:
+        response = client.get(path)
+        assert response.status_code == 200
+        assert b"gex-main-nav" in response.data
+        assert active_label in response.data
+        assert b'aria-current="page"' in response.data
 
 
 def test_ticker_page_does_not_block_on_live_wall_gex_data(monkeypatch):

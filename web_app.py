@@ -301,6 +301,53 @@ def _dashboard_skip_backtest() -> bool:
     }
 
 
+def _main_nav_items() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "wall",
+            "label": "Wall GEX",
+            "url": url_for("index"),
+            "hint": "Low/high γ wall auto-trader",
+        },
+        {
+            "id": "gamma",
+            "label": "Gamma Magnet",
+            "url": url_for("gamma_dashboard"),
+            "hint": "Max positive-γ magnet strategy map",
+        },
+        {
+            "id": "near",
+            "label": "Near Walls",
+            "url": url_for("gamma_near_dashboard"),
+            "hint": "±1% near-spot wall GEX view",
+        },
+        {
+            "id": "trade",
+            "label": "Quick Trade",
+            "url": url_for("webull_trade_dashboard"),
+            "hint": "Webull 0DTE options desk",
+        },
+    ]
+
+
+def _nav_active_id() -> str:
+    endpoint = request.endpoint or ""
+    if endpoint in {"webull_trade_dashboard"}:
+        return "trade"
+    if endpoint in {"gamma_near_dashboard", "ticker_gamma_near_page"}:
+        return "near"
+    if endpoint in {"gamma_dashboard", "ticker_gamma_page"}:
+        return "gamma"
+    if endpoint in {"index", "ticker_page"}:
+        return "wall"
+    return ""
+
+
+@APP.context_processor
+def _inject_main_nav() -> dict[str, Any]:
+    return {"main_nav_items": _main_nav_items(), "nav_active": _nav_active_id()}
+
+
 def _select_snapshot(history: list, requested_ts: str | None, ticker: str | None = None) -> dict:
     if not history:
         raise ValueError("empty history")
@@ -612,13 +659,6 @@ def _render_periscope_dashboard(
 
         auto_trader = trader_status(ticker)
 
-    full_gamma_url = url_for("ticker_gamma_page", ticker=ticker) if ticker != PRIMARY_TICKER else url_for("gamma_dashboard")
-    near_walls_url = (
-        url_for("ticker_gamma_near_page", ticker=ticker)
-        if ticker != PRIMARY_TICKER
-        else url_for("gamma_near_dashboard")
-    )
-
     return render_template(
         "periscope.html",
         ticker=ticker,
@@ -627,8 +667,6 @@ def _render_periscope_dashboard(
         strike_window_pct=strike_window_pct,
         near_spot_view=near_spot_view,
         wall_mode=wall_mode,
-        full_gamma_url=full_gamma_url,
-        near_walls_url=near_walls_url,
         regime=ctx.get("regime", "N/A"),
         total_gex=ctx.get("total_gex", 0.0),
         gamma_flip=gamma_flip,

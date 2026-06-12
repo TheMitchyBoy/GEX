@@ -14,7 +14,10 @@
       body {
         margin: 0; min-height: 100vh; background: var(--bg); color: var(--txt);
         font-family: Inter, system-ui, sans-serif; font-size: 0.9rem;
-        display: flex; align-items: center; justify-content: center; padding: 1.25rem;
+      }
+      .wall-page-body {
+        display: flex; align-items: center; justify-content: center;
+        padding: 1.25rem; min-height: calc(100vh - 52px);
       }
       .card {
         width: min(420px, 100%); background: var(--panel); border: 1px solid var(--border);
@@ -68,6 +71,8 @@
     </style>
   </head>
   <body>
+    {% include '_main_nav.html' %}
+    <div class="wall-page-body">
     <div class="wrap">
     <div id="auth-banner" class="auth-banner" role="alert" aria-live="polite"></div>
     <div class="card">
@@ -103,6 +108,7 @@
         <button class="btn-run full" id="btn-run" type="button">Run cycle</button>
       </div>
       <div id="status-msg"></div>
+    </div>
     </div>
     </div>
 

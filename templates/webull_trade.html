@@ -36,8 +36,6 @@
       .btn-sell { background: var(--red); border: none; color: #fff; font-weight: 600; }
       .btn-outline-accent { border-color: var(--accent); color: #93c5fd; }
       table { color: var(--txt); font-size: 0.8rem; }
-      .nav-link-custom { color: var(--label); text-decoration: none; }
-      .nav-link-custom:hover { color: var(--accent); }
       #log { max-height: 140px; overflow-y: auto; font-size: 0.72rem; }
       .btn-sell.urgent { animation: pulse-sell 1.2s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(239,68,68,0.45); }
       @keyframes pulse-sell { 0%, 100% { opacity: 1; } 50% { opacity: 0.82; } }
@@ -45,6 +43,7 @@
     </style>
   </head>
   <body>
+    {% include '_main_nav.html' %}
     <div class="page-wrap">
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <div>
@@ -52,7 +51,6 @@
           <div class="muted small">{{ signal_ticker }} signals → <span class="mono">{{ execution_ticker }}</span> 0DTE</div>
         </div>
         <div class="d-flex gap-3 align-items-center">
-          <a class="nav-link-custom small" href="{{ url_for('index') }}">← Gamma dashboard</a>
           <span id="conn-chip" class="chip hold">connecting</span>
         </div>
       </div>

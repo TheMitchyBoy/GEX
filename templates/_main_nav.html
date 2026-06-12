@@ -1,0 +1,131 @@
+{# Shared app navigation — requires main_nav_items + nav_active from context processor #}
+<style>
+  .gex-main-nav {
+    position: sticky;
+    top: 0;
+    z-index: 1040;
+    background: rgba(5, 7, 12, 0.92);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .gex-main-nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 0.55rem 1rem;
+  }
+  .gex-main-nav-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: #f1f5f9;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 0.92rem;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
+  .gex-main-nav-brand:hover { color: #93c5fd; }
+  .gex-main-nav-brand span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(59, 130, 246, 0.12));
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    font-size: 0.62rem;
+    font-weight: 800;
+    color: #93c5fd;
+  }
+  .gex-main-nav-toggle {
+    display: none;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(12, 17, 28, 0.9);
+    color: #f1f5f9;
+    border-radius: 8px;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .gex-main-nav-links {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    justify-content: flex-end;
+  }
+  .gex-main-nav-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.38rem 0.72rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-decoration: none;
+    border: 1px solid transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .gex-main-nav-link:hover {
+    color: #f1f5f9;
+    background: rgba(148, 163, 184, 0.08);
+    border-color: rgba(148, 163, 184, 0.14);
+  }
+  .gex-main-nav-link.active {
+    color: #dbeafe;
+    background: rgba(59, 130, 246, 0.16);
+    border-color: rgba(59, 130, 246, 0.35);
+  }
+  @media (max-width: 768px) {
+    .gex-main-nav-toggle { display: inline-flex; }
+    .gex-main-nav-links {
+      display: none;
+      width: 100%;
+      flex-direction: column;
+      align-items: stretch;
+      padding-top: 0.35rem;
+    }
+    .gex-main-nav-links.open { display: flex; }
+    .gex-main-nav-inner { flex-wrap: wrap; }
+    .gex-main-nav-link { justify-content: center; }
+  }
+</style>
+<nav class="gex-main-nav" aria-label="Main">
+  <div class="gex-main-nav-inner">
+    <a class="gex-main-nav-brand" href="{{ url_for('index') }}">
+      <span>GEX</span>
+      Dealer Gamma
+    </a>
+    <button class="gex-main-nav-toggle" type="button" id="gexNavToggle" aria-expanded="false" aria-controls="gexNavLinks">Menu</button>
+    <div class="gex-main-nav-links" id="gexNavLinks">
+      {% for item in main_nav_items %}
+      <a
+        class="gex-main-nav-link{% if nav_active == item.id %} active{% endif %}"
+        href="{{ item.url }}"
+        title="{{ item.hint }}"
+        {% if nav_active == item.id %}aria-current="page"{% endif %}
+      >{{ item.label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</nav>
+<script>
+  (function () {
+    const btn = document.getElementById('gexNavToggle');
+    const links = document.getElementById('gexNavLinks');
+    if (!btn || !links) return;
+    btn.addEventListener('click', function () {
+      const open = links.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  })();
+</script>
