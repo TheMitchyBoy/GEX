@@ -220,7 +220,7 @@
 
       async function refresh() {
         try {
-          const res = await fetch(`${API.status}?ticker=${encodeURIComponent(TICKER)}`);
+          const res = await fetch(`${API.status}?ticker=${encodeURIComponent(TICKER)}&live=1`);
           const data = await readJson(res);
           if (!res.ok) throw new Error(data.error || 'status ' + res.status);
           renderStatus(data);

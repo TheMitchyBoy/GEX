@@ -175,9 +175,40 @@ def _wall_gex_live_cache_seconds() -> float:
 
 def _uw_fetch_timeout_seconds() -> float:
     try:
-        return max(2.0, float(os.environ.get("GEX_UW_FETCH_TIMEOUT_SEC", "12")))
+        return max(2.0, float(os.environ.get("GEX_UW_FETCH_TIMEOUT_SEC", "4")))
     except (TypeError, ValueError):
-        return 12.0
+        return 4.0
+
+
+def _page_uw_peek_only() -> bool:
+    """HTML/initial API handlers use cached UW only — no blocking HTTP on page paint."""
+    return os.environ.get("GEX_PAGE_UW_PEEK_ONLY", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _schedule_uw_refresh(ticker: str) -> None:
+    """Refresh UW in the background when the cache is cold (never blocks the caller)."""
+    if not uw_api_configured():
+        return
+    ticker = ticker.upper()
+    with _uw_lock:
+        if _uw_cache_fresh(ticker):
+            return
+    _UW_FETCH_EXECUTOR.submit(refresh_uw_data, ticker, False, analyze=False)
+
+
+def _uw_entry_for_request(ticker: str, *, blocking: bool | None = None) -> dict | None:
+    """Return UW cache for dashboards; optionally block on a live refresh."""
+    if not _uw_live_enabled():
+        return None
+    ticker = ticker.upper()
+    cached = _peek_uw_data(ticker)
+    if cached is not None:
+        return cached
+    use_blocking = not _page_uw_peek_only() if blocking is None else blocking
+    if use_blocking:
+        return get_uw_data_with_timeout(ticker)
+    _schedule_uw_refresh(ticker)
+    return None
 
 
 def _peek_uw_data(ticker: str) -> dict | None:
@@ -527,7 +558,7 @@ def _render_periscope_dashboard(
 
     has_exports = bool(list_periscope_timestamps(ticker, api_key=uw_api_key(), minimal=True))
 
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    uw_entry = _uw_entry_for_request(ticker, blocking=False)
     minimal = _periscope_minimal_load(selected_ts=requested_ts, selected_date=requested_date)
     ctx = build_periscope_context(
         ticker=ticker,
@@ -784,7 +815,11 @@ def _wall_gex_api_urls() -> dict[str, str]:
     }
 
 
-def _wall_gex_live_data(ticker: str) -> tuple[float | None, pd.Series | None, dict[str, Any]]:
+def _wall_gex_live_data(
+    ticker: str,
+    *,
+    live: bool = False,
+) -> tuple[float | None, pd.Series | None, dict[str, Any]]:
     """Load spot, exposure series, and a dry-run wall GEX signal."""
     from gex_core.trading.low_gex_engine import run_low_gex_trade
 
@@ -794,9 +829,7 @@ def _wall_gex_live_data(ticker: str) -> tuple[float | None, pd.Series | None, di
     if cached and (now - cached[0]) < _wall_gex_live_cache_seconds():
         return cached[1]
 
-    uw_entry = None
-    if _uw_live_enabled():
-        uw_entry = get_uw_data_with_timeout(ticker, analyze=False)
+    uw_entry = _uw_entry_for_request(ticker, blocking=live) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
         exposure="gamma",
@@ -1011,7 +1044,7 @@ def api_periscope():
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
     requested_date = request.args.get("date")
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    uw_entry = _uw_entry_for_request(ticker, blocking=False)
     minimal = _periscope_minimal_load(selected_ts=requested_ts, selected_date=requested_date)
     ctx = build_periscope_context(
         ticker=ticker,
@@ -1076,7 +1109,7 @@ def api_trader_run():
     from gex_core.trading.engine import run_trading_cycle
 
     ticker = PRIMARY_TICKER
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    uw_entry = _uw_entry_for_request(ticker, blocking=True)
     ctx = build_periscope_context(
         ticker=ticker,
         exposure="gamma",
@@ -1109,7 +1142,9 @@ def api_trader_strategy():
     requested_ts = request.args.get("ts")
     include_trail = request.args.get("trail") == "1"
     minimal = _periscope_minimal_load(selected_ts=requested_ts, include_trail=include_trail)
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    live = request.args.get("live") == "1"
+    blocking = live or not minimal or include_trail
+    uw_entry = _uw_entry_for_request(ticker, blocking=blocking)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
@@ -1198,8 +1233,9 @@ def api_wall_gex_status():
     status = wall_gex_status(ticker, window_pct=window_pct)
     spot: float | None = None
     last_cycle: dict[str, Any] = {"ran": False, "reason": "Loading signal"}
+    live = request.args.get("live") == "1"
     try:
-        spot, _, last_cycle = _wall_gex_live_data(ticker)
+        spot, _, last_cycle = _wall_gex_live_data(ticker, live=live)
     except Exception as exc:
         logger.exception("Wall GEX status failed for %s", ticker)
         last_cycle = {"ran": False, "reason": str(exc)}
@@ -1244,7 +1280,7 @@ def api_wall_gex_run():
     payload = request.get_json(silent=True) or {}
     ticker = (payload.get("ticker") or PRIMARY_TICKER).upper()
     try:
-        spot, exposure, preview = _wall_gex_live_data(ticker)
+        spot, exposure, preview = _wall_gex_live_data(ticker, live=True)
         if not spot:
             return jsonify({"error": "No spot price available", "last_cycle": preview}), 503
         if exposure is None:
@@ -1317,13 +1353,14 @@ def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
     from gex_core.trading.strategy_viz import build_strategy_state
     from gex_core.trading.webull_quick_trade import build_recommended_trade
 
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    uw_entry = _uw_entry_for_request(ticker, blocking=False)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=request.args.get("ts"),
         exposure="gamma",
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=True,
     )
     history = ctx.get("history") or []
     prev_spot = None
@@ -1548,13 +1585,14 @@ def api_agent_analyze():
     ticker = PRIMARY_TICKER
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    uw_entry = _uw_entry_for_request(ticker, blocking=request.args.get("live") == "1")
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,
         exposure=exposure,
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=not requested_ts,
     )
     selected = ctx.get("selected") or {}
     gex_series = ctx.get("exposure_series")
@@ -1734,7 +1772,7 @@ def api_agent_predict():
 
 def _agent_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
     """Build export-first periscope + UW context for chat/agent endpoints."""
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
+    uw_entry = _uw_entry_for_request(ticker, blocking=False)
     ctx = build_periscope_context(
         ticker=ticker,
         selected_ts=requested_ts,

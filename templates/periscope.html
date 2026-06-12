@@ -1071,7 +1071,7 @@
         source.onerror = () => { source.close(); window.setTimeout(startSpotStream, 5000); };
       }
 
-      function strategyQueryParams() {
+      function strategyQueryParams(live) {
         const params = new URLSearchParams(window.location.search);
         if (strikeWindowPct && strikeWindowPct < 0.04) {
           params.set('window_pct', String(strikeWindowPct));
@@ -1079,6 +1079,7 @@
         if (wallMode) {
           params.set('strategy', 'wall');
         }
+        if (live) params.set('live', '1');
         return params;
       }
 
@@ -1107,6 +1108,16 @@
           }
         }
         updateLastUpdated();
+        queueDailyStrategy(false);
+      }
+
+      let dailyStrategyQueued = false;
+      function queueDailyStrategy(refresh) {
+        if (dailyStrategyQueued && !refresh) return;
+        dailyStrategyQueued = true;
+        const run = () => loadDailyStrategy(refresh);
+        if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 3000 });
+        else setTimeout(run, 200);
       }
 
       async function loadStrategySlice({ ts = null, date = null, pushUrl = true } = {}) {
@@ -1125,7 +1136,7 @@
       async function refreshStrategy() {
         const btn = document.getElementById('strategyRefreshBtn');
         btn?.classList.add('loading');
-        const params = strategyQueryParams();
+        const params = strategyQueryParams(true);
         const qs = params.toString() ? '?' + params.toString() : '';
         try {
           const res = await fetch('/api/trader/strategy' + qs);
@@ -1138,6 +1149,7 @@
       bindLayerToggles();
       if (strategySpec) {
         renderStrategyChart(strategySpec);
+        queueDailyStrategy(false);
       } else {
         loadStrategySlice({ pushUrl: false });
       }
@@ -1214,7 +1226,6 @@
         }
       }
       document.getElementById('dailyStrategyRefresh')?.addEventListener('click', () => loadDailyStrategy(true));
-      loadDailyStrategy(false);
       function appendChatBubble(role, text) {
         const box = document.getElementById('chatMessages');
         const el = document.createElement('div');

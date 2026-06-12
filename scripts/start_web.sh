@@ -10,6 +10,10 @@ PY
 
 # Keep HTML dashboard responsive on small Railway instances.
 export GEX_DASHBOARD_SKIP_BACKTEST="${GEX_DASHBOARD_SKIP_BACKTEST:-1}"
+export GEX_PAGE_MINIMAL_LOAD="${GEX_PAGE_MINIMAL_LOAD:-1}"
+export GEX_PAGE_UW_PEEK_ONLY="${GEX_PAGE_UW_PEEK_ONLY:-1}"
+export GEX_UW_FETCH_TIMEOUT_SEC="${GEX_UW_FETCH_TIMEOUT_SEC:-4}"
+export GEX_AGENT_FETCH_EXTRAS="${GEX_AGENT_FETCH_EXTRAS:-0}"
 
 _should_backfill() {
   python3 - <<'PY'

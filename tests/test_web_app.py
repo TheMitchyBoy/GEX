@@ -99,7 +99,7 @@ def test_gamma_near_dashboard_renders_near_spot_walls():
     assert b"Near-Spot Walls" in response.data
     assert b"Wall GEX" in response.data
     assert b"1.0% strikes" in response.data
-    assert b"Full gamma view" in response.data
+    assert b"low/high" in response.data
     assert b"strikeWindowPct" in response.data
     assert b"wallMode" in response.data
 
@@ -124,7 +124,7 @@ def test_api_trader_strategy_honors_window_pct(monkeypatch):
     response = client.get("/api/trader/strategy?window_pct=0.01")
     assert response.status_code == 200
     assert captured["window_pct"] == 0.01
-    assert captured["max_strikes"] == 40
+    assert captured["max_strikes"] == 24
     assert response.get_json().get("strategy_mode") == "wall"
 
 
@@ -300,8 +300,25 @@ def test_live_uw_failure_shows_stale_banner_on_latest_slice(monkeypatch):
     monkeypatch.setenv("UW_API_KEY", "dummy-key")
     monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
     monkeypatch.setattr(web_app, "_uw_live_enabled", lambda: True)
-    monkeypatch.setattr(web_app, "get_uw_data_with_timeout", lambda *_a, **_k: None)
+    monkeypatch.setattr(web_app, "_uw_entry_for_request", lambda *_a, **_k: None)
+    monkeypatch.setattr(web_app, "_schedule_uw_refresh", lambda *_a, **_k: None)
     monkeypatch.setattr(web_app, "_uw_failure_reason", lambda *_a, **_k: "rate_limited")
+    monkeypatch.setattr(web_app, "list_periscope_timestamps", lambda *_a, **_k: ["2026-06-12T12:00:00"])
+    monkeypatch.setattr(
+        web_app,
+        "build_periscope_context",
+        lambda **_k: {
+            "spot": 6000.0,
+            "selected": {},
+            "history": [],
+            "timeline": {"is_latest": True},
+            "selected_ts": "2026-06-12T12:00:00",
+            "selected_label": "latest",
+            "timestamps": ["2026-06-12T12:00:00"],
+            "regime": "long",
+            "total_gex": 1.0,
+        },
+    )
 
     client = web_app.APP.test_client()
     response = client.get("/ticker/SPX/gamma")
@@ -348,6 +365,102 @@ def test_spot_stream_does_not_poll_uw_rest(monkeypatch):
                 break
         mock_rest.assert_not_called()
         assert any(b"5012.5" in chunk for chunk in chunks)
+
+
+def test_page_uw_peek_only_defaults_on(monkeypatch):
+    import web_app
+
+    monkeypatch.delenv("GEX_PAGE_UW_PEEK_ONLY", raising=False)
+    assert web_app._page_uw_peek_only() is True
+    monkeypatch.setenv("GEX_PAGE_UW_PEEK_ONLY", "0")
+    assert web_app._page_uw_peek_only() is False
+
+
+def test_uw_fetch_timeout_defaults_to_four(monkeypatch):
+    import web_app
+
+    monkeypatch.delenv("GEX_UW_FETCH_TIMEOUT_SEC", raising=False)
+    assert web_app._uw_fetch_timeout_seconds() == 4.0
+
+
+def test_uw_entry_for_request_peek_only_schedules_refresh(monkeypatch):
+    import web_app
+
+    web_app._UW_CACHE.clear()
+    calls = {"timeout": 0, "schedule": 0}
+
+    monkeypatch.setenv("GEX_PAGE_UW_PEEK_ONLY", "1")
+    monkeypatch.setenv("UW_API_KEY", "test-key")
+    monkeypatch.setattr(web_app, "_uw_live_enabled", lambda: True)
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
+    monkeypatch.setattr(
+        web_app,
+        "get_uw_data_with_timeout",
+        lambda *_a, **_k: calls.__setitem__("timeout", calls["timeout"] + 1) or {"spot": 6000.0},
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_schedule_uw_refresh",
+        lambda _t: calls.__setitem__("schedule", calls["schedule"] + 1),
+    )
+
+    result = web_app._uw_entry_for_request("SPX")
+    assert result is None
+    assert calls == {"timeout": 0, "schedule": 1}
+
+
+def test_uw_entry_for_request_blocking_true_fetches(monkeypatch):
+    import web_app
+
+    web_app._UW_CACHE.clear()
+    calls = {"timeout": 0, "schedule": 0}
+    fake_entry = {"spot": 6000.0, "ts": 0.0}
+
+    monkeypatch.setenv("GEX_PAGE_UW_PEEK_ONLY", "1")
+    monkeypatch.setenv("UW_API_KEY", "test-key")
+    monkeypatch.setattr(web_app, "_uw_live_enabled", lambda: True)
+    monkeypatch.setattr(web_app, "uw_api_configured", lambda: True)
+    monkeypatch.setattr(
+        web_app,
+        "get_uw_data_with_timeout",
+        lambda *_a, **_k: calls.__setitem__("timeout", calls["timeout"] + 1) or fake_entry,
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_schedule_uw_refresh",
+        lambda _t: calls.__setitem__("schedule", calls["schedule"] + 1),
+    )
+
+    result = web_app._uw_entry_for_request("SPX", blocking=True)
+    assert result == fake_entry
+    assert calls == {"timeout": 1, "schedule": 0}
+
+
+def test_api_trader_strategy_live_param_blocks_uw(monkeypatch):
+    from web_app import APP
+
+    calls = {"blocking": []}
+
+    def _track(ticker, *, blocking=None):
+        calls["blocking"].append(blocking)
+        return None
+
+    monkeypatch.setattr("web_app._uw_entry_for_request", _track)
+    monkeypatch.setattr("web_app.build_periscope_context", lambda **_k: {"spot": 6000.0, "selected": {}, "history": []})
+    monkeypatch.setattr("web_app._strategy_exposure_from_context", lambda _ctx: (None, None))
+    monkeypatch.setattr("web_app._uw_live_enabled", lambda: True)
+    monkeypatch.setattr(
+        "gex_core.trading.strategy_viz.build_wall_strategy_dashboard",
+        lambda **_k: {"state": {"signals": {}}, "chart_json": "{}"},
+    )
+
+    client = APP.test_client()
+    client.get("/api/trader/strategy")
+    assert calls["blocking"] == [False]
+
+    calls["blocking"].clear()
+    client.get("/api/trader/strategy?live=1")
+    assert calls["blocking"] == [True]
 
 
 def test_refresh_uw_data_does_not_compute_gamma_flip(monkeypatch):
