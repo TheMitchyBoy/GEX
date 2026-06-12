@@ -872,11 +872,14 @@
         return { ...spec, data };
       }
 
+      let chartStrikeClickBound = false;
+
       function renderStrategyChart(spec) {
         if (!spec || !chartEl) return;
         currentChartSpec = spec;
         const layered = applyLayerVisibility(spec);
         Plotly.react(chartEl, layered.data, layered.layout || {}, plotConfig);
+        bindChartStrikeClick();
       }
 
       function bindLayerToggles() {
@@ -918,7 +921,9 @@
       }
 
       function bindChartStrikeClick() {
-        if (!chartEl) return;
+        if (!chartEl || chartStrikeClickBound) return;
+        if (typeof chartEl.on !== 'function') return;
+        chartStrikeClickBound = true;
         chartEl.on('plotly_click', (ev) => {
           const pt = ev.points?.[0];
           if (!pt || pt.y == null) return;
