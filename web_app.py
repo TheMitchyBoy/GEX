@@ -287,6 +287,11 @@ def _uw_live_enabled() -> bool:
     return os.environ.get("GEX_SHOW_UW_LIVE", "1").lower() in {"1", "true", "yes"}
 
 
+def _agent_fetch_extras() -> bool:
+    """Optional extra UW API fetches for chat/agent (off by default to avoid rate limits)."""
+    return os.environ.get("GEX_AGENT_FETCH_EXTRAS", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _dashboard_skip_backtest() -> bool:
     return os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "0").strip().lower() in {
         "1",
@@ -1622,48 +1627,37 @@ def api_agent_daily_strategy():
     exposure = request.args.get("exposure", "gamma")
     requested_ts = request.args.get("ts")
     force = request.args.get("refresh", "0").lower() in {"1", "true", "yes"}
-    uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
-    ctx = build_periscope_context(
-        ticker=ticker,
-        selected_ts=requested_ts,
-        exposure=exposure,
-        uw_entry=uw_entry,
-        api_key=uw_api_key(),
-    )
-    pred_history = _prediction_history(ticker)
-    knn = predict_next_snapshot(pred_history, lookback_days=prediction_lookback_days(ticker))
-    uw_bundle = _uw_bundle_for_context(
-        ticker=ticker,
-        ctx=ctx,
-        uw_entry=uw_entry,
-        fetch_extras=True,
-        knn_prediction=knn,
-    )
-    strategy = get_or_create_today_strategy(
-        ticker=ticker,
-        uw_bundle=uw_bundle,
-        force_refresh=force,
-    )
-    llm_calibration = {}
     try:
-        from gex_core.prediction_log import get_llm_calibration_stats
+        agent_ctx = _agent_context(ticker, exposure, requested_ts)
+        uw_bundle = agent_ctx["uw_bundle"]
+        strategy = get_or_create_today_strategy(
+            ticker=ticker,
+            uw_bundle=uw_bundle,
+            force_refresh=force,
+        )
+        llm_calibration = {}
+        try:
+            from gex_core.prediction_log import get_llm_calibration_stats
 
-        llm_calibration = get_llm_calibration_stats(ticker)
-    except Exception:
-        pass
-    return jsonify(
-        {
-            "ticker": ticker,
-            "strategy": strategy,
-            "recent_lessons": list_recent_lessons(ticker),
-            "llm_calibration": llm_calibration,
-            "uw_data_fed": uw_bundle is not None,
-            "context_summary": {
-                "strike_rows": len((uw_bundle or {}).get("greek_exposure_by_strike", [])),
-                "has_intraday": bool((uw_bundle or {}).get("intraday")),
-            },
-        }
-    )
+            llm_calibration = get_llm_calibration_stats(ticker)
+        except Exception:
+            pass
+        return jsonify(
+            {
+                "ticker": ticker,
+                "strategy": strategy,
+                "recent_lessons": list_recent_lessons(ticker),
+                "llm_calibration": llm_calibration,
+                "uw_data_fed": uw_bundle is not None,
+                "context_summary": {
+                    "strike_rows": len((uw_bundle or {}).get("greek_exposure_by_strike", [])),
+                    "has_intraday": bool((uw_bundle or {}).get("intraday")),
+                },
+            }
+        )
+    except Exception as exc:
+        logger.exception("Daily strategy failed for %s", ticker)
+        return jsonify({"error": str(exc), "ticker": ticker}), 500
 
 
 @APP.get("/api/agent/predict")
@@ -1700,8 +1694,8 @@ def api_agent_predict():
     return jsonify(result)
 
 
-def _chat_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
-    """Build periscope + UW context for chat endpoints."""
+def _agent_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
+    """Build export-first periscope + UW context for chat/agent endpoints."""
     uw_entry = get_uw_data_with_timeout(ticker) if _uw_live_enabled() else None
     ctx = build_periscope_context(
         ticker=ticker,
@@ -1709,6 +1703,7 @@ def _chat_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
         exposure=exposure,
         uw_entry=uw_entry,
         api_key=uw_api_key(),
+        minimal=True,
     )
     selected = ctx.get("selected") or {}
     gex_series = ctx.get("exposure_series")
@@ -1723,7 +1718,7 @@ def _chat_context(ticker: str, exposure: str, requested_ts: str | None) -> dict:
         ticker=ticker,
         ctx=ctx,
         uw_entry=uw_entry,
-        fetch_extras=True,
+        fetch_extras=_agent_fetch_extras(),
         knn_prediction=knn,
     )
     return {
@@ -1751,31 +1746,36 @@ def api_chat():
         return jsonify({"error": "message is required"}), 400
 
     ticker = PRIMARY_TICKER
-    chat_ctx = _chat_context(ticker, exposure, requested_ts)
-    ctx = chat_ctx["ctx"]
-    selected = chat_ctx["selected"]
-    gex_series = chat_ctx["gex_series"]
-    uw_entry = chat_ctx["uw_entry"]
-    uw_agg = chat_ctx["uw_agg"]
+    try:
+        chat_ctx = _agent_context(ticker, exposure, requested_ts)
+        ctx = chat_ctx["ctx"]
+        selected = chat_ctx["selected"]
+        gex_series = chat_ctx["gex_series"]
+        uw_entry = chat_ctx["uw_entry"]
+        uw_agg = chat_ctx["uw_agg"]
 
-    result = chat_reply(
-        session_id=session_id,
-        user_message=message,
-        ticker=ticker,
-        spot=safe_float(ctx.get("spot"), 0.0) or 5000.0,
-        gex_by_strike=gex_series if gex_series is not None else pd.Series(dtype=float),
-        cumulative_gex=selected.get("cumulative"),
-        total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
-        gamma_flip=ctx.get("gamma_flip"),
-        exposure_type=exposure,
-        agg=uw_agg,
-        spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
-        history=chat_ctx["pred_history"],
-        knn_prediction=chat_ctx["knn"],
-        api_key=uw_api_key(),
-        uw_bundle=chat_ctx.get("uw_bundle"),
-        daily_strategy=((chat_ctx.get("uw_bundle") or {}).get("daily_learning") or {}).get("today_strategy"),
-    )
+        result = chat_reply(
+            session_id=session_id,
+            user_message=message,
+            ticker=ticker,
+            spot=safe_float(ctx.get("spot"), 0.0) or 5000.0,
+            gex_by_strike=gex_series if gex_series is not None else pd.Series(dtype=float),
+            cumulative_gex=selected.get("cumulative"),
+            total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
+            gamma_flip=ctx.get("gamma_flip"),
+            exposure_type=exposure,
+            agg=uw_agg,
+            spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
+            history=chat_ctx["pred_history"],
+            knn_prediction=chat_ctx["knn"],
+            api_key=uw_api_key(),
+            uw_bundle=chat_ctx.get("uw_bundle"),
+            daily_strategy=((chat_ctx.get("uw_bundle") or {}).get("daily_learning") or {}).get("today_strategy"),
+        )
+    except Exception as exc:
+        logger.exception("Chat failed for %s", ticker)
+        return jsonify({"error": "Assistant unavailable — try again shortly.", "detail": str(exc)}), 500
+
     if "error" in result:
         return jsonify(result), 400
     return jsonify(result)

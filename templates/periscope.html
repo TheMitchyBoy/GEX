@@ -815,6 +815,7 @@
       const strategySpec = {{ strategy_chart_json|safe if strategy_chart_json else 'null' }};
       const plotConfig = {responsive: true, displayModeBar: false};
       const chatWelcome = {{ chat_welcome|tojson }};
+      const exposureType = {{ exposure|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
       const ticker = '{{ ticker }}';
       const strikeWindowPct = {{ strike_window_pct|tojson }};
@@ -1180,15 +1181,22 @@
         if (!card || !summaryEl) return;
         card.style.display = 'block';
         summaryEl.textContent = 'Loading strategy…';
+        if (playsEl) playsEl.innerHTML = '';
+        if (lessonsEl) lessonsEl.textContent = '';
         try {
           const qs = new URLSearchParams(window.location.search);
+          qs.set('exposure', exposureType || 'gamma');
           if (refresh) qs.set('refresh', '1');
           const res = await fetch('/api/agent/daily-strategy?' + qs.toString());
-          const data = await res.json();
+          let data = {};
+          try { data = await res.json(); } catch (_) {}
+          if (!res.ok) {
+            summaryEl.textContent = data.error || 'Strategy unavailable — chat still has export context.';
+            return;
+          }
           const strategy = data.strategy || {};
           summaryEl.textContent = strategy.summary || 'No strategy generated yet.';
           if (playsEl) {
-            playsEl.innerHTML = '';
             (strategy.plays || []).slice(0, 3).forEach(play => {
               const li = document.createElement('li');
               li.textContent = `${play.name || 'setup'}: ${play.trigger || ''} → ${play.target || ''}`;
@@ -1217,24 +1225,50 @@
       }
       async function sendChatMessage() {
         const input = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('chatSend');
         if (!input || chatBusy) return;
         const message = input.value.trim();
         if (!message) return;
         appendChatBubble('user', message);
         input.value = '';
         chatBusy = true;
+        if (sendBtn) sendBtn.disabled = true;
+        const thinkingEl = document.createElement('div');
+        thinkingEl.className = 'chat-bubble assistant';
+        thinkingEl.id = 'chatThinking';
+        thinkingEl.textContent = 'Thinking…';
+        document.getElementById('chatMessages')?.appendChild(thinkingEl);
         try {
           const params = new URLSearchParams(window.location.search);
           const res = await fetch('/api/chat', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({message, session_id: chatSessionId, ts: params.get('ts')}),
+            body: JSON.stringify({
+              message,
+              session_id: chatSessionId,
+              ts: params.get('ts'),
+              exposure: exposureType || 'gamma',
+            }),
           });
-          const data = await res.json();
-          if (res.ok) { chatSessionId = data.session_id; appendChatBubble('assistant', data.reply); }
-          else appendChatBubble('assistant', data.error || 'Error');
-        } catch { appendChatBubble('assistant', 'Network error'); }
-        finally { chatBusy = false; }
+          let data = {};
+          try { data = await res.json(); } catch (_) {}
+          if (res.ok) {
+            chatSessionId = data.session_id;
+            let reply = data.reply || 'No reply received.';
+            if (data.llm_error && data.llm_source === 'rule_based') {
+              reply += '\n\n(' + data.llm_error + ')';
+            }
+            appendChatBubble('assistant', reply);
+          } else {
+            appendChatBubble('assistant', data.error || data.detail || 'Assistant error (' + res.status + ')');
+          }
+        } catch {
+          appendChatBubble('assistant', 'Network error — request timed out or server unreachable.');
+        } finally {
+          document.getElementById('chatThinking')?.remove();
+          chatBusy = false;
+          if (sendBtn) sendBtn.disabled = false;
+        }
       }
       document.getElementById('chatSend')?.addEventListener('click', sendChatMessage);
       document.getElementById('chatInput')?.addEventListener('keydown', e => {

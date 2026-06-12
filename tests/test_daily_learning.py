@@ -3,10 +3,12 @@ import json
 import pandas as pd
 
 from gex_core.daily_learning import (
+    attach_learning_to_bundle,
     format_strategy_brief,
     generate_lesson_for_date,
     get_insight,
     get_or_create_today_strategy,
+    get_today_strategy_for_context,
     list_recent_lessons,
 )
 from gex_core.uw_context_bundle import build_context_bundle_from_snapshot
@@ -76,3 +78,39 @@ def test_format_strategy_brief():
     assert "Today's plan" in text
     assert "momentum" in text
     assert "Trade breakouts" in text
+
+
+def test_get_today_strategy_for_context_is_rule_based_without_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEX_TRADING_DB", str(tmp_path / "journal.db"))
+    snapshot = {
+        "ts": "2026-06-05_120000",
+        "market_date": "2026-06-05",
+        "spot": 6000.0,
+        "total_gex": 2.5,
+        "regime": "LONG gamma",
+        "gamma_flip": 5980.0,
+        "call_wall": 6050.0,
+        "put_wall": 5920.0,
+        "strike": pd.Series({6000: 1.0, 6050: 2.0, 5920: -1.0}),
+        "cumulative": pd.Series({6000: 1.0, 6050: 3.0, 5920: 2.0}),
+    }
+    bundle = build_context_bundle_from_snapshot(ticker="SPX", snapshot=snapshot, fetch_extras=False)
+    strategy = get_today_strategy_for_context(ticker="SPX", uw_bundle=bundle)
+    assert strategy["source"] == "rule_based"
+    assert strategy["plays"]
+
+
+def test_attach_learning_to_bundle_skips_llm_generation(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEX_TRADING_DB", str(tmp_path / "journal.db"))
+    calls = {"n": 0}
+
+    def _track(**_kwargs):
+        calls["n"] += 1
+        return {"summary": "cached"}
+
+    monkeypatch.setattr("gex_core.daily_learning.get_or_create_today_strategy", _track)
+    monkeypatch.setattr("gex_core.daily_learning.market_today", lambda: "2099-01-01")
+    bundle = {"summary": {"regime": "LONG gamma", "total_gex_bn": 1.0}}
+    attach_learning_to_bundle(bundle, "SPX")
+    assert calls["n"] == 0
+    assert bundle["daily_learning"]["today_strategy"]["source"] == "rule_based"

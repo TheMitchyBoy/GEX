@@ -536,13 +536,41 @@ def run_daily_learning_cycle(
     }
 
 
+def get_today_strategy_for_context(
+    *,
+    ticker: str,
+    uw_bundle: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return today's strategy for LLM context without blocking on OpenAI."""
+    ticker = ticker.upper()
+    today = market_today()
+    cached = get_insight(ticker, today, "strategy")
+    if cached:
+        return cached
+
+    recent_lessons = list_recent_lessons(ticker)
+    try:
+        from gex_core.trading.journal import get_trade_memory_for_ai
+
+        trade_memory = get_trade_memory_for_ai(ticker)
+    except Exception:
+        trade_memory = {}
+    return _rule_based_strategy(
+        ticker=ticker,
+        market_date=today,
+        uw_bundle=uw_bundle,
+        recent_lessons=recent_lessons,
+        trade_memory=trade_memory,
+    )
+
+
 def attach_learning_to_bundle(bundle: dict[str, Any], ticker: str) -> dict[str, Any]:
     """Mutate bundle with cached daily lessons + today's strategy for LLM context."""
     if not bundle:
         return bundle
     bundle["daily_learning"] = {
         "recent_lessons": list_recent_lessons(ticker),
-        "today_strategy": get_or_create_today_strategy(ticker=ticker, uw_bundle=bundle),
+        "today_strategy": get_today_strategy_for_context(ticker=ticker, uw_bundle=bundle),
     }
     return bundle
 
