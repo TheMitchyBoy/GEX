@@ -154,7 +154,7 @@ docker compose --profile tools run --rm refresh
 2. Mount a **persistent volume** at `/app/data` and set `GEX_DATA_DIR=/app/data`.
 3. Start command: `bash scripts/start_web.sh` (default in the Dockerfile).
 4. Optional first deploy: `GEX_STARTUP_BACKFILL=1` to pull 90 days of intraday history.
-5. `GEX_DASHBOARD_SKIP_BACKTEST=1` (set in `start_web.sh`) keeps HTML page loads fast on small instances.
+5. `GEX_BACKTEST_METRICS=0` (default) disables walk-forward backtest history loading on the web app. `GEX_DASHBOARD_SKIP_BACKTEST=1` skips backtest panels on dashboard API payloads.
 6. `GEX_PAGE_MINIMAL_LOAD=1` (default) loads **only the current gamma snapshot** on dashboard pages — no historical replay catalog or prior-slice trails. Scheduled refresh still writes every export to `data/exports/` for backfill, training, and backtests.
 7. `GEX_PAGE_UW_PEEK_ONLY=1` (default) avoids blocking HTML on live UW HTTP — pages paint from exports/cache immediately; the browser fetches fresh UW data via `?live=1` on strategy/status refresh (4s timeout via `GEX_UW_FETCH_TIMEOUT_SEC`).
 8. After the first backfill, consider `GEX_DASHBOARD_HISTORY_DAYS=30`, `GEX_AUTO_BACKFILL_IF_EMPTY=0`, and `GEX_STARTUP_BACKFILL=0` to reduce disk I/O on deploy.

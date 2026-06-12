@@ -9,6 +9,7 @@ bootstrap_env()
 PY
 
 # Keep HTML dashboard responsive on small Railway instances.
+export GEX_BACKTEST_METRICS="${GEX_BACKTEST_METRICS:-0}"
 export GEX_DASHBOARD_SKIP_BACKTEST="${GEX_DASHBOARD_SKIP_BACKTEST:-1}"
 export GEX_PAGE_MINIMAL_LOAD="${GEX_PAGE_MINIMAL_LOAD:-1}"
 export GEX_PAGE_UW_PEEK_ONLY="${GEX_PAGE_UW_PEEK_ONLY:-1}"

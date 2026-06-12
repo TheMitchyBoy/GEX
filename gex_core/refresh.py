@@ -83,11 +83,9 @@ def refresh_ticker(
         return False
 
     try:
-        from gex_core.backtest_metrics import clear_cache as clear_backtest_cache
         from gex_core.history import clear_history_cache
 
         clear_history_cache()
-        clear_backtest_cache()
     except Exception:
         pass
 

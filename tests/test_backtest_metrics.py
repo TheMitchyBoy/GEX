@@ -1,8 +1,17 @@
-from gex_core.backtest_metrics import backtest_delta_sign_accuracy, clear_cache
+from gex_core.backtest_metrics import backtest_delta_sign_accuracy, backtest_metrics_enabled
 from gex_core.history import clear_history_cache
 
 
+def test_backtest_metrics_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("GEX_BACKTEST_METRICS", raising=False)
+    assert backtest_metrics_enabled() is False
+    result = backtest_delta_sign_accuracy("SPX")
+    assert result["n"] == 0
+    assert result["accuracy"] is None
+
+
 def test_backtest_caps_walk_forward_folds(monkeypatch, tmp_path):
+    monkeypatch.setenv("GEX_BACKTEST_METRICS", "1")
     export_dir = tmp_path / "exports"
     export_dir.mkdir()
     monkeypatch.setattr("gex_core.exports.EXPORT_DIR", export_dir)
@@ -21,7 +30,6 @@ def test_backtest_caps_walk_forward_folds(monkeypatch, tmp_path):
             encoding="utf-8",
         )
 
-    clear_cache()
     clear_history_cache()
     result = backtest_delta_sign_accuracy("SPX")
     assert result["n"] <= 3

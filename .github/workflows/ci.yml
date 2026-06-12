@@ -32,6 +32,7 @@ jobs:
 
       - name: Backtest quality gates
         env:
+          GEX_BACKTEST_METRICS: "1"
           GEX_BACKTEST_MIN_ACCURACY: "0.30"
           GEX_BACKTEST_MIN_SAMPLES: "4"
         run: |

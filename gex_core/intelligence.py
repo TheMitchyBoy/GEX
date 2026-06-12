@@ -249,7 +249,7 @@ def build_model_accountability_panel(
         gap = safe_float(backtest.get("confidence_accuracy_gap"), 0.0)
         if gap > 0.2:
             warnings.append("Recent confidence and realized accuracy are materially different.")
-    else:
+    elif backtest:
         warnings.append("Walk-forward validation has too few samples.")
     n_manifest_train = safe_float((manifest.get("metrics") or {}).get("n_train"), 0.0) if manifest else 0.0
     overlay_active = n_manifest_train >= MIN_OVERLAY_TRAIN_ROWS

@@ -1,8 +1,8 @@
 """Rolling backtest metrics for prediction confidence display.
 
-The cache is keyed on a signature of the export set (latest timestamp + file
-count) so it invalidates automatically when new snapshots land during the
-server's lifetime -- the previous ``lru_cache(ticker)`` went stale.
+Disabled by default on the web app (``GEX_BACKTEST_METRICS=0``) so dashboard and
+refresh paths never load walk-forward history. Enable explicitly for CI or
+offline scripts.
 """
 
 from __future__ import annotations
@@ -13,11 +13,28 @@ from typing import Any
 import numpy as np
 
 from gex_core.calibration import calibrate_confidence
-from gex_core.exports import list_export_timestamps
-from gex_core.history import build_history
-from gex_core.predict import predict_next_snapshot
 
-_CACHE: dict[tuple[str, str, int], dict[str, Any]] = {}
+_EMPTY: dict[str, Any] = {
+    "n": 0,
+    "accuracy": None,
+    "mae_delta": None,
+    "avg_confidence": None,
+    "confidence_accuracy_gap": None,
+    "baseline_accuracy": None,
+    "baseline_momentum_accuracy": None,
+    "accuracy_by_regime": {},
+    "regime_flip_recall": None,
+    "regime_flip_events": 0,
+}
+
+
+def backtest_metrics_enabled() -> bool:
+    return os.environ.get("GEX_BACKTEST_METRICS", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _backtest_limits() -> tuple[int, int, int]:
@@ -27,30 +44,20 @@ def _backtest_limits() -> tuple[int, int, int]:
     return max_folds, lookback_days, max_snapshots
 
 
-def _export_signature(ticker: str) -> tuple[str, int]:
-    timestamps = list_export_timestamps(ticker.upper())
-    if not timestamps:
-        return ("", 0)
-    return (timestamps[-1], len(timestamps))
-
-
 def backtest_delta_sign_accuracy(
     ticker: str,
     min_history: int = 6,
     *,
     history: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """Walk-forward: predict next ΔGEX sign vs actual from export history.
+    """Walk-forward: predict next ΔGEX sign vs actual from export history."""
+    if not backtest_metrics_enabled():
+        return dict(_EMPTY)
 
-    Cached per export signature for dashboard display. Also reports ΔGEX MAE and
-    a naive momentum baseline so the dashboard can show skill *vs* the baseline.
-    """
+    from gex_core.history import build_history
+    from gex_core.predict import predict_next_snapshot
+
     ticker = ticker.upper()
-    sig_ts, sig_n = _export_signature(ticker)
-    cache_key = (ticker, sig_ts, sig_n)
-    if cache_key in _CACHE:
-        return _CACHE[cache_key]
-
     max_folds, lookback_days, max_snapshots = _backtest_limits()
     if history is None:
         history = build_history(
@@ -68,21 +75,8 @@ def backtest_delta_sign_accuracy(
         history = [row for row in history if parse_timestamp(row["ts"]) >= since]
         if max_snapshots and len(history) > max_snapshots:
             history = history[-max_snapshots:]
-    empty = {
-        "n": 0,
-        "accuracy": None,
-        "mae_delta": None,
-        "avg_confidence": None,
-        "confidence_accuracy_gap": None,
-        "baseline_accuracy": None,
-        "baseline_momentum_accuracy": None,
-        "accuracy_by_regime": {},
-        "regime_flip_recall": None,
-        "regime_flip_events": 0,
-    }
     if len(history) < min_history:
-        _CACHE[cache_key] = empty
-        return empty
+        return dict(_EMPTY)
 
     hits = 0
     total = 0
@@ -138,7 +132,7 @@ def backtest_delta_sign_accuracy(
     accuracy = (hits / total) if total else None
     avg_confidence = float(np.mean(confidences)) if confidences else None
 
-    result = {
+    return {
         "n": total,
         "accuracy": accuracy,
         "mae_delta": float(np.mean(abs_errors)) if abs_errors else None,
@@ -158,12 +152,12 @@ def backtest_delta_sign_accuracy(
         "regime_flip_recall": (flip_alerts / actual_flips) if actual_flips else None,
         "regime_flip_events": actual_flips,
     }
-    _CACHE[cache_key] = result
-    return result
 
 
 def calibrated_prediction_confidence(ticker: str, raw_confidence: float) -> float:
     """Calibrate a raw forecast confidence against backtest + logged LLM outcomes."""
+    if not backtest_metrics_enabled():
+        return raw_confidence
     bt = backtest_delta_sign_accuracy(ticker)
     calibrated = calibrate_confidence(raw_confidence, bt.get("accuracy"), bt.get("n", 0) or 0)
     try:
@@ -182,4 +176,5 @@ def calibrated_prediction_confidence(ticker: str, raw_confidence: float) -> floa
 
 
 def clear_cache() -> None:
-    _CACHE.clear()
+    """No-op — in-memory backtest cache removed for web app speed."""
+    return None

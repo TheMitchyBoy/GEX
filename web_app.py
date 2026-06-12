@@ -326,7 +326,11 @@ def _agent_fetch_extras() -> bool:
 
 
 def _dashboard_skip_backtest() -> bool:
-    return os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "0").strip().lower() in {
+    from gex_core.backtest_metrics import backtest_metrics_enabled
+
+    if not backtest_metrics_enabled():
+        return True
+    return os.environ.get("GEX_DASHBOARD_SKIP_BACKTEST", "1").strip().lower() in {
         "1",
         "true",
         "yes",
