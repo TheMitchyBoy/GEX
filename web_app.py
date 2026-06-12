@@ -1066,6 +1066,17 @@ def api_trader_strategy():
             max_strikes=max_strikes,
             exposure_trail=exposure_trail,
         )
+    timeline = ctx.get("timeline") or {}
+    payload["selected_ts"] = ctx.get("selected_ts")
+    payload["selected_label"] = ctx.get("selected_label")
+    payload["spot"] = ctx.get("spot")
+    payload["timeline"] = {
+        "prev_ts": timeline.get("prev_ts"),
+        "next_ts": timeline.get("next_ts"),
+        "is_latest": timeline.get("is_latest", False),
+        "day_slice_index": timeline.get("day_slice_index"),
+        "day_slice_count": timeline.get("day_slice_count"),
+    }
     return jsonify(payload)
 
 
