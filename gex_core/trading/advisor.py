@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from gex_core.gex_chatbot import _openai_chat, _resolve_openai_config
+from gex_core.llm_client import openai_chat, resolve_openai_config
 from gex_core.trading.config import (
     advisor_context_max_chars,
     clear_all_filters,
@@ -193,13 +193,13 @@ def advise_entry(
         uw_bundle=uw_bundle,
     )
 
-    if _resolve_openai_config():
+    if resolve_openai_config():
         system = _ADVISOR_SYSTEM + "\n\nContext:\n" + context
         prompt = (
             "Review the recommended gamma signal, trade memory, and market context. "
             "Should we open a paper option trade? Return JSON only."
         )
-        reply, err = _openai_chat(system, [], prompt, json_mode=True, temperature=0.2, max_tokens=600)
+        reply, err = openai_chat(system, [], prompt, json_mode=True, temperature=0.2, max_tokens=600)
         if reply:
             try:
                 parsed = json.loads(reply)

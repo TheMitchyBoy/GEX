@@ -52,7 +52,7 @@ The primary interface is the **Flask web dashboard** (`web_app.py`), served by *
 | Python 3.11+ | All local runs |
 | `UW_API_KEY` | Live data, refresh, dashboards |
 | Webull OpenAPI credentials | Live SPY 0DTE orders (`/trade`) |
-| `OPENAI_API_KEY` or `OPENROUTER_API_KEY` | AI entry advisor and chat (optional) |
+| `OPENAI_API_KEY` or `OPENROUTER_API_KEY` | AI entry advisor and daily learning (optional) |
 
 ### 1. Install
 
@@ -283,7 +283,7 @@ python live/ingest.py --feed data/flow_sample.jsonl --spot 4800
 | `GEX_UW_FETCH_TIMEOUT_SEC` | `4` | Max seconds to block on live UW fetch when `live=1` |
 | `GEX_PAGE_MINIMAL_LOAD` | `1` | Current slice only on pages (no historical replay); exports still saved |
 | `GEX_DAILY_LEARNING` | `0` | Skip startup lesson cycle; daily-strategy API returns disabled unless `1` |
-| `GEX_AGENT_FETCH_EXTRAS` | `0` | Skip extra UW API calls per chat message |
+| `GEX_AGENT_FETCH_EXTRAS` | `0` | Skip extra UW API calls for agent endpoints |
 | `GEX_PREDICTION_LOOKBACK_DAYS` | `90` | KNN / forecast training window on dashboard |
 | `GEX_TRAIN_LOOKBACK_DAYS` | `90` | Default lookback for `train_gex_model.py` |
 | `GEX_DASHBOARD_TIMELINE_DAYS` | `90` | Spot vs levels timeline from backfill index |

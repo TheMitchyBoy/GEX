@@ -426,59 +426,7 @@
       .trade-pnl.win { color: var(--green); }
       .trade-pnl.loss { color: var(--red); }
 
-      /* Chat */
-      .agent-card { border-left: 3px solid var(--accent); }
-      .chat-panel { display: flex; flex-direction: column; min-height: 300px; max-height: 420px; }
-      .chat-messages {
-        flex: 1;
-        overflow-y: auto;
-        padding: 0.85rem;
-        display: flex;
-        flex-direction: column;
-        gap: 0.55rem;
-        scroll-behavior: smooth;
-      }
-      .chat-bubble {
-        max-width: 85%;
-        padding: 0.6rem 0.8rem;
-        border-radius: 10px;
-        font-size: 0.84rem;
-        line-height: 1.5;
-        white-space: pre-wrap;
-      }
-      .chat-bubble.user {
-        align-self: flex-end;
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.08));
-        border: 1px solid rgba(59, 130, 246, 0.25);
-      }
-      .chat-bubble.assistant {
-        align-self: flex-start;
-        background: var(--bg-elevated);
-        border: 1px solid var(--border);
-      }
-      .chat-input-row {
-        border-top: 1px solid var(--border);
-        padding: 0.75rem;
-        display: flex;
-        gap: 0.5rem;
-        background: rgba(0, 0, 0, 0.15);
-      }
-      .chat-input-row textarea {
-        flex: 1;
-        resize: none;
-        background: var(--bg);
-        border: 1px solid var(--border);
-        color: var(--txt);
-        border-radius: var(--radius-sm);
-        padding: 0.5rem 0.7rem;
-        font-size: 0.84rem;
-        line-height: 1.4;
-      }
-      .chat-input-row textarea:focus {
-        outline: none;
-        border-color: var(--accent);
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
-      }
+      .strategy-card { border-left: 3px solid var(--accent); }
       .last-updated { font-size: 0.65rem; color: var(--muted); }
 
       @media (max-width: 991px) {
@@ -778,16 +726,13 @@
           </section>
         </div>
         <div class="col-lg-5">
-          <section class="uw-panel p-3 agent-card h-100">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <div>
-                <h2 class="h6 mb-0 fw-semibold">GEX Assistant</h2>
-                <div class="small muted">Daily strategy + full UW context</div>
-              </div>
-              <button class="btn btn-sm btn-outline-secondary btn-nav" id="chatReset" type="button">New chat</button>
+          <section class="uw-panel p-3 strategy-card h-100">
+            <div class="mb-2">
+              <h2 class="h6 mb-0 fw-semibold">Daily strategy</h2>
+              <div class="small muted">Session plan from prior-day lessons</div>
             </div>
             {% if daily_learning_enabled %}
-            <div class="mb-2" id="dailyStrategyPanel">
+            <div id="dailyStrategyPanel">
               <button class="btn btn-sm btn-outline-secondary btn-nav w-100" id="dailyStrategyLoad" type="button">Load today's strategy</button>
               <div class="mt-2 p-2 rounded border border-secondary-subtle" id="dailyStrategyCard" style="display:none;">
                 <div class="d-flex justify-content-between align-items-start gap-2">
@@ -801,14 +746,9 @@
                 <div class="small muted mt-2" id="dailyStrategyLessons"></div>
               </div>
             </div>
+            {% else %}
+            <div class="small muted">Daily learning is disabled on this server.</div>
             {% endif %}
-            <div class="chat-panel">
-              <div class="chat-messages" id="chatMessages"></div>
-              <div class="chat-input-row">
-                <textarea id="chatInput" rows="2" placeholder="Ask about gamma exposure, entries, exits…"></textarea>
-                <button class="btn btn-sm btn-primary btn-nav align-self-end" id="chatSend" type="button">Send</button>
-              </div>
-            </div>
           </section>
         </div>
       </div>
@@ -817,7 +757,6 @@
     <script>
       const strategySpec = {{ strategy_chart_json|safe if strategy_chart_json else 'null' }};
       const plotConfig = {responsive: true, displayModeBar: false};
-      const chatWelcome = {{ chat_welcome|tojson }};
       const exposureType = {{ exposure|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
       const currentOnly = {{ current_only|default(false)|tojson }};
@@ -1197,8 +1136,6 @@
       });
       document.getElementById('strategyRefreshBtn')?.addEventListener('click', () => refreshStrategy(true));
 
-      let chatSessionId = null, chatBusy = false;
-
       async function loadDailyStrategy(refresh) {
         if (!dailyLearningEnabled) return;
         const card = document.getElementById('dailyStrategyCard');
@@ -1224,7 +1161,7 @@
             return;
           }
           if (!res.ok) {
-            summaryEl.textContent = data.error || 'Strategy unavailable — chat still has export context.';
+            summaryEl.textContent = data.error || 'Strategy unavailable.';
             return;
           }
           const strategy = data.strategy || {};
@@ -1243,77 +1180,11 @@
               : '';
           }
         } catch (e) {
-          summaryEl.textContent = 'Strategy unavailable — chat still has export context.';
+          summaryEl.textContent = 'Strategy unavailable.';
         }
       }
       document.getElementById('dailyStrategyLoad')?.addEventListener('click', () => loadDailyStrategy(false));
       document.getElementById('dailyStrategyRefresh')?.addEventListener('click', () => loadDailyStrategy(true));
-      function appendChatBubble(role, text) {
-        const box = document.getElementById('chatMessages');
-        const el = document.createElement('div');
-        el.className = 'chat-bubble ' + role;
-        el.textContent = text;
-        box.appendChild(el);
-        box.scrollTop = box.scrollHeight;
-      }
-      async function sendChatMessage() {
-        const input = document.getElementById('chatInput');
-        const sendBtn = document.getElementById('chatSend');
-        if (!input || chatBusy) return;
-        const message = input.value.trim();
-        if (!message) return;
-        appendChatBubble('user', message);
-        input.value = '';
-        chatBusy = true;
-        if (sendBtn) sendBtn.disabled = true;
-        const thinkingEl = document.createElement('div');
-        thinkingEl.className = 'chat-bubble assistant';
-        thinkingEl.id = 'chatThinking';
-        thinkingEl.textContent = 'Thinking…';
-        document.getElementById('chatMessages')?.appendChild(thinkingEl);
-        try {
-          const params = new URLSearchParams(window.location.search);
-          const res = await fetch('/api/chat', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              message,
-              session_id: chatSessionId,
-              ts: params.get('ts'),
-              exposure: exposureType || 'gamma',
-            }),
-          });
-          let data = {};
-          try { data = await res.json(); } catch (_) {}
-          if (res.ok) {
-            chatSessionId = data.session_id;
-            let reply = data.reply || 'No reply received.';
-            if (data.llm_error && data.llm_source === 'rule_based') {
-              reply += '\n\n(' + data.llm_error + ')';
-            }
-            appendChatBubble('assistant', reply);
-          } else {
-            appendChatBubble('assistant', data.error || data.detail || 'Assistant error (' + res.status + ')');
-          }
-        } catch {
-          appendChatBubble('assistant', 'Network error — request timed out or server unreachable.');
-        } finally {
-          document.getElementById('chatThinking')?.remove();
-          chatBusy = false;
-          if (sendBtn) sendBtn.disabled = false;
-        }
-      }
-      document.getElementById('chatSend')?.addEventListener('click', sendChatMessage);
-      document.getElementById('chatInput')?.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
-      });
-      document.getElementById('chatReset')?.addEventListener('click', async () => {
-        if (chatSessionId) await fetch('/api/chat/reset', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: chatSessionId})}).catch(()=>{});
-        chatSessionId = null;
-        document.getElementById('chatMessages').innerHTML = '';
-        appendChatBubble('assistant', chatWelcome);
-      });
-      appendChatBubble('assistant', chatWelcome);
 
       async function traderPost(url, body) {
         const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});

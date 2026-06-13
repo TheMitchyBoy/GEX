@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Hermes is optional fallback for chat; openai in requirements.txt is the primary LLM path.
+# Hermes is optional fallback for LLM features; openai in requirements.txt is the primary path.
 # vendor/hermes-agent is not in git — install_agent.sh shallow-clones it when missing.
 ARG INSTALL_HERMES=1
 RUN if [ "$INSTALL_HERMES" = "1" ]; then bash scripts/install_agent.sh; fi

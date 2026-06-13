@@ -64,8 +64,8 @@ def test_advise_entry_uses_openai_json(monkeypatch):
             None,
         )
 
-    monkeypatch.setattr("gex_core.trading.advisor._openai_chat", fake_openai)
-    monkeypatch.setattr("gex_core.trading.advisor._resolve_openai_config", lambda: ("key", "gpt-4o-mini"))
+    monkeypatch.setattr("gex_core.trading.advisor.openai_chat", fake_openai)
+    monkeypatch.setattr("gex_core.trading.advisor.resolve_openai_config", lambda: ("key", "gpt-4o-mini"))
 
     signals = {
         "available": True,

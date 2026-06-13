@@ -258,9 +258,9 @@ def _rule_based_lesson(
 
 def _llm_json(prompt: str, system: str) -> dict[str, Any] | None:
     try:
-        from gex_core.gex_chatbot import _openai_chat
+        from gex_core.llm_client import openai_chat
 
-        raw, _err = _openai_chat(system, [], prompt, json_mode=True, temperature=0.25)
+        raw, _err = openai_chat(system, [], prompt, json_mode=True, temperature=0.25)
         if not raw:
             from gex_core.market_exposure_agent import _hermes_analyze
 

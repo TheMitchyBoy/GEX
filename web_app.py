@@ -29,7 +29,6 @@ from werkzeug.exceptions import HTTPException
 from gex_core.backtest_metrics import backtest_delta_sign_accuracy
 from gex_core.features import parse_gamma_flip_value, safe_float
 from gex_core.market_exposure_agent import analyze_market_exposure, predict_market_exposure
-from gex_core.gex_chatbot import build_welcome_message, chat_reply, reset_session
 from gex_core.periscope import (
     build_periscope_context,
     build_slice_options,
@@ -340,7 +339,7 @@ def _uw_live_enabled() -> bool:
 
 
 def _agent_fetch_extras() -> bool:
-    """Optional extra UW API fetches for chat/agent (off by default to avoid rate limits)."""
+    """Optional extra UW API fetches for agent endpoints (off by default to avoid rate limits)."""
     return os.environ.get("GEX_AGENT_FETCH_EXTRAS", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -707,21 +706,6 @@ def _render_periscope_dashboard(
         strategy_chart_json = strategy["chart_json"]
         strategy_state = strategy["state"]
 
-    daily_strategy = None
-    if not minimal:
-        uw_bundle = _uw_bundle_for_context(ticker=ticker, ctx=ctx, uw_entry=uw_entry)
-        if uw_bundle:
-            daily_strategy = (uw_bundle.get("daily_learning") or {}).get("today_strategy")
-    chat_welcome = build_welcome_message(
-        ticker=ticker,
-        spot=safe_float(spot, 0.0) or None,
-        regime=ctx.get("regime", "N/A"),
-        total_gex=safe_float(ctx.get("total_gex"), 0.0),
-        gamma_flip=gamma_flip,
-        exposure=exposure,
-        daily_strategy=daily_strategy,
-    )
-
     csv_source = selected.get("data_source") or ctx.get("data_path") or "unusual_whales"
     data_source = f"Unusual Whales · {ctx.get('selected_label', 'latest')} ({csv_source})"
     if uw_entry:
@@ -757,7 +741,6 @@ def _render_periscope_dashboard(
         strategy_chart_json=strategy_chart_json,
         strategy_state=strategy_state,
         is_live_slice=timeline.get("is_latest", False),
-        chat_welcome=chat_welcome,
         bootstrap_status=bootstrap_status,
         refresh_message=refresh_message,
         uw_configured=uw_api_configured(),
@@ -1859,7 +1842,7 @@ def _agent_context(
     *,
     skip_prediction_history: bool = False,
 ) -> dict:
-    """Build export-first periscope + UW context for chat/agent endpoints."""
+    """Build export-first periscope + UW context for agent endpoints."""
     uw_entry = _uw_entry_for_request(ticker, blocking=False)
     ctx = build_periscope_context(
         ticker=ticker,
@@ -1895,63 +1878,6 @@ def _agent_context(
         "knn": knn,
         "uw_bundle": uw_bundle,
     }
-
-
-@APP.post("/api/chat")
-def api_chat():
-    """Conversational GEX assistant backed by full Unusual Whales data."""
-    payload = request.get_json(silent=True) or {}
-    message = str(payload.get("message", "")).strip()
-    session_id = payload.get("session_id")
-    exposure = str(payload.get("exposure") or request.args.get("exposure", "gamma")).lower()
-    requested_ts = payload.get("ts") or request.args.get("ts")
-
-    if not message:
-        return jsonify({"error": "message is required"}), 400
-
-    ticker = PRIMARY_TICKER
-    try:
-        chat_ctx = _agent_context(ticker, exposure, requested_ts)
-        ctx = chat_ctx["ctx"]
-        selected = chat_ctx["selected"]
-        gex_series = chat_ctx["gex_series"]
-        uw_entry = chat_ctx["uw_entry"]
-        uw_agg = chat_ctx["uw_agg"]
-
-        result = chat_reply(
-            session_id=session_id,
-            user_message=message,
-            ticker=ticker,
-            spot=safe_float(ctx.get("spot"), 0.0) or 5000.0,
-            gex_by_strike=gex_series if gex_series is not None else pd.Series(dtype=float),
-            cumulative_gex=selected.get("cumulative"),
-            total_gex_bn=safe_float(ctx.get("total_gex"), 0.0),
-            gamma_flip=ctx.get("gamma_flip"),
-            exposure_type=exposure,
-            agg=uw_agg,
-            spot_gamma_bn=uw_entry.get("spot_gamma_bn") if uw_entry else None,
-            history=chat_ctx["pred_history"],
-            knn_prediction=chat_ctx["knn"],
-            api_key=uw_api_key(),
-            uw_bundle=chat_ctx.get("uw_bundle"),
-            daily_strategy=((chat_ctx.get("uw_bundle") or {}).get("daily_learning") or {}).get("today_strategy"),
-        )
-    except Exception as exc:
-        logger.exception("Chat failed for %s", ticker)
-        return jsonify({"error": "Assistant unavailable — try again shortly.", "detail": str(exc)}), 500
-
-    if "error" in result:
-        return jsonify(result), 400
-    return jsonify(result)
-
-
-@APP.post("/api/chat/reset")
-def api_chat_reset():
-    payload = request.get_json(silent=True) or {}
-    session_id = payload.get("session_id")
-    if session_id:
-        reset_session(str(session_id))
-    return jsonify({"ok": True})
 
 
 @APP.get("/api/latest-summary")

@@ -205,35 +205,6 @@ def test_api_agent_analyze_returns_json():
     assert "narrative" in payload
 
 
-def test_api_chat_requires_message():
-    import web_app
-
-    client = web_app.APP.test_client()
-    response = client.post("/api/chat", json={"message": ""})
-    assert response.status_code == 400
-
-
-def test_api_chat_rule_based_reply(monkeypatch):
-    import web_app
-
-    monkeypatch.setattr(
-        web_app,
-        "chat_reply",
-        lambda **kwargs: {
-            "session_id": "test-session",
-            "reply": "LONG gamma environment.",
-            "llm_source": "rule_based",
-            "uw_data_fed": False,
-            "messages": [],
-        },
-    )
-    client = web_app.APP.test_client()
-    response = client.post("/api/chat", json={"message": "What regime are we in?"})
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["reply"] == "LONG gamma environment."
-
-
 def test_api_agent_predict_returns_503_without_live_uw(monkeypatch):
     import web_app
 
