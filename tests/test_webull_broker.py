@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from gex_core.trading.config import webull_data_endpoint, webull_trade_endpoint
+from gex_core.trading.config import webull_configured, webull_data_endpoint, webull_trade_endpoint
 from gex_core.trading.execution import (
     build_webull_option_symbol,
     map_execution_strike,
@@ -85,6 +85,16 @@ def test_parse_total_account_value_falls_back_to_currency_assets():
         "account_currency_assets": [{"currency": "USD", "net_liquidation_value": "512.75"}],
     }
     assert parse_total_account_value(balance) == 512.75
+
+
+def test_webull_configured_respects_enabled_flag(monkeypatch):
+    monkeypatch.setenv("GEX_WEBULL_APP_KEY", "key")
+    monkeypatch.setenv("GEX_WEBULL_APP_SECRET", "secret")
+    monkeypatch.setenv("GEX_WEBULL_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("GEX_WEBULL_ENABLED", raising=False)
+    assert webull_configured() is False
+    monkeypatch.setenv("GEX_WEBULL_ENABLED", "1")
+    assert webull_configured() is True
 
 
 def test_fetch_total_account_value_uses_cache(monkeypatch):

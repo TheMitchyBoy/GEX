@@ -17,12 +17,21 @@ def clear_all_filters() -> bool:
     return _flag("GEX_TRADER_CLEAR_FILTERS", "0")
 
 
+def webull_enabled() -> bool:
+    """Master switch for Webull OpenAPI (quotes, orders, broker positions)."""
+    return _flag("GEX_WEBULL_ENABLED", "0")
+
+
 def auto_trader_enabled() -> bool:
+    if not webull_enabled():
+        return False
     return _flag("GEX_AUTO_TRADER", "0")
 
 
 def wall_gex_auto_enabled() -> bool:
     """Background wall GEX loop in the web dashboard scheduler."""
+    if not webull_enabled():
+        return False
     return _flag("GEX_WALL_GEX_AUTO", "0")
 
 
@@ -586,6 +595,8 @@ def webull_limit_buffer_pct() -> float:
 
 
 def webull_configured() -> bool:
+    if not webull_enabled():
+        return False
     return bool(webull_app_key() and webull_app_secret() and webull_account_id())
 
 

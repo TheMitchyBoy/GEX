@@ -19,9 +19,10 @@ def test_index_renders_wall_gex_dashboard():
     assert b"Gamma Magnet" in response.data
 
 
-def test_main_nav_on_gamma_and_trade_pages():
+def test_main_nav_on_gamma_and_trade_pages(monkeypatch):
     from web_app import APP
 
+    monkeypatch.setenv("GEX_WEBULL_ENABLED", "1")
     client = APP.test_client()
     for path, active_label in [
         ("/gamma", b"Gamma Magnet"),
@@ -33,6 +34,18 @@ def test_main_nav_on_gamma_and_trade_pages():
         assert b"gex-main-nav" in response.data
         assert active_label in response.data
         assert b'aria-current="page"' in response.data
+
+
+def test_main_nav_hides_trade_when_webull_disabled(monkeypatch):
+    from web_app import APP
+
+    monkeypatch.setenv("GEX_WEBULL_ENABLED", "0")
+    client = APP.test_client()
+    response = client.get("/gamma")
+    assert response.status_code == 200
+    assert b'href="/trade"' not in response.data
+    assert b'href="/webull"' not in response.data
+    assert client.get("/webull").status_code in {301, 302, 303, 307, 308}
 
 
 def test_ticker_page_does_not_block_on_live_wall_gex_data(monkeypatch):

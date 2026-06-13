@@ -191,7 +191,10 @@ streamlit run streamlit_app.py
 
 ### 8. Optional: live Webull trading
 
+Webull is **disabled by default** (`GEX_WEBULL_ENABLED=0`) so the dashboard never calls the OpenAPI when credentials are present in the environment. Set `GEX_WEBULL_ENABLED=1` when you are ready to use `/trade` or live auto-trading.
+
 ```bash
+export GEX_WEBULL_ENABLED=1
 export GEX_TRADER_PAPER=0
 export GEX_WEBULL_APP_KEY=your-app-key
 export GEX_WEBULL_APP_SECRET=your-app-secret
@@ -200,7 +203,7 @@ export GEX_TRADER_LIVE_CONFIRM=1
 export GEX_ADMIN_TOKEN=change-me    # required for POST order routes when set
 ```
 
-Orders from `/trade` require `live_confirm: true` in the API body. Enable background execution with `GEX_AUTO_TRADER=1` and/or `GEX_WALL_GEX_AUTO=1`, then arm the trader on the dashboard.
+Orders from `/trade` require `live_confirm: true` in the API body. Enable background execution with `GEX_WEBULL_ENABLED=1` plus `GEX_AUTO_TRADER=1` and/or `GEX_WALL_GEX_AUTO=1`, then arm the trader on the dashboard.
 
 ### 9. CLI and manual refresh
 

@@ -17,6 +17,7 @@ from gex_core.predict import MIN_OVERLAY_TRAIN_ROWS
 from gex_core.refresh import DEFAULT_REFRESH_MINUTES
 from gex_core.storage import count_strike_exports_on_disk, db_path, export_age_minutes, sync_ticker_exports
 from gex_core.tickers import PRIMARY_TICKER
+from gex_core.trading.config import auto_trader_enabled, webull_enabled
 
 
 def _health_cache_ttl() -> float:
@@ -103,7 +104,8 @@ def build_system_status(
         "index_db_present": db_path().exists(),
         "refresh_interval_minutes": DEFAULT_REFRESH_MINUTES,
         "trader_cycle_seconds": int(os.environ.get("GEX_TRADER_CYCLE_SECONDS", "30")),
-        "auto_trader_enabled": os.environ.get("GEX_AUTO_TRADER", "").strip().lower() in {"1", "true", "yes"},
+        "auto_trader_enabled": auto_trader_enabled(),
+        "webull_enabled": webull_enabled(),
         "model_overlay_active": n_train is not None and n_train >= MIN_OVERLAY_TRAIN_ROWS,
         "model_training_rows": n_train,
         "model_overlay_min_rows": MIN_OVERLAY_TRAIN_ROWS,

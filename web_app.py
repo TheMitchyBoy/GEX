@@ -357,7 +357,9 @@ def _dashboard_skip_backtest() -> bool:
 
 
 def _main_nav_items() -> list[dict[str, str]]:
-    return [
+    from gex_core.trading.config import webull_enabled
+
+    items = [
         {
             "id": "wall",
             "label": "Wall GEX",
@@ -376,13 +378,17 @@ def _main_nav_items() -> list[dict[str, str]]:
             "url": url_for("gamma_near_dashboard"),
             "hint": "±1% near-spot wall GEX view",
         },
-        {
-            "id": "trade",
-            "label": "Quick Trade",
-            "url": url_for("webull_trade_dashboard"),
-            "hint": "Webull 0DTE options desk",
-        },
     ]
+    if webull_enabled():
+        items.append(
+            {
+                "id": "trade",
+                "label": "Quick Trade",
+                "url": url_for("webull_trade_dashboard"),
+                "hint": "Webull 0DTE options desk",
+            }
+        )
+    return items
 
 
 def _nav_active_id() -> str:
@@ -1359,8 +1365,11 @@ def api_wall_gex_run():
 @APP.get("/webull")
 def webull_trade_dashboard():
     """Webull quick options trade desk with entry/exit price guidance."""
-    from gex_core.trading.config import execution_ticker, signal_ticker
+    from gex_core.trading.config import execution_ticker, signal_ticker, webull_enabled
     from gex_core.trading.webull_quick_trade import dashboard_state
+
+    if not webull_enabled():
+        return redirect(url_for("gamma_dashboard"))
 
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
     state = dashboard_state(signal_ticker_arg=ticker)
@@ -1375,7 +1384,11 @@ def webull_trade_dashboard():
 
 @APP.get("/api/webull/status")
 def api_webull_status():
+    from gex_core.trading.config import webull_enabled
     from gex_core.trading.webull_quick_trade import dashboard_state
+
+    if not webull_enabled():
+        return jsonify({"error": "Webull integration disabled (GEX_WEBULL_ENABLED=0)"}), 503
 
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
     return jsonify(dashboard_state(signal_ticker_arg=ticker))
@@ -1384,8 +1397,11 @@ def api_webull_status():
 @APP.post("/api/webull/auth/reconnect")
 def api_webull_auth_reconnect():
     """Force a fresh Webull token handshake after 401 INVALID_TOKEN."""
+    from gex_core.trading.config import webull_enabled
     from gex_core.trading.webull_broker import reconnect_webull_auth
 
+    if not webull_enabled():
+        return jsonify({"error": "Webull integration disabled (GEX_WEBULL_ENABLED=0)"}), 503
     if not _admin_action_authorized(request) and os.environ.get("GEX_ADMIN_TOKEN"):
         return jsonify({"error": "Admin token required for Webull reconnect"}), 403
     probe = request.get_json(silent=True) or {}
@@ -1435,14 +1451,21 @@ def _webull_strategy_trade_payload(ticker: str) -> dict[str, Any]:
 @APP.get("/api/webull/signal")
 def api_webull_signal():
     """Recommended gamma signal mapped to execution contract (SPX → SPY)."""
+    from gex_core.trading.config import webull_enabled
+
+    if not webull_enabled():
+        return jsonify({"error": "Webull integration disabled (GEX_WEBULL_ENABLED=0)"}), 503
     ticker = (request.args.get("ticker") or PRIMARY_TICKER).upper()
     return jsonify(_webull_strategy_trade_payload(ticker))
 
 
 @APP.get("/api/webull/quote")
 def api_webull_quote():
+    from gex_core.trading.config import webull_enabled
     from gex_core.trading.webull_quick_trade import quote_payload
 
+    if not webull_enabled():
+        return jsonify({"error": "Webull integration disabled (GEX_WEBULL_ENABLED=0)"}), 503
     try:
         strike = float(request.args.get("strike", 0))
     except (TypeError, ValueError):
@@ -1494,9 +1517,11 @@ def api_webull_quote():
 
 @APP.post("/api/webull/order/buy")
 def api_webull_order_buy():
-    from gex_core.trading.config import live_trading_allowed, require_live_confirm
+    from gex_core.trading.config import live_trading_allowed, require_live_confirm, webull_enabled
     from gex_core.trading.webull_quick_trade import execute_buy
 
+    if not webull_enabled():
+        return jsonify({"error": "Webull integration disabled (GEX_WEBULL_ENABLED=0)"}), 503
     if not _admin_action_authorized(request) and os.environ.get("GEX_ADMIN_TOKEN"):
         return jsonify({"error": "Admin token required for live orders"}), 403
 
@@ -1542,9 +1567,11 @@ def api_webull_order_buy():
 
 @APP.post("/api/webull/order/sell")
 def api_webull_order_sell():
-    from gex_core.trading.config import live_trading_allowed, require_live_confirm
+    from gex_core.trading.config import live_trading_allowed, require_live_confirm, webull_enabled
     from gex_core.trading.webull_quick_trade import execute_sell
 
+    if not webull_enabled():
+        return jsonify({"error": "Webull integration disabled (GEX_WEBULL_ENABLED=0)"}), 503
     if not _admin_action_authorized(request) and os.environ.get("GEX_ADMIN_TOKEN"):
         return jsonify({"error": "Admin token required for live orders"}), 403
 
