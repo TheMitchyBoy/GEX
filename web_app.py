@@ -66,7 +66,6 @@ from gex_core.intelligence import (
 )
 from gex_core.predict import (
     apply_flow_to_prediction,
-    forecast_blocker_message,
     load_flow_predictions,
     predict_next_snapshot,
 )

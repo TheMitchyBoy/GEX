@@ -58,10 +58,6 @@ def realized_volatility(history: list[dict[str, Any]], window: int = 10) -> floa
     return float(np.std(recent, ddof=1))
 
 
-def annualized_realized_vol(history: list[dict[str, Any]], window: int = 10) -> float:
-    return realized_volatility(history, window=window) * math.sqrt(TRADING_PERIODS)
-
-
 def latest_spot_return(history: list[dict[str, Any]]) -> float:
     """Most recent step's simple spot return."""
     if len(history) < 2:

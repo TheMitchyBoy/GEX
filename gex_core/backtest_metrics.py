@@ -173,8 +173,3 @@ def calibrated_prediction_confidence(ticker: str, raw_confidence: float) -> floa
     except Exception:
         pass
     return calibrated
-
-
-def clear_cache() -> None:
-    """No-op — in-memory backtest cache removed for web app speed."""
-    return None

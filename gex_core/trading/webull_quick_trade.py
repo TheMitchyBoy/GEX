@@ -364,12 +364,6 @@ def price_ladder(analysis: QuoteAnalysis, *, entry_premium: float | None = None)
     }
 
 
-def clear_broker_position_cache() -> None:
-    """Drop cached broker positions (for tests)."""
-    global _POSITION_CACHE
-    _POSITION_CACHE = None
-
-
 def fetch_broker_option_positions(*, force_refresh: bool = False) -> list[dict[str, Any]]:
     """Best-effort open option positions from Webull account API."""
     global _POSITION_CACHE

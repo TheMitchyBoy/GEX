@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-import numpy as np
 import pandas as pd
 import requests
 
@@ -24,13 +23,6 @@ from gex_core.history import build_history
 from gex_core.models_manifest import load_manifest
 from gex_core.predict import MIN_OVERLAY_TRAIN_ROWS
 
-# Spot-scenario sensitivities. These remain heuristics, but are now named and
-# documented rather than buried magic numbers. ``LOCAL_GEX_SENSITIVITY`` is the
-# fraction of the local strike-GEX change that propagates to total GEX under a
-# spot shift; ``FLIP_SHIFT_SENSITIVITY`` is how far the flip migrates per unit
-# spot move.
-LOCAL_GEX_SENSITIVITY = 0.65
-FLIP_SHIFT_SENSITIVITY = 0.35
 # Geometry vs empirical-base-rate blend for the close-above-flip probability.
 FLIP_GEOMETRY_WEIGHT = 0.65
 
@@ -476,51 +468,6 @@ def compute_confluence_overlay(
             {"name": "Flow alignment", "score": flow_component, "max": 20},
             {"name": "Regime stability", "score": stability_component, "max": 10},
         ],
-    }
-
-
-def simulate_spot_scenario(selected: dict, spot_shift_pct: float) -> dict | None:
-    """What-if simulation for spot shift impact on structure."""
-    spot = safe_float(selected.get("spot"), 0.0)
-    if spot <= 0:
-        return None
-    strike = selected.get("strike")
-    if strike is None:
-        return None
-
-    strike_series = pd.Series(strike, dtype=float).sort_index()
-    if strike_series.empty:
-        return None
-
-    new_spot = spot * (1.0 + spot_shift_pct)
-    total = safe_float(selected.get("total_gex"), 0.0)
-    idx = strike_series.index.astype(float).to_numpy()
-    vals = strike_series.to_numpy(dtype=float)
-    local_now = float(np.interp(spot, idx, vals))
-    local_new = float(np.interp(new_spot, idx, vals))
-    projected_total = total + ((local_new - local_now) * LOCAL_GEX_SENSITIVITY)
-
-    gamma_flip = selected.get("gamma_flip")
-    projected_flip = None
-    if gamma_flip is not None:
-        projected_flip = safe_float(gamma_flip) - (spot_shift_pct * spot * FLIP_SHIFT_SENSITIVITY)
-
-    window = max(spot * 0.02, 1.0)
-    local_band = strike_series.loc[(strike_series.index >= new_spot - window) & (strike_series.index <= new_spot + window)]
-    if len(local_band) < 3:
-        local_band = strike_series
-
-    projected_call = float(local_band.idxmax()) if len(local_band) else None
-    projected_put = float(local_band.idxmin()) if len(local_band) else None
-
-    return {
-        "spot_shift_pct": spot_shift_pct,
-        "new_spot": new_spot,
-        "projected_total_gex": projected_total,
-        "projected_regime": "LONG gamma" if projected_total >= 0 else "SHORT gamma",
-        "projected_flip": projected_flip,
-        "projected_call_wall": projected_call,
-        "projected_put_wall": projected_put,
     }
 
 

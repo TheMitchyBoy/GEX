@@ -429,15 +429,6 @@ def max_strike_distance_pct() -> float:
         return 0.02
 
 
-def min_confluence_score() -> float:
-    if clear_all_filters():
-        return 0.0
-    try:
-        return float(os.environ.get("GEX_TRADER_MIN_CONFLUENCE", "50"))
-    except (TypeError, ValueError):
-        return 50.0
-
-
 def require_spot_momentum() -> bool:
     if clear_all_filters():
         return False
@@ -652,24 +643,10 @@ def webull_position_cache_seconds() -> float:
         return 30.0
 
 
-def min_zero_dte_ratio() -> float:
-    try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_MIN_ZERO_DTE_RATIO", "0")))
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def require_gamma_flip_side() -> bool:
     if clear_all_filters():
         return False
     return _flag("GEX_TRADER_REQUIRE_FLIP_SIDE", "0")
-
-
-def max_iv_rank() -> float:
-    try:
-        return float(os.environ.get("GEX_TRADER_MAX_IV_RANK", "1.0"))
-    except (TypeError, ValueError):
-        return 1.0
 
 
 def min_magnet_progress_pct() -> float:
@@ -746,14 +723,6 @@ def min_flow_buy_ratio() -> float:
 def min_flow_aggressiveness() -> float:
     try:
         return float(os.environ.get("GEX_TRADER_MIN_FLOW_AGGRESSIVENESS", "0"))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def event_day_size_multiplier() -> float:
-    """0 = hard block on event days; 0.5 = half size; 1 = ignore events."""
-    try:
-        return max(0.0, float(os.environ.get("GEX_TRADER_EVENT_SIZE_MULT", "0")))
     except (TypeError, ValueError):
         return 0.0
 
