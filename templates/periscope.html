@@ -9,7 +9,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"
           integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
-    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     <style>
       :root {
         --bg: #05070c;
@@ -280,65 +279,79 @@
       .rule-pill.danger { background: var(--red-soft); color: #fca5a5; border-color: rgba(239, 68, 68, 0.2); }
       .rule-pill.success { background: var(--green-soft); color: #86efac; border-color: rgba(34, 197, 94, 0.2); }
 
-      /* Chart */
-      #strategyChart { min-height: 720px; width: 100%; }
-      .strategy-map-panel .uw-panel-head {
+      /* Order flow */
+      .order-flow-panel .uw-panel-head {
         background: linear-gradient(180deg, rgba(59, 130, 246, 0.08), transparent);
       }
-      .strategy-map-panel .uw-panel-body {
-        padding: 0.15rem 0.35rem 0.4rem;
+      .order-flow-panel .uw-panel-body {
+        padding: 0.85rem 1rem 1rem;
         background: radial-gradient(ellipse at 50% 0%, rgba(103, 232, 249, 0.04), transparent 55%);
       }
-      .chart-legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.65rem 1rem;
-        padding: 0.55rem 1rem 0.75rem;
-        border-top: 1px solid var(--border);
-        font-size: 0.68rem;
-        color: var(--muted);
+      .trend-badge {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        padding: 0.35rem 0.65rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
       }
-      .chart-legend .legend-item {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.35rem;
+      .trend-badge.up { background: var(--green-soft); color: var(--green); border-color: rgba(34, 197, 94, 0.35); }
+      .trend-badge.down { background: var(--red-soft); color: var(--red); border-color: rgba(239, 68, 68, 0.35); }
+      .trend-badge.neutral { background: rgba(100, 116, 139, 0.12); color: var(--muted); }
+      .flow-metric {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 0.55rem 0.65rem;
+        height: 100%;
       }
-      .chart-legend .legend-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        flex-shrink: 0;
-      }
-      .chart-legend .legend-dot.ring {
-        border: 1.5px solid rgba(255,255,255,0.45);
-        background: transparent;
-      }
-      .chart-legend .legend-dot.trail {
-        background: #67e8f9;
-        opacity: 0.65;
-      }
-      .layer-toggles {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem 1rem;
-        padding: 0.55rem 1rem 0.35rem;
-        border-top: 1px solid var(--border);
-        font-size: 0.68rem;
-        color: var(--muted);
-      }
-      .layer-toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.35rem;
-        cursor: pointer;
-        user-select: none;
-      }
-      .layer-toggle input { accent-color: var(--accent); cursor: pointer; }
-      .chart-click-hint {
+      .flow-metric-label {
         font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
         color: var(--muted);
-        padding: 0 1rem 0.5rem;
+        margin-bottom: 0.2rem;
       }
+      .flow-metric-value {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+      .flow-metric-value.positive { color: var(--green); }
+      .flow-metric-value.negative { color: var(--red); }
+      .flow-table { font-size: 0.78rem; margin-bottom: 0; }
+      .flow-table thead th {
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        font-weight: 600;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 0.5rem;
+        white-space: nowrap;
+      }
+      .flow-table tbody td {
+        padding: 0.55rem 0.35rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+        vertical-align: middle;
+      }
+      .flow-table tbody tr:last-child td { border-bottom: none; }
+      .flow-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+      .dir-badge {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.62rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+      }
+      .dir-badge.up { background: var(--green-soft); color: var(--green); }
+      .dir-badge.down { background: var(--red-soft); color: var(--red); }
+      .dir-badge.neutral { background: rgba(100, 116, 139, 0.12); color: var(--muted); }
+      .trend-arrow { font-size: 1.1rem; margin-right: 0.15rem; }
 
       /* Time nav */
       .time-nav .form-control, .time-nav .form-select {
@@ -430,7 +443,6 @@
       .last-updated { font-size: 0.65rem; color: var(--muted); }
 
       @media (max-width: 991px) {
-        #strategyChart { min-height: 520px; }
         .entry-strike { font-size: 1.25rem; }
       }
     </style>
@@ -526,44 +538,87 @@
       </section>
       {% endif %}
 
+      {% set flow = order_flow or {} %}
+      {% set trend = flow.trend or {} %}
+      {% set flow_dir = trend.direction or 'neutral' %}
+
       <div class="row g-3 mb-3">
         <div class="col-lg-8">
-          <section class="uw-panel strategy-map-panel">
-            <div class="uw-panel-head">
+          <section class="uw-panel order-flow-panel">
+            <div class="uw-panel-head d-flex flex-wrap justify-content-between align-items-start gap-2">
               <div>
-                <span>Strategy map</span>
-                <div class="small muted fw-normal mt-1">Current γ bars · cyan dots = last 4 slices · colored dots = Δγ</div>
+                <span>Options order flow</span>
+                <div class="small muted fw-normal mt-1">Strike-level flow from live tape · movement trend</div>
               </div>
-              <span class="chip" style="font-size:0.58rem;">±{{ '%.1f'|format(strike_window_pct * 100) }}% window</span>
+              <span class="trend-badge {{ flow_dir }}" id="flowTrendBadge">
+                {% if flow_dir == 'up' %}<span class="trend-arrow">↑</span>{% elif flow_dir == 'down' %}<span class="trend-arrow">↓</span>{% else %}<span class="trend-arrow">→</span>{% endif %}
+                {{ trend.label or 'No flow' }}
+              </span>
             </div>
             <div class="uw-panel-body">
-              <div id="strategyChart"></div>
-              <div id="strategyChartLoading" class="small muted text-center py-4" style="display:none">Loading strategy chart…</div>
-            </div>
-            <div class="layer-toggles" id="layerToggles">
-              <label class="layer-toggle"><input type="checkbox" id="layerGammaHistory" checked> γ history</label>
-              <label class="layer-toggle"><input type="checkbox" id="layerDeltaPulse" checked> Δγ pulses</label>
-              <label class="layer-toggle"><input type="checkbox" id="layerSignalTrail" checked> Signal path</label>
-              <label class="layer-toggle"><input type="checkbox" id="layerWalls" checked> Walls / signals</label>
-              <label class="layer-toggle"><input type="checkbox" id="layerLevels" checked> Level guides</label>
-              <label class="layer-toggle"><input type="checkbox" id="layerSpot" checked> Spot</label>
-              <label class="layer-toggle"><input type="checkbox" id="layerPositions" checked> Positions</label>
-            </div>
-            <div class="chart-click-hint">Click a strike bar to open Quick Trade with that strike prefilled</div>
-            <div class="chart-legend">
-              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> +γ now</span>
-              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> −γ now</span>
-              <span class="legend-item"><span class="legend-dot trail"></span> γ history</span>
-              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span><span class="legend-dot ring" style="margin-left:-0.55rem"></span> Δγ up</span>
-              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> Δγ down</span>
-              <span class="legend-item"><span class="legend-dot" style="background:#c4b5fd"></span> Signal trail</span>
-              <span class="legend-item"><span class="legend-dot" style="background:var(--amber)"></span> Spot</span>
-              {% if wall_mode %}
-              <span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> Low wall</span>
-              <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> High wall</span>
-              {% else %}
-              <span class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> Magnets</span>
-              {% endif %}
+              <div class="row g-2 mb-3">
+                <div class="col-6 col-md-3">
+                  <div class="flow-metric">
+                    <div class="flow-metric-label">Net flow ΔGEX</div>
+                    <div class="flow-metric-value {% if (flow.predicted_flow_delta_gex_bn or 0) >= 0 %}positive{% else %}negative{% endif %}" id="flowNetDelta">
+                      {{ '%+.4f'|format(flow.predicted_flow_delta_gex_bn or 0) }} Bn
+                    </div>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="flow-metric">
+                    <div class="flow-metric-label">Buy ratio</div>
+                    <div class="flow-metric-value" id="flowBuyRatio">
+                      {% if flow.flow_buy_ratio is not none %}{{ '%.0f'|format(flow.flow_buy_ratio * 100) }}%{% else %}—{% endif %}
+                    </div>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="flow-metric">
+                    <div class="flow-metric-label">Events</div>
+                    <div class="flow-metric-value" id="flowEventCount">{{ flow.event_count or 0 }}</div>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="flow-metric">
+                    <div class="flow-metric-label">Trend score</div>
+                    <div class="flow-metric-value {% if (trend.score or 0) >= 0 %}positive{% else %}negative{% endif %}" id="flowTrendScore">
+                      {{ '%+.2f'|format(trend.score or 0) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div id="orderFlowLoading" class="small muted text-center py-3" style="display:none">Loading order flow…</div>
+              <div class="table-responsive" id="orderFlowTableWrap" {% if not flow.top_signals %}style="display:none"{% endif %}>
+                <table class="table table-sm table-dark table-borderless flow-table mb-0">
+                  <thead>
+                    <tr>
+                      <th>Strike</th>
+                      <th>Direction</th>
+                      <th>Score</th>
+                      <th>Flow ΔGEX</th>
+                      <th>Imbalance</th>
+                      <th>Aggression</th>
+                    </tr>
+                  </thead>
+                  <tbody id="orderFlowBody">
+                    {% for s in flow.top_signals or [] %}
+                    <tr>
+                      <td class="mono">{{ s.strike }}</td>
+                      <td><span class="dir-badge {{ s.direction }}">{{ s.direction }}</span></td>
+                      <td class="mono {% if s.score >= 0 %}text-success{% else %}text-danger{% endif %}">{{ '%+.2f'|format(s.score) }}</td>
+                      <td class="mono {% if s.flow_gex_bn >= 0 %}text-success{% else %}text-danger{% endif %}">{{ '%+.4f'|format(s.flow_gex_bn) }}</td>
+                      <td class="mono">{{ '%+.2f'|format(s.flow_imbalance) }}</td>
+                      <td class="mono muted">{{ '%.0f'|format(s.avg_aggressiveness) }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              <div class="empty-state" id="orderFlowEmpty" {% if flow.top_signals %}style="display:none"{% endif %}>
+                <div class="empty-state-icon">◎</div>
+                No option flow events in feed
+              </div>
             </div>
           </section>
         </div>
@@ -755,134 +810,75 @@
     </main>
 
     <script>
-      const strategySpec = {{ strategy_chart_json|safe if strategy_chart_json else 'null' }};
-      const plotConfig = {responsive: true, displayModeBar: false};
       const exposureType = {{ exposure|tojson }};
       const isLiveSlice = {{ is_live_slice|tojson }};
-      const currentOnly = {{ current_only|default(false)|tojson }};
       const dailyLearningEnabled = {{ daily_learning_enabled|default(false)|tojson }};
       const strategyPollMs = {{ strategy_poll_sec|default(120)|tojson }} * 1000;
       const ticker = '{{ ticker }}';
       const strikeWindowPct = {{ strike_window_pct|tojson }};
       const wallMode = {{ wall_mode|default(false)|tojson }};
-      const selectedTsInitial = {{ selected_ts|tojson }};
-      const LAYER_STORAGE_KEY = 'gex_strategy_map_layers';
       let timelineData = {{ timeline|tojson }};
-      let currentChartSpec = strategySpec;
 
-      const chartEl = document.getElementById('strategyChart');
+      function trendArrow(direction) {
+        if (direction === 'up') return '↑';
+        if (direction === 'down') return '↓';
+        return '→';
+      }
 
-      const LAYER_IDS = {
-        gamma_history: 'layerGammaHistory',
-        delta_pulse: 'layerDeltaPulse',
-        signal_trail: 'layerSignalTrail',
-        walls: 'layerWalls',
-        levels: 'layerLevels',
-        spot: 'layerSpot',
-        positions: 'layerPositions',
-      };
-
-      function loadLayerPrefs() {
-        try {
-          const raw = localStorage.getItem(LAYER_STORAGE_KEY);
-          if (raw) {
-            const prefs = JSON.parse(raw);
-            Object.entries(LAYER_IDS).forEach(([layer, id]) => {
-              const el = document.getElementById(id);
-              if (el && prefs[layer] != null) el.checked = !!prefs[layer];
-            });
-          }
-        } catch (_) {}
-        if (currentOnly) {
-          const gammaHist = document.getElementById(LAYER_IDS.gamma_history);
-          if (gammaHist) gammaHist.checked = false;
+      function renderOrderFlow(flow) {
+        if (!flow) return;
+        const trend = flow.trend || {};
+        const direction = trend.direction || 'neutral';
+        const badge = document.getElementById('flowTrendBadge');
+        if (badge) {
+          badge.className = 'trend-badge ' + direction;
+          badge.innerHTML = '<span class="trend-arrow">' + trendArrow(direction) + '</span>' + (trend.label || 'No flow');
         }
-      }
-
-      function saveLayerPrefs() {
-        const prefs = {};
-        Object.entries(LAYER_IDS).forEach(([layer, id]) => {
-          const el = document.getElementById(id);
-          if (el) prefs[layer] = el.checked;
-        });
-        try { localStorage.setItem(LAYER_STORAGE_KEY, JSON.stringify(prefs)); } catch (_) {}
-      }
-
-      function applyLayerVisibility(spec) {
-        if (!spec?.data) return spec;
-        const data = spec.data.map(trace => {
-          const layer = trace.meta?.layer;
-          if (!layer || layer === 'gamma_bars' || layer === 'equity') return trace;
-          const toggleId = LAYER_IDS[layer];
-          if (!toggleId) return trace;
-          const el = document.getElementById(toggleId);
-          const visible = el ? el.checked : true;
-          return { ...trace, visible: !!visible };
-        });
-        return { ...spec, data };
-      }
-
-      let chartStrikeClickBound = false;
-
-      function renderStrategyChart(spec) {
-        if (!spec || !chartEl) return;
-        currentChartSpec = spec;
-        const layered = applyLayerVisibility(spec);
-        Plotly.react(chartEl, layered.data, layered.layout || {}, plotConfig);
-        bindChartStrikeClick();
-      }
-
-      function bindLayerToggles() {
-        Object.values(LAYER_IDS).forEach(id => {
-          document.getElementById(id)?.addEventListener('change', () => {
-            saveLayerPrefs();
-            const gammaHist = document.getElementById(LAYER_IDS.gamma_history);
-            if (!currentOnly && gammaHist?.checked && !timelineData?.prev_ts) {
-              refreshStrategyWithTrail();
-              return;
-            }
-            if (currentChartSpec) renderStrategyChart(currentChartSpec);
-          });
-        });
-      }
-
-      async function refreshStrategyWithTrail() {
-        const params = strategyQueryParams();
-        params.set('trail', '1');
-        const qs = params.toString() ? '?' + params.toString() : '';
-        try {
-          const res = await fetch('/api/trader/strategy' + qs);
-          applyStrategyPayload(await res.json());
-        } catch (_) {}
-      }
-
-      function spotPriceForTrade() {
-        const txt = document.getElementById('spotValue')?.textContent || '';
-        const val = parseFloat(txt.replace(/,/g, ''));
-        return Number.isFinite(val) ? val : 0;
-      }
-
-      function openQuickTradeForStrike(strike) {
-        if (!strike || strike <= 0) return;
-        const spot = spotPriceForTrade();
-        const optType = strike >= spot ? 'call' : 'put';
-        const p = new URLSearchParams({ strike: String(Math.round(strike)), type: optType });
-        window.location.href = '/trade?' + p.toString();
-      }
-
-      function bindChartStrikeClick() {
-        if (!chartEl || chartStrikeClickBound) return;
-        if (typeof chartEl.on !== 'function') return;
-        chartStrikeClickBound = true;
-        chartEl.on('plotly_click', (ev) => {
-          const pt = ev.points?.[0];
-          if (!pt || pt.y == null) return;
-          const trace = currentChartSpec?.data?.[pt.curveNumber];
-          const layer = trace?.meta?.layer;
-          if (layer && layer !== 'gamma_bars') return;
-          if (trace?.type !== 'bar' && layer !== 'gamma_bars') return;
-          openQuickTradeForStrike(Number(pt.y));
-        });
+        const net = flow.predicted_flow_delta_gex_bn || 0;
+        const netEl = document.getElementById('flowNetDelta');
+        if (netEl) {
+          netEl.textContent = (net >= 0 ? '+' : '') + Number(net).toFixed(4) + ' Bn';
+          netEl.className = 'flow-metric-value ' + (net >= 0 ? 'positive' : 'negative');
+        }
+        const buyEl = document.getElementById('flowBuyRatio');
+        if (buyEl) {
+          buyEl.textContent = flow.flow_buy_ratio != null
+            ? Math.round(flow.flow_buy_ratio * 100) + '%'
+            : '—';
+        }
+        const countEl = document.getElementById('flowEventCount');
+        if (countEl) countEl.textContent = flow.event_count || 0;
+        const scoreEl = document.getElementById('flowTrendScore');
+        if (scoreEl) {
+          const score = trend.score || 0;
+          scoreEl.textContent = (score >= 0 ? '+' : '') + Number(score).toFixed(2);
+          scoreEl.className = 'flow-metric-value ' + (score >= 0 ? 'positive' : 'negative');
+        }
+        const signals = flow.top_signals || [];
+        const tableWrap = document.getElementById('orderFlowTableWrap');
+        const empty = document.getElementById('orderFlowEmpty');
+        const body = document.getElementById('orderFlowBody');
+        if (signals.length && body) {
+          body.innerHTML = signals.map(s => {
+            const dir = s.direction || 'neutral';
+            const score = Number(s.score || 0);
+            const gex = Number(s.flow_gex_bn || 0);
+            return `<tr>
+              <td class="mono">${s.strike}</td>
+              <td><span class="dir-badge ${dir}">${dir}</span></td>
+              <td class="mono ${score >= 0 ? 'text-success' : 'text-danger'}">${score >= 0 ? '+' : ''}${score.toFixed(2)}</td>
+              <td class="mono ${gex >= 0 ? 'text-success' : 'text-danger'}">${gex >= 0 ? '+' : ''}${gex.toFixed(4)}</td>
+              <td class="mono">${Number(s.flow_imbalance || 0) >= 0 ? '+' : ''}${Number(s.flow_imbalance || 0).toFixed(2)}</td>
+              <td class="mono muted">${Math.round(s.avg_aggressiveness || 0)}</td>
+            </tr>`;
+          }).join('');
+          if (tableWrap) tableWrap.style.display = '';
+          if (empty) empty.style.display = 'none';
+        } else {
+          if (body) body.innerHTML = '';
+          if (tableWrap) tableWrap.style.display = 'none';
+          if (empty) empty.style.display = '';
+        }
       }
 
       function updateLastUpdated() {
@@ -1039,7 +1035,7 @@
       }
 
       function applyStrategyPayload(data) {
-        if (data.chart_json) renderStrategyChart(JSON.parse(data.chart_json));
+        if (data.order_flow) renderOrderFlow(data.order_flow);
         const st = data.state || {};
         const spotVal = data.spot || st.spot;
         if (spotVal) updateSpotDisplay(spotVal);
@@ -1065,10 +1061,9 @@
         updateLastUpdated();
       }
 
-      function setStrategyChartLoading(on) {
-        const loading = document.getElementById('strategyChartLoading');
+      function setOrderFlowLoading(on) {
+        const loading = document.getElementById('orderFlowLoading');
         if (loading) loading.style.display = on ? 'block' : 'none';
-        if (chartEl) chartEl.style.display = on ? 'none' : 'block';
       }
 
       async function loadStrategySlice({ ts = null, date = null, pushUrl = true } = {}) {
@@ -1076,14 +1071,14 @@
         if (ts) params.set('ts', ts);
         else if (date) params.delete('ts'), params.set('date', date);
         const qs = params.toString() ? '?' + params.toString() : '';
-        setStrategyChartLoading(true);
+        setOrderFlowLoading(true);
         try {
           const res = await fetch('/api/trader/strategy' + qs);
           const data = await res.json();
           applyStrategyPayload(data);
           if (pushUrl) history.replaceState(null, '', '?' + params.toString());
         } catch (_) {}
-        finally { setStrategyChartLoading(false); }
+        finally { setOrderFlowLoading(false); }
       }
 
       async function refreshStrategy(live) {
@@ -1098,15 +1093,7 @@
         finally { btn?.classList.remove('loading'); }
       }
 
-      loadLayerPrefs();
-      bindLayerToggles();
-      if (strategySpec) {
-        renderStrategyChart(strategySpec);
-      } else {
-        setStrategyChartLoading(true);
-        loadStrategySlice({ pushUrl: false });
-      }
-      bindChartStrikeClick();
+      renderOrderFlow({{ order_flow|tojson }});
       updateLastUpdated();
       startSpotStream();
       if (isLiveSlice) window.setInterval(() => refreshStrategy(false), strategyPollMs);
