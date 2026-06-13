@@ -1,7 +1,7 @@
 """
 Flask SPX gamma dashboard.
 
-Serves historical GEX snapshots from ``data/exports/``, renders Plotly charts,
+Serves historical GEX snapshots from ``data/exports/``, options order-flow panels,
 runs weighted-KNN forecasts, and optionally auto-refreshes via APScheduler when
 ``UW_API_KEY`` is set. Snapshots live under ``data/exports/`` with an optional
 SQLite index for fast history lookup.
