@@ -134,7 +134,8 @@ def test_gamma_dashboard_renders_periscope():
     response = client.get("/gamma")
     assert response.status_code == 200
     assert b"Gamma Magnet Strategy" in response.data
-    assert b"strategyChart" in response.data
+    assert b"Options order flow" in response.data
+    assert b"orderFlowBody" in response.data
 
 
 def test_gamma_dashboard_skips_llm_advisor_on_html_render(monkeypatch):
@@ -178,9 +179,13 @@ def test_api_trader_strategy_honors_window_pct(monkeypatch):
 
     def _fake_wall_build(**kwargs):
         captured.update(kwargs)
-        return {"state": {"signals": {}}, "chart_json": "{}", "window_pct": kwargs.get("window_pct"), "strategy_mode": "wall"}
+        return {
+            "signals": {},
+            "filters": {},
+            "advice": {},
+        }
 
-    monkeypatch.setattr("gex_core.trading.strategy_viz.build_wall_strategy_dashboard", _fake_wall_build)
+    monkeypatch.setattr("gex_core.trading.strategy_viz.build_wall_strategy_state", _fake_wall_build)
     monkeypatch.setattr("web_app.build_periscope_context", lambda **_k: {"spot": 6000.0, "selected": {}, "history": []})
     monkeypatch.setattr("web_app._strategy_exposure_from_context", lambda _ctx: (None, None))
     monkeypatch.setattr("web_app._uw_bundle_for_context", lambda **_k: None)
@@ -191,8 +196,10 @@ def test_api_trader_strategy_honors_window_pct(monkeypatch):
     response = client.get("/api/trader/strategy?window_pct=0.01")
     assert response.status_code == 200
     assert captured["window_pct"] == 0.01
-    assert captured["max_strikes"] == 24
-    assert response.get_json().get("strategy_mode") == "wall"
+    payload = response.get_json()
+    assert payload.get("strategy_mode") == "wall"
+    assert "order_flow" in payload
+    assert "trend" in payload["order_flow"]
 
 
 def test_api_periscope_returns_json():
@@ -537,8 +544,12 @@ def test_api_trader_strategy_live_param_does_not_block_uw(monkeypatch):
     monkeypatch.setattr("web_app._strategy_exposure_from_context", lambda _ctx: (None, None))
     monkeypatch.setattr("web_app._uw_live_enabled", lambda: True)
     monkeypatch.setattr(
-        "gex_core.trading.strategy_viz.build_wall_strategy_dashboard",
-        lambda **_k: {"state": {"signals": {}}, "chart_json": "{}"},
+        "gex_core.trading.strategy_viz.build_strategy_state",
+        lambda **_k: {"signals": {}, "filters": {}, "advice": {}},
+    )
+    monkeypatch.setattr(
+        "web_app._order_flow_for_context",
+        lambda *_a, **_k: {"event_count": 0, "trend": {"direction": "neutral"}, "top_signals": []},
     )
 
     client = APP.test_client()
