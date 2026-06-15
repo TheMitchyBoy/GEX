@@ -23,6 +23,7 @@ _WS_BASE = "wss://api.unusualwhales.com/socket"
 _DEFAULT_TICKERS = ("SPX",)
 _RECONNECT_BASE = float(os.environ.get("GEX_UW_PRICE_WS_RECONNECT_SEC", "3"))
 _RECONNECT_MAX = float(os.environ.get("GEX_UW_PRICE_WS_RECONNECT_MAX_SEC", "60"))
+_STABLE_SESSION_SEC = 60.0
 
 
 def _recv_timeout_sec() -> float:
@@ -30,6 +31,11 @@ def _recv_timeout_sec() -> float:
         return max(15.0, float(os.environ.get("GEX_UW_PRICE_WS_RECV_TIMEOUT_SEC", "45")))
     except (TypeError, ValueError):
         return 45.0
+
+
+def _should_reset_reconnect_attempt(session_seconds: float) -> bool:
+  """Reset backoff only after the socket stayed up for a meaningful interval."""
+  return session_seconds >= _STABLE_SESSION_SEC
 
 
 def _is_expected_disconnect(exc: BaseException) -> bool:
@@ -199,6 +205,8 @@ class UWPriceStream:
         asyncio.set_event_loop(loop)
         try:
             loop.run_until_complete(self._run_forever())
+        except Exception:
+            logger.exception("UW price websocket thread exited unexpectedly")
         finally:
             loop.close()
             self._loop = None
@@ -206,6 +214,7 @@ class UWPriceStream:
 
     async def _run_forever(self) -> None:
         from gex_core.env_bootstrap import uw_api_key
+        from websockets.exceptions import ConnectionClosed
 
         api_key = uw_api_key()
         if not api_key:
@@ -213,14 +222,21 @@ class UWPriceStream:
 
         attempt = 0
         while not self._stop.is_set():
+            session_started = time.monotonic()
             try:
                 await self._connect_and_stream(api_key)
-                attempt = 0
+                if self._stop.is_set():
+                    break
+                if _should_reset_reconnect_attempt(time.monotonic() - session_started):
+                    attempt = 0
+                raise ConnectionClosed(None, None)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 if self._stop.is_set():
                     break
+                if _should_reset_reconnect_attempt(time.monotonic() - session_started):
+                    attempt = 0
                 attempt += 1
                 delay = min(_RECONNECT_BASE * (2 ** max(0, attempt - 1)), _RECONNECT_MAX)
                 if _is_expected_disconnect(exc):
@@ -267,7 +283,9 @@ class UWPriceStream:
                         raise ConnectionClosed(None, None) from exc
                     continue
                 except ConnectionClosed:
-                    break
+                    if self._stop.is_set():
+                        break
+                    raise
                 try:
                     message = json.loads(raw)
                 except json.JSONDecodeError:

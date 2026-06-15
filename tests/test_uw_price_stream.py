@@ -1,4 +1,9 @@
-from gex_core.uw_price_stream import UWPriceStream, _is_expected_disconnect, _parse_price_message
+from gex_core.uw_price_stream import (
+    UWPriceStream,
+    _is_expected_disconnect,
+    _parse_price_message,
+    _should_reset_reconnect_attempt,
+)
 
 
 def test_parse_price_message_extracts_close_and_time():
@@ -35,3 +40,9 @@ def test_is_expected_disconnect_recognizes_remote_drop():
     assert _is_expected_disconnect(exc) is True
     assert _is_expected_disconnect(ConnectionResetError()) is True
     assert _is_expected_disconnect(RuntimeError("auth failed")) is False
+
+
+def test_should_reset_reconnect_attempt_only_after_stable_session():
+    assert _should_reset_reconnect_attempt(59.9) is False
+    assert _should_reset_reconnect_attempt(60.0) is True
+    assert _should_reset_reconnect_attempt(3600.0) is True
