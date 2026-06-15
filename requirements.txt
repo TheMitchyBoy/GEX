@@ -6,6 +6,7 @@ streamlit>=1.24.0
 plotly>=5.10.0
 Flask>=2.3.0
 gunicorn>=21.2.0
+websockets>=12.0
 APScheduler>=3.10.4
 yfinance>=0.2.27
 webull-openapi-python-sdk>=1.0.0

@@ -1,4 +1,4 @@
-from gex_core.uw_price_stream import UWPriceStream, _parse_price_message
+from gex_core.uw_price_stream import UWPriceStream, _is_expected_disconnect, _parse_price_message
 
 
 def test_parse_price_message_extracts_close_and_time():
@@ -25,3 +25,13 @@ def test_stream_ingest_and_read_latest():
 
 def test_parse_price_message_ignores_join_ack():
     assert _parse_price_message("price:SPX", {"status": "ok", "response": {}}) is None
+
+
+def test_is_expected_disconnect_recognizes_remote_drop():
+    class FakeClosed(Exception):
+        pass
+
+    exc = FakeClosed("no close frame received or sent")
+    assert _is_expected_disconnect(exc) is True
+    assert _is_expected_disconnect(ConnectionResetError()) is True
+    assert _is_expected_disconnect(RuntimeError("auth failed")) is False

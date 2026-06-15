@@ -25,6 +25,24 @@ _RECONNECT_BASE = float(os.environ.get("GEX_UW_PRICE_WS_RECONNECT_SEC", "3"))
 _RECONNECT_MAX = float(os.environ.get("GEX_UW_PRICE_WS_RECONNECT_MAX_SEC", "60"))
 
 
+def _recv_timeout_sec() -> float:
+    try:
+        return max(15.0, float(os.environ.get("GEX_UW_PRICE_WS_RECV_TIMEOUT_SEC", "45")))
+    except (TypeError, ValueError):
+        return 45.0
+
+
+def _is_expected_disconnect(exc: BaseException) -> bool:
+    """True when UW or the network dropped the socket without a close handshake."""
+    name = type(exc).__name__
+    if name in {"ConnectionClosed", "ConnectionClosedOK", "ConnectionClosedError"}:
+        return True
+    if isinstance(exc, ConnectionResetError):
+        return True
+    message = str(exc).lower()
+    return "no close frame" in message or "connection closed" in message
+
+
 def _max_points() -> int:
     try:
         return max(100, int(os.environ.get("GEX_UW_PRICE_WS_MAX_POINTS", "2500")))
@@ -82,6 +100,7 @@ class UWPriceStream:
         self._status: dict[str, str] = {}
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._ws: Any | None = None
         self._stop = threading.Event()
         self._tickers: tuple[str, ...] = _DEFAULT_TICKERS
         self._connected = False
@@ -115,9 +134,18 @@ class UWPriceStream:
         self._stop.set()
         loop = self._loop
         if loop and loop.is_running():
-            loop.call_soon_threadsafe(lambda: None)
+            loop.call_soon_threadsafe(self._request_close)
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+
+    def _request_close(self) -> None:
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            asyncio.create_task(ws.close())
+        except RuntimeError:
+            pass
 
     def status(self, ticker: str) -> str:
         with self._lock:
@@ -191,13 +219,22 @@ class UWPriceStream:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
+                if self._stop.is_set():
+                    break
                 attempt += 1
                 delay = min(_RECONNECT_BASE * (2 ** max(0, attempt - 1)), _RECONNECT_MAX)
-                logger.warning(
-                    "UW price websocket error (%s); reconnecting in %.1fs",
-                    exc,
-                    delay,
-                )
+                if _is_expected_disconnect(exc):
+                    logger.info(
+                        "UW price websocket disconnected (%s); reconnecting in %.1fs",
+                        exc,
+                        delay,
+                    )
+                else:
+                    logger.warning(
+                        "UW price websocket error (%s); reconnecting in %.1fs",
+                        exc,
+                        delay,
+                    )
                 for ticker in self._tickers:
                     self._set_status(ticker, "reconnecting")
                 self._connected = False
@@ -205,9 +242,13 @@ class UWPriceStream:
 
     async def _connect_and_stream(self, api_key: str) -> None:
         import websockets
+        from websockets.exceptions import ConnectionClosed
 
         uri = f"{_WS_BASE}?token={api_key}"
-        async with websockets.connect(uri, ping_interval=30, ping_timeout=15) as ws:
+        recv_timeout = _recv_timeout_sec()
+        ws = await websockets.connect(uri, open_timeout=20, close_timeout=2)
+        self._ws = ws
+        try:
             for ticker in self._tickers:
                 channel = _price_channel(ticker)
                 await ws.send(json.dumps({"channel": channel, "msg_type": "join"}))
@@ -217,10 +258,16 @@ class UWPriceStream:
 
             while not self._stop.is_set():
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=45.0)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
                 except asyncio.TimeoutError:
-                    await ws.ping()
+                    try:
+                        pong = await ws.ping()
+                        await asyncio.wait_for(pong, timeout=10.0)
+                    except Exception as exc:
+                        raise ConnectionClosed(None, None) from exc
                     continue
+                except ConnectionClosed:
+                    break
                 try:
                     message = json.loads(raw)
                 except json.JSONDecodeError:
@@ -235,6 +282,13 @@ class UWPriceStream:
                 point = _parse_price_message(channel, payload)
                 if point:
                     self._record(point)
+        finally:
+            self._connected = False
+            self._ws = None
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
 
 _STREAM: UWPriceStream | None = None
