@@ -20,6 +20,14 @@ def test_use_postgres_true_with_database_url(monkeypatch):
     assert use_postgres() is True
 
 
+def test_postgres_schema_ddl_includes_all_tables():
+    from gex_core.db import POSTGRES_TABLES, postgres_schema_ddl
+
+    ddl = postgres_schema_ddl()
+    for table in POSTGRES_TABLES:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
+
+
 def test_sqlite_journal_insert_returning_id(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     db = tmp_path / "journal.db"

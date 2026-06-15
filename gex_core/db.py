@@ -345,15 +345,50 @@ def _postgres_schema_statements() -> list[str]:
     return statements
 
 
-def ensure_postgres_schema() -> None:
-    """Create all application tables in Postgres (idempotent)."""
+def postgres_schema_ddl() -> str:
+    """Full PostgreSQL DDL for all application tables (idempotent)."""
+    return ";\n\n".join(_postgres_schema_statements()) + ";\n"
+
+
+def list_postgres_tables() -> list[str]:
+    """Return public table names from the configured PostgreSQL database."""
+    url = database_url()
+    if not url:
+        return []
+    import psycopg
+
+    with psycopg.connect(url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT tablename
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                ORDER BY tablename
+                """
+            )
+            return [str(row[0]) for row in cur.fetchall()]
+
+
+POSTGRES_TABLES = (
+    "snapshots",
+    "trades",
+    "decisions",
+    "trader_state",
+    "llm_predictions",
+    "daily_insights",
+)
+
+
+def ensure_postgres_schema() -> list[str]:
+    """Create all application tables in Postgres (idempotent). Returns table names."""
     global _PG_INITIALIZED
     url = database_url()
     if not url:
-        return
+        return []
     with _PG_INIT_LOCK:
         if _PG_INITIALIZED:
-            return
+            return list_postgres_tables()
         import psycopg
 
         logger.info("Initializing PostgreSQL schema")
@@ -363,6 +398,7 @@ def ensure_postgres_schema() -> None:
                     cur.execute(stmt)
             conn.commit()
         _PG_INITIALIZED = True
+    return list_postgres_tables()
 
 
 @contextmanager
