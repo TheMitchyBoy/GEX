@@ -8,6 +8,8 @@ from gex_core.env_bootstrap import bootstrap_env
 bootstrap_env()
 PY
 
+python3 scripts/init_postgres_schema.py
+
 # Keep HTML dashboard responsive on small Railway instances.
 export GEX_BACKTEST_METRICS="${GEX_BACKTEST_METRICS:-0}"
 export GEX_DASHBOARD_SKIP_BACKTEST="${GEX_DASHBOARD_SKIP_BACKTEST:-1}"

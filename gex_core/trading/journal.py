@@ -4,56 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = _REPO_ROOT / "data" / "trading_journal.db"
-
-_JOURNAL_SCHEMA = """
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'open',
-            option_type TEXT NOT NULL,
-            strike REAL NOT NULL,
-            qty REAL NOT NULL DEFAULT 1,
-            entry_ts TEXT NOT NULL,
-            exit_ts TEXT,
-            entry_spot REAL NOT NULL,
-            exit_spot REAL,
-            entry_premium REAL NOT NULL,
-            exit_premium REAL,
-            pnl_pct REAL,
-            pnl_usd REAL,
-            exit_reason TEXT,
-            signal_type TEXT,
-            signal_strike REAL,
-            signal_gamma REAL,
-            gamma_delta REAL,
-            ai_confidence REAL,
-            ai_reason TEXT,
-            meta_json TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_trades_status ON trades (status, entry_ts DESC);
-        CREATE TABLE IF NOT EXISTS decisions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            action TEXT NOT NULL,
-            payload_json TEXT,
-            ai_verdict TEXT,
-            ai_notes TEXT
-        );
-        CREATE TABLE IF NOT EXISTS trader_state (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        """
-
 
 def db_path() -> Path:
     raw = os.environ.get("GEX_TRADING_DB", "").strip()
@@ -63,17 +19,17 @@ def db_path() -> Path:
     return DEFAULT_DB
 
 
-def _connect() -> sqlite3.Connection:
-    from gex_core.sqlite_util import connect_sqlite
+def _connect():
+    from gex_core.db import get_connection
 
-    return connect_sqlite(db_path(), schema_sql=_JOURNAL_SCHEMA)
+    return get_connection(group="journal", sqlite_path=db_path())
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _row_to_trade(row: sqlite3.Row) -> dict[str, Any]:
+def _row_to_trade(row) -> dict[str, Any]:
     d = dict(row)
     if d.get("meta_json"):
         try:
@@ -151,7 +107,10 @@ def open_trade(
     qty: float = 1.0,
 ) -> int:
     with _connect() as conn:
-        cur = conn.execute(
+        from gex_core.db import insert_returning_id
+
+        trade_id = insert_returning_id(
+            conn,
             """
             INSERT INTO trades (
                 ticker, status, option_type, strike, qty, entry_ts, entry_spot,
@@ -177,7 +136,7 @@ def open_trade(
             ),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        return trade_id
 
 
 def close_trade(

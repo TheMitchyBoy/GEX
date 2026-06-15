@@ -13,33 +13,15 @@ from gex_core.features import safe_float
 
 logger = logging.getLogger(__name__)
 
-_PREDICTION_SCHEMA = """
-        CREATE TABLE IF NOT EXISTS llm_predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            source TEXT NOT NULL,
-            snapshot_ts TEXT,
-            market_date TEXT,
-            created_at TEXT NOT NULL,
-            resolved_at TEXT,
-            payload_json TEXT NOT NULL,
-            actual_json TEXT,
-            outcome_json TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_llm_predictions_open
-            ON llm_predictions (ticker, resolved_at, created_at DESC);
-        """
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _connect():
+    from gex_core.db import get_connection
     from gex_core.trading.journal import db_path
-    from gex_core.sqlite_util import connect_sqlite
 
-    return connect_sqlite(db_path(), schema_sql=_PREDICTION_SCHEMA)
+    return get_connection(group="predictions", sqlite_path=db_path())
 
 
 def log_llm_prediction(
@@ -68,7 +50,10 @@ def log_llm_prediction(
     }
     try:
         with _connect() as conn:
-            cur = conn.execute(
+            from gex_core.db import insert_returning_id
+
+            prediction_id = insert_returning_id(
+                conn,
                 """
                 INSERT INTO llm_predictions (
                     ticker, source, snapshot_ts, market_date, created_at, payload_json
@@ -84,7 +69,7 @@ def log_llm_prediction(
                 ),
             )
             conn.commit()
-            return int(cur.lastrowid)
+            return prediction_id
     except Exception:
         logger.exception("Failed to log LLM prediction for %s", ticker)
         return None

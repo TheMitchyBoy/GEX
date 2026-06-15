@@ -30,30 +30,15 @@ def daily_learning_enabled() -> bool:
         "on",
     }
 
-_INSIGHT_SCHEMA = """
-        CREATE TABLE IF NOT EXISTS daily_insights (
-            ticker TEXT NOT NULL,
-            market_date TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (ticker, market_date, kind)
-        );
-        CREATE INDEX IF NOT EXISTS idx_daily_insights_ticker_date
-            ON daily_insights (ticker, market_date DESC);
-        """
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _connect():
+    from gex_core.db import get_connection
     from gex_core.trading.journal import db_path
-    from gex_core.sqlite_util import connect_sqlite
 
-    return connect_sqlite(db_path(), schema_sql=_INSIGHT_SCHEMA)
+    return get_connection(group="insights", sqlite_path=db_path())
 
 
 def _save_insight(ticker: str, market_date: str, kind: str, payload: dict[str, Any]) -> None:

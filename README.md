@@ -85,6 +85,7 @@ export UW_API_KEY=your-key-here
 |----------|---------|---------|
 | `UW_API_KEY` | (none) | **Required** — Unusual Whales API access |
 | `GEX_DATA_DIR` | `data/` | Exports, SQLite DBs; use `/app/data` on Railway with a volume |
+| `DATABASE_URL` | (none) | Railway PostgreSQL URL — stores journal, predictions, insights, and export index in Postgres |
 | `GEX_DEFAULT_TICKERS` | `SPX` | Symbols refreshed by the scheduler |
 | `GEX_REFRESH_INTERVAL_MINUTES` | `2` | How often new GEX snapshots are fetched (minimum 60s in scheduler) |
 | `GEX_DISABLE_SCHEDULER` | off | Set `1` to disable background refresh |
@@ -151,15 +152,16 @@ docker compose --profile tools run --rm refresh
 ### 6. Deploy to Railway / cloud
 
 1. Set `UW_API_KEY` in the service environment variables.
-2. Mount a **persistent volume** at `/app/data` and set `GEX_DATA_DIR=/app/data`.
-3. Start command: `bash scripts/start_web.sh` (default in the Dockerfile).
-4. Optional first deploy: `GEX_STARTUP_BACKFILL=1` to pull 90 days of intraday history.
-5. `GEX_BACKTEST_METRICS=0` (default) disables walk-forward backtest history loading on the web app. `GEX_DASHBOARD_SKIP_BACKTEST=1` skips backtest panels on dashboard API payloads.
-6. `GEX_DAILY_LEARNING=0` (default) skips the startup lesson cycle and returns a fast disabled response from `/api/agent/daily-strategy`; the Periscope UI loads strategy only when you click **Load today's strategy**. Set `GEX_DAILY_LEARNING=1` to re-enable.
-7. `GEX_PAGE_MINIMAL_LOAD=1` (default) loads **only the current gamma snapshot** on dashboard pages — no historical replay catalog or prior-slice trails. Scheduled refresh still writes every export to `data/exports/` for backfill, training, and backtests. When minimal load is on, `/api/agent/daily-strategy` also skips `_prediction_history` (240 snapshots).
-8. `GEX_PAGE_UW_PEEK_ONLY=1` (default) avoids blocking HTML on live UW HTTP — pages paint from exports/cache immediately; the browser fetches fresh UW data via `?live=1` on strategy/status refresh (4s timeout via `GEX_UW_FETCH_TIMEOUT_SEC`).
-9. After the first backfill, consider `GEX_DASHBOARD_HISTORY_DAYS=30`, `GEX_AUTO_BACKFILL_IF_EMPTY=0`, and `GEX_STARTUP_BACKFILL=0` to reduce disk I/O on deploy.
-10. Railway health check uses `/health/live` only — never `/health/ready` (full disk sync). If the site freezes or shows `ERR_CONNECTION_ABORTED`, keep `GEX_WALL_GEX_AUTO=0`, avoid `GEX_RETRAIN_ON_START=1`, mount `GEX_DATA_DIR=/app/data`, and leave client polls on exports (`GEX_STRATEGY_POLL_SEC=120`, no blocking `live=1` on auto-refresh).
+2. Mount a **persistent volume** at `/app/data` and set `GEX_DATA_DIR=/app/data` (still required for CSV/JSON exports and ML models).
+3. Optional: add a **PostgreSQL** service and link it — Railway injects `DATABASE_URL` automatically. The app stores the export index, trade journal, LLM predictions, and daily insights in Postgres; `scripts/start_web.sh` runs `scripts/init_postgres_schema.py` on boot.
+4. Start command: `bash scripts/start_web.sh` (default in the Dockerfile).
+5. Optional first deploy: `GEX_STARTUP_BACKFILL=1` to pull 90 days of intraday history.
+6. `GEX_BACKTEST_METRICS=0` (default) disables walk-forward backtest history loading on the web app. `GEX_DASHBOARD_SKIP_BACKTEST=1` skips backtest panels on dashboard API payloads.
+7. `GEX_DAILY_LEARNING=0` (default) skips the startup lesson cycle and returns a fast disabled response from `/api/agent/daily-strategy`; the Periscope UI loads strategy only when you click **Load today's strategy**. Set `GEX_DAILY_LEARNING=1` to re-enable.
+8. `GEX_PAGE_MINIMAL_LOAD=1` (default) loads **only the current gamma snapshot** on dashboard pages — no historical replay catalog or prior-slice trails. Scheduled refresh still writes every export to `data/exports/` for backfill, training, and backtests. When minimal load is on, `/api/agent/daily-strategy` also skips `_prediction_history` (240 snapshots).
+9. `GEX_PAGE_UW_PEEK_ONLY=1` (default) avoids blocking HTML on live UW HTTP — pages paint from exports/cache immediately; the browser fetches fresh UW data via `?live=1` on strategy/status refresh (4s timeout via `GEX_UW_FETCH_TIMEOUT_SEC`).
+10. After the first backfill, consider `GEX_DASHBOARD_HISTORY_DAYS=30`, `GEX_AUTO_BACKFILL_IF_EMPTY=0`, and `GEX_STARTUP_BACKFILL=0` to reduce disk I/O on deploy.
+11. Railway health check uses `/health/live` only — never `/health/ready` (full disk sync). If the site freezes or shows `ERR_CONNECTION_ABORTED`, keep `GEX_WALL_GEX_AUTO=0`, avoid `GEX_RETRAIN_ON_START=1`, mount `GEX_DATA_DIR=/app/data`, and leave client polls on exports (`GEX_STRATEGY_POLL_SEC=120`, no blocking `live=1` on auto-refresh).
 
 ### 7. Pages and auto-traders
 

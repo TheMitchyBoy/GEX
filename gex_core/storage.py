@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,28 +32,10 @@ def db_path() -> Path:
     return DEFAULT_DB_PATH
 
 
-_INDEX_SCHEMA = """
-        CREATE TABLE IF NOT EXISTS snapshots (
-            ticker TEXT NOT NULL,
-            ts TEXT NOT NULL,
-            market_date TEXT,
-            spot REAL,
-            total_gex REAL,
-            regime TEXT,
-            summary_path TEXT,
-            strike_path TEXT,
-            indexed_at TEXT,
-            PRIMARY KEY (ticker, ts)
-        );
-        CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_ts
-            ON snapshots (ticker, ts DESC);
-        """
+def _connect(path: Path | None = None):
+    from gex_core.db import get_connection
 
-
-def _connect(path: Path | None = None) -> sqlite3.Connection:
-    from gex_core.sqlite_util import connect_sqlite
-
-    return connect_sqlite(path or db_path(), schema_sql=_INDEX_SCHEMA)
+    return get_connection(group="index", sqlite_path=db_path(), sqlite_path_override=path)
 
 
 def upsert_snapshot(
@@ -111,7 +92,7 @@ def latest_timestamp(ticker: str, export_dir: Path | None = None, path: Path | N
             ).fetchone()
         if row:
             return str(row["ts"])
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("SQLite latest_timestamp failed: %s", exc)
     timestamps = scan_export_timestamps(ticker, export_dir or EXPORT_DIR)
     return timestamps[-1] if timestamps else None
@@ -127,7 +108,7 @@ def list_indexed_timestamps(ticker: str, path: Path | None = None) -> list[str]:
             ).fetchall()
         if rows:
             return [str(r["ts"]) for r in rows]
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("SQLite list_indexed_timestamps failed: %s", exc)
     return []
 
@@ -147,7 +128,7 @@ def list_indexed_dates(ticker: str, path: Path | None = None) -> list[str]:
                 (ticker,),
             ).fetchall()
         return [str(r["day"]) for r in rows if r["day"]]
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("SQLite list_indexed_dates failed: %s", exc)
         return []
 
@@ -172,7 +153,7 @@ def list_indexed_timestamps_for_date(
                 (ticker, market_date),
             ).fetchall()
         return [str(r["ts"]) for r in rows]
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("SQLite list_indexed_timestamps_for_date failed: %s", exc)
         return []
 
@@ -197,7 +178,7 @@ def list_indexed_timestamps_before_date(
                 (ticker, market_date),
             ).fetchall()
         return [str(r["ts"]) for r in rows]
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("SQLite list_indexed_timestamps_before_date failed: %s", exc)
         return []
 
@@ -234,7 +215,7 @@ def prune_stale_index_entries(
                 [(ticker, ts) for ts in stale],
             )
             conn.commit()
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("SQLite prune_stale_index_entries failed: %s", exc)
         return 0
     logger.info(
@@ -354,7 +335,7 @@ def fetch_index_spot_series(
                 """,
                 (ticker,),
             ).fetchall()
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("fetch_index_spot_series failed: %s", exc)
         return []
 
