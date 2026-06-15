@@ -10,6 +10,10 @@ PY
 
 python3 scripts/init_postgres_schema.py
 
+if [ "${GEX_MIGRATE_SQLITE:-}" != "0" ]; then
+  python3 scripts/migrate_sqlite_to_postgres.py --if-needed || true
+fi
+
 # Keep HTML dashboard responsive on small Railway instances.
 export GEX_BACKTEST_METRICS="${GEX_BACKTEST_METRICS:-0}"
 export GEX_DASHBOARD_SKIP_BACKTEST="${GEX_DASHBOARD_SKIP_BACKTEST:-1}"

@@ -153,7 +153,7 @@ docker compose --profile tools run --rm refresh
 
 1. Set `UW_API_KEY` in the service environment variables.
 2. Mount a **persistent volume** at `/app/data` and set `GEX_DATA_DIR=/app/data` (still required for CSV/JSON exports and ML models).
-3. Optional: add a **PostgreSQL** service and link it — Railway injects `DATABASE_URL` automatically. The app stores the export index, trade journal, LLM predictions, and daily insights in Postgres; `scripts/start_web.sh` runs `scripts/init_postgres_schema.py` on boot.
+3. Optional: add a **PostgreSQL** service and link it — Railway injects `DATABASE_URL` automatically. The app stores the export index, trade journal, LLM predictions, and daily insights in Postgres; `scripts/start_web.sh` runs `scripts/init_postgres_schema.py` on boot and auto-migrates legacy SQLite data when Postgres is empty (`GEX_MIGRATE_SQLITE=1` forces migration; `GEX_MIGRATE_SQLITE=0` disables it).
 4. Start command: `bash scripts/start_web.sh` (default in the Dockerfile).
 5. Optional first deploy: `GEX_STARTUP_BACKFILL=1` to pull 90 days of intraday history.
 6. `GEX_BACKTEST_METRICS=0` (default) disables walk-forward backtest history loading on the web app. `GEX_DASHBOARD_SKIP_BACKTEST=1` skips backtest panels on dashboard API payloads.
