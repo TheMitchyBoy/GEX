@@ -559,21 +559,56 @@ def fetch_uw_gex(
 
     gex_by_expiration = fetch_uw_greek_exposure_by_expiration(ticker, api_key=api_key, date=date)
 
-    cumulative_gex = gex_by_strike.cumsum()
-    total_gex_bn = float(gex_by_strike.sum())
     market_date = None
     if not spot_df.empty and spot_df.attrs.get("market_date"):
         market_date = spot_df.attrs["market_date"]
     elif not greek_df.empty and greek_df.attrs.get("market_date"):
         market_date = greek_df.attrs["market_date"]
+
+    from gex_core.strike_filter import filter_strikes_for_storage, resolve_storage_strike_profile, strikes_bracket_spot
+
+    storage_strikes, strike_source = resolve_storage_strike_profile(
+        gex_by_strike,
+        spot=spot,
+        greek_df=greek_df if not greek_df.empty else None,
+    )
+    if len(storage_strikes) != len(gex_by_strike):
+        logger.info(
+            "UW strike filter for %s: %d -> %d rows (source=%s, spot=%.2f)",
+            ticker,
+            len(gex_by_strike),
+            len(storage_strikes),
+            strike_source,
+            spot,
+        )
+    gex_by_strike = storage_strikes
+    gex_by_strike.name = "GEX"
+    gex_by_strike.index.name = "strike"
+    gex_by_strike.attrs["spot_exposures_df"] = spot_df
+    gex_by_strike.attrs["greek_exposure_df"] = greek_df if not greek_df.empty else None
+    gex_by_strike.attrs["uw_endpoint"] = "spot-exposures/strike"
+    gex_by_strike.attrs["strike_profile_source"] = strike_source
     if market_date:
         gex_by_strike.attrs["market_date"] = market_date
+
+    cumulative_gex = gex_by_strike.cumsum()
+    total_gex_bn = float(gex_by_strike.sum())
+    if market_date:
         cumulative_gex.attrs["market_date"] = market_date
         if not gex_by_expiration.empty:
             gex_by_expiration.attrs["market_date"] = market_date
 
     surface_data = spot_exposure_surface_df(spot_df, "gamma")
-    if surface_data.empty and not greek_df.empty and {"strike", "net_gex"}.issubset(greek_df.columns):
+    if (
+        (surface_data.empty or not strikes_bracket_spot(
+            pd.Series(surface_data["GEX"].values, index=surface_data["strike"].values)
+            if {"strike", "GEX"}.issubset(surface_data.columns)
+            else pd.Series(dtype=float),
+            spot,
+        ))
+        and not greek_df.empty
+        and {"strike", "net_gex"}.issubset(greek_df.columns)
+    ):
         surface_cols = ["strike", "net_gex"]
         if "call_gex" in greek_df.columns:
             surface_cols.append("call_gex")
@@ -581,13 +616,19 @@ def fetch_uw_gex(
             surface_cols.append("put_gex")
         surface_data = greek_df[surface_cols].rename(columns={"net_gex": "GEX"}).copy()
 
-    gex_by_strike.attrs["spot_exposures_df"] = spot_df
-    gex_by_strike.attrs["greek_exposure_df"] = greek_df if not greek_df.empty else None
-    gex_by_strike.attrs["uw_endpoint"] = "spot-exposures/strike"
+    if spot > 0 and not surface_data.empty and "strike" in surface_data.columns and "GEX" in surface_data.columns:
+        kept = filter_strikes_for_storage(
+            pd.Series(surface_data["GEX"].values, index=surface_data["strike"].values),
+            spot,
+        )
+        surface_data = surface_data[surface_data["strike"].isin(kept.index)].copy()
 
     logger.info(
-        "UW GEX for %s: total=%.3f Bn$, strikes=%d (spot-exposures/strike)",
-        ticker, total_gex_bn, len(gex_by_strike),
+        "UW GEX for %s: total=%.3f Bn$, strikes=%d (%s)",
+        ticker,
+        total_gex_bn,
+        len(gex_by_strike),
+        strike_source,
     )
 
     return spot, GexAggregates(

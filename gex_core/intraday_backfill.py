@@ -313,7 +313,11 @@ def backfill_intraday_minutes(
             continue
         spot = float(row.get("price") or 0.0)
         total_gex_bn = minute_row_total_gex_bn(row)
-        cumulative = base_strike.cumsum()
+        strike_profile = scale_strike_profile(base_strike, total_gex_bn)
+        from gex_core.strike_filter import filter_strikes_for_storage
+
+        strike_profile = filter_strikes_for_storage(strike_profile, spot)
+        cumulative = strike_profile.cumsum()
         summary = _build_summary(
             ticker,
             market_date=market_date,
@@ -330,7 +334,7 @@ def backfill_intraday_minutes(
         summary["strike_profile_confidence"] = "low"
         write_snapshot_export(
             ticker,
-            gex_by_strike=base_strike,
+            gex_by_strike=strike_profile,
             cumulative_gex=cumulative,
             greek_exposure_df=greek_exposure_df if not greek_exposure_df.empty else None,
             summary=summary,

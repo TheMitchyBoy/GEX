@@ -50,7 +50,7 @@ LIMIT 24;
 
 ## snapshot_strikes
 
-Per-strike gamma profile for each snapshot.
+Per-strike gamma profile for each snapshot. Rows are filtered to **±12% of spot** by default (see `GEX_STORE_STRIKE_DISTANCE_PCT`); far OTM strikes like 200 are UW chain noise and are excluded from storage. Full chain remains in `greek_exposure_json` when fetched.
 
 | Column | Type | Description |
 |--------|------|-------------|
