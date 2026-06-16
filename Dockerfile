@@ -29,6 +29,7 @@ RUN useradd --create-home --uid 10001 --shell /bin/bash appuser \
     && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/start_processor.sh /app/scripts/start_web.sh
 
 ENV PORT=8080
+ENV GEX_PROCESSOR_MODE=1
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \

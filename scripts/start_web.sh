@@ -82,6 +82,13 @@ then
   ( _run_background_train || true ) &
 fi
 
+if ! python3 -c "import gunicorn" 2>/dev/null; then
+  echo "ERROR: gunicorn is not installed (processor image uses requirements-processor.txt only)." >&2
+  echo "Use: bash scripts/start_processor.sh" >&2
+  echo "Or install the web stack: pip install -r requirements-web.txt" >&2
+  exit 1
+fi
+
 exec python3 -m gunicorn \
   --bind "0.0.0.0:${PORT:-8080}" \
   --workers 1 \
