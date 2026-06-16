@@ -84,6 +84,14 @@ def _copy_strike_rows(cur: Any, table: str, rows: list[tuple[Any, ...]]) -> None
             copy.write_row(row)
 
 
+def _notify_gex_snapshot(conn: Any, payload: dict[str, Any]) -> None:
+    """Publish snapshot write events to LISTEN/NOTIFY subscribers."""
+    try:
+        conn.notify("gex_snapshot", json.dumps(payload))
+    except Exception:
+        logger.debug("NOTIFY gex_snapshot failed", exc_info=True)
+
+
 def _post_write_quality_hooks(
     *,
     ticker: str,
@@ -325,7 +333,7 @@ def write_snapshot_to_postgres(
                     uw_fetch_ms=uw_fetch_ms,
                     postgres_write_ms=(time.perf_counter() - start) * 1000,
                 )
-                cur.execute("NOTIFY gex_snapshot, %s", (json.dumps({"ticker": ticker, "ts": ts, "skipped": True}),))
+            _notify_gex_snapshot(conn, {"ticker": ticker, "ts": ts, "skipped": True})
             conn.commit()
         logger.info("Skipped duplicate snapshot %s %s", ticker, ts)
         return SnapshotWriteResult(
@@ -431,10 +439,10 @@ def write_snapshot_to_postgres(
                 data_lag_sec=prep.features.get("data_lag_sec"),
                 uw_rate_limit=prep.features.get("uw_rate_limit_json"),
             )
-            cur.execute(
-                "NOTIFY gex_snapshot, %s",
-                (json.dumps({"ticker": ticker, "ts": ts, "status": prep.validation.status}),),
-            )
+        _notify_gex_snapshot(
+            conn,
+            {"ticker": ticker, "ts": ts, "status": prep.validation.status},
+        )
         conn.commit()
     try:
         refresh_latest_snapshot_view()

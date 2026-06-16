@@ -36,6 +36,18 @@ def test_write_snapshot_to_postgres_noop_without_database(monkeypatch):
     )
 
 
+def test_notify_gex_snapshot_uses_connection_notify():
+    from unittest.mock import MagicMock
+
+    from gex_core.pg_snapshot_store import _notify_gex_snapshot
+
+    conn = MagicMock()
+    _notify_gex_snapshot(conn, {"ticker": "SPX", "ts": "2026-06-01_120000", "status": "ok"})
+    conn.notify.assert_called_once()
+    assert conn.notify.call_args[0][0] == "gex_snapshot"
+    assert "SPX" in conn.notify.call_args[0][1]
+
+
 @pytest.mark.skipif(
     not __import__("os").environ.get("DATABASE_URL"),
     reason="DATABASE_URL required for integration test",
