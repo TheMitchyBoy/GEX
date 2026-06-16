@@ -28,4 +28,8 @@ if [ "${GEX_MIGRATE_SQLITE}" != "0" ]; then
   python3 scripts/migrate_sqlite_to_postgres.py --if-needed || true
 fi
 
+if [ "${GEX_IMPORT_EXPORTS_ON_START:-0}" = "1" ]; then
+  python3 scripts/import_exports_to_postgres.py --if-missing || true
+fi
+
 exec python3 -m gex_core.processor

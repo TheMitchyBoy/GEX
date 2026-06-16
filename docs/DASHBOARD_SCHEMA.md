@@ -155,6 +155,16 @@ Deploy this repo with:
 bash scripts/start_processor.sh
 ```
 
+### One-time CSV → Postgres import
+
+If strike CSVs exist on disk (e.g. after `GEX_EXPORT_CSV=1` or a local backfill) but external dashboards need full Postgres payloads (`snapshot_strikes`, `summary_json`, features), run:
+
+```bash
+python3 scripts/import_exports_to_postgres.py --tickers SPX
+```
+
+Set `GEX_IMPORT_EXPORTS_ON_START=1` on the processor service to import any missing timestamps on boot.
+
 Required env:
 
 - `DATABASE_URL` — Railway PostgreSQL
