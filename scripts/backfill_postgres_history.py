@@ -88,11 +88,19 @@ def main() -> int:
             continue
 
         since_date = None
+        only_dates = None
         if args.catch_up and not args.force:
-            from gex_core.bootstrap_data import postgres_latest_market_date
+            from gex_core.bootstrap_data import missing_market_dates, postgres_latest_market_date
 
+            only_dates = missing_market_dates(ticker, days=args.intraday_days)
             since_date = postgres_latest_market_date(ticker) or ""
-            print(f"{ticker}: catch-up since {since_date or 'beginning of lookback'}")
+            print(
+                f"{ticker}: catch-up {len(only_dates)} missing days"
+                + (f" (latest stored {since_date})" if since_date else "")
+            )
+            if not only_dates:
+                print(f"{ticker}: no missing days in {args.intraday_days}-day window")
+                continue
         elif args.if_sparse and not args.force:
             since_date = ""
 
@@ -103,6 +111,7 @@ def main() -> int:
                 force=args.force,
                 interval_minutes=args.interval_minutes,
                 since_date=since_date,
+                only_dates=only_dates,
             )
             total = sum(results.values())
             print(
@@ -115,7 +124,13 @@ def main() -> int:
             ok = ok or total > 0
 
         if not args.intraday_only and args.daily_days > 0:
-            results = backfill_recent_daily(ticker, days=args.daily_days, force=args.force)
+            results = backfill_recent_daily(
+                ticker,
+                days=args.daily_days,
+                force=args.force,
+                only_dates=only_dates,
+                since_date=since_date,
+            )
             saved = sum(1 for value in results.values() if value)
             print(f"{ticker} daily: saved {saved}/{len(results)} EOD strike snapshots")
             ok = ok or saved > 0

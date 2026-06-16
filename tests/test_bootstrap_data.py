@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from gex_core.bootstrap_data import (
     backfill_min_snapshots,
+    missing_market_dates,
     needs_postgres_bootstrap,
     needs_postgres_catchup,
     postgres_latest_market_date,
@@ -30,16 +31,39 @@ def test_needs_postgres_bootstrap_when_enough(monkeypatch):
 
 def test_needs_postgres_catchup_when_latest_before_today(monkeypatch):
     monkeypatch.setattr("gex_core.db.use_postgres", lambda: True)
-    monkeypatch.setattr("gex_core.bootstrap_data.postgres_latest_market_date", lambda ticker: "2026-04-30")
-    monkeypatch.setattr("gex_core.market_time.market_today", lambda: "2026-06-15")
+    monkeypatch.setattr(
+        "gex_core.bootstrap_data.missing_market_dates",
+        lambda ticker, days=None: ["2026-06-10", "2026-06-11"],
+    )
     assert needs_postgres_catchup("SPX") is True
 
 
 def test_needs_postgres_catchup_when_current(monkeypatch):
     monkeypatch.setattr("gex_core.db.use_postgres", lambda: True)
-    monkeypatch.setattr("gex_core.bootstrap_data.postgres_latest_market_date", lambda ticker: "2026-06-15")
-    monkeypatch.setattr("gex_core.market_time.market_today", lambda: "2026-06-15")
+    monkeypatch.setattr("gex_core.bootstrap_data.missing_market_dates", lambda ticker, days=None: [])
     assert needs_postgres_catchup("SPX") is False
+
+
+def test_missing_market_dates_detects_gap_with_newer_latest(monkeypatch):
+    monkeypatch.setattr(
+        "gex_core.bootstrap_data.postgres_covered_market_dates",
+        lambda ticker: {"2026-06-05", "2026-06-16"},
+    )
+    monkeypatch.setattr(
+        "gex_core.refresh.recent_market_dates",
+        lambda days, today=None: [
+            "2026-06-09",
+            "2026-06-10",
+            "2026-06-11",
+            "2026-06-12",
+            "2026-06-13",
+            "2026-06-16",
+        ],
+    )
+
+    missing = missing_market_dates("SPX", days=7)
+
+    assert missing == ["2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12"]
 
 
 def test_postgres_latest_market_date_from_timestamp(monkeypatch):
@@ -53,7 +77,7 @@ def test_sync_postgres_snapshots_runs_backfill_when_stale(monkeypatch):
     monkeypatch.setattr("gex_core.db.ensure_postgres_schema", lambda: None)
     monkeypatch.setattr("gex_core.bootstrap_data._import_local_exports", lambda *a, **k: 0)
     monkeypatch.setattr("gex_core.storage.count_snapshots", lambda ticker: 120)
-    monkeypatch.setattr("gex_core.bootstrap_data.needs_postgres_catchup", lambda ticker: True)
+    monkeypatch.setattr("gex_core.bootstrap_data.missing_market_dates", lambda ticker, days=None: ["2026-06-10"])
     monkeypatch.setattr("gex_core.bootstrap_data.postgres_latest_market_date", lambda ticker: "2026-04-30")
     monkeypatch.setattr(
         "gex_core.bootstrap_data._run_uw_backfill",
@@ -73,7 +97,7 @@ def test_sync_postgres_snapshots_skips_when_current(monkeypatch):
     monkeypatch.setattr("gex_core.db.ensure_postgres_schema", lambda: None)
     monkeypatch.setattr("gex_core.bootstrap_data._import_local_exports", lambda *a, **k: 0)
     monkeypatch.setattr("gex_core.storage.count_snapshots", lambda ticker: 120)
-    monkeypatch.setattr("gex_core.bootstrap_data.needs_postgres_catchup", lambda ticker: False)
+    monkeypatch.setattr("gex_core.bootstrap_data.missing_market_dates", lambda ticker, days=None: [])
     monkeypatch.setattr("gex_core.bootstrap_data.postgres_latest_market_date", lambda ticker: "2026-06-15")
 
     from gex_core.bootstrap_data import sync_postgres_snapshots
@@ -93,3 +117,22 @@ def test_backfill_recent_intraday_empty_since_date_ignores_cursor(monkeypatch):
 
     results = backfill_recent_intraday("SPX", days=2, since_date="")
     assert results == {"2026-06-12": 1, "2026-06-13": 1}
+
+
+def test_backfill_recent_intraday_only_dates(monkeypatch):
+    from gex_core.intraday_backfill import backfill_recent_intraday
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "gex_core.intraday_backfill.backfill_intraday_minutes",
+        lambda ticker, market_date, **kwargs: calls.append(market_date) or 1,
+    )
+    monkeypatch.setattr("gex_core.processor_state.mark_backfilled_through", lambda *a, **k: None)
+
+    results = backfill_recent_intraday(
+        "SPX",
+        only_dates=["2026-06-09", "2026-06-10", "2026-06-16"],
+    )
+
+    assert calls == ["2026-06-09", "2026-06-10", "2026-06-16"]
+    assert sum(results.values()) == 3

@@ -34,17 +34,41 @@ def postgres_latest_market_date(ticker: str) -> str | None:
     return latest.split("_", 1)[0]
 
 
-def needs_postgres_catchup(ticker: str) -> bool:
-    """True when Postgres latest snapshot is before today's market calendar date."""
+def catchup_lookback_days() -> int:
+    try:
+        return int(os.environ.get("GEX_CATCHUP_LOOKBACK_DAYS", os.environ.get("GEX_INTRADAY_BACKFILL_DAYS", "90")))
+    except (TypeError, ValueError):
+        return 90
+
+
+def postgres_covered_market_dates(ticker: str) -> set[str]:
+    from gex_core.storage import list_postgres_snapshot_timestamps
+
+    return {ts.split("_", 1)[0] for ts in list_postgres_snapshot_timestamps(ticker.upper())}
+
+
+def missing_market_dates(ticker: str, *, days: int | None = None) -> list[str]:
+    """Trading days in the lookback window with no Postgres snapshots."""
+    from datetime import date
+
+    from gex_core.market_time import is_equity_trading_day, market_today
+    from gex_core.refresh import recent_market_dates
+
+    ticker = ticker.upper()
+    days = days if days is not None else catchup_lookback_days()
+    anchor = date.fromisoformat(market_today())
+    expected = recent_market_dates(days=days, today=anchor)
+    covered = postgres_covered_market_dates(ticker)
+    return [day for day in expected if day not in covered and is_equity_trading_day(day)]
+
+
+def needs_postgres_catchup(ticker: str, *, lookback_days: int | None = None) -> bool:
+    """True when any trading day in the lookback window has no Postgres snapshots."""
     from gex_core.db import use_postgres
-    from gex_core.market_time import market_today
 
     if not use_postgres():
         return False
-    latest_day = postgres_latest_market_date(ticker)
-    if not latest_day:
-        return True
-    return latest_day < market_today()
+    return bool(missing_market_dates(ticker, days=lookback_days))
 
 
 def local_export_strike_count(export_dir: Path | None = None) -> int:
@@ -87,12 +111,14 @@ def _configure_backfill_env() -> None:
     os.environ.setdefault("GEX_BACKFILL_MODE", "1")
     os.environ.setdefault("GEX_HARD_REJECT_TOTAL_GEX_MISMATCH", "0")
     os.environ.setdefault("GEX_MIN_STRIKE_COUNT", "3")
+    os.environ.setdefault("GEX_SKIP_DUPLICATE_SNAPSHOTS", "0")
 
 
 def _run_uw_backfill(
     ticker: str,
     *,
-    since_date: str | None,
+    since_date: str | None = None,
+    only_dates: list[str] | None = None,
     intraday_days: int | None = None,
     daily_days: int | None = None,
     interval_minutes: int | None = None,
@@ -106,17 +132,30 @@ def _run_uw_backfill(
     interval = interval_minutes if interval_minutes is not None else int(
         os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10")
     )
-    since = since_date if since_date is not None else postgres_latest_market_date(ticker)
+    dates = only_dates
+    if dates is None:
+        dates = missing_market_dates(ticker, days=intraday_days)
+    if not dates and since_date:
+        since = since_date
+    else:
+        since = None
 
     intraday = backfill_recent_intraday(
         ticker,
         days=intraday_days,
         interval_minutes=interval,
-        since_date=since or "",
+        since_date=since if dates is None else None,
+        only_dates=dates,
     )
-    daily = backfill_recent_daily(ticker, days=daily_days)
+    daily = backfill_recent_daily(
+        ticker,
+        days=daily_days,
+        only_dates=dates,
+        since_date=since if dates is None else None,
+    )
     return {
         "since_date": since,
+        "missing_dates": dates or [],
         "intraday_saved": sum(intraday.values()),
         "daily_saved": sum(1 for value in daily.values() if value),
         "intraday_days": intraday_days,
@@ -162,8 +201,10 @@ def sync_postgres_snapshots(
     report["snapshot_count_after"] = count_snapshots(ticker)
     report["latest_market_date_after"] = postgres_latest_market_date(ticker)
 
+    missing_days = missing_market_dates(ticker)
+    report["missing_market_dates"] = missing_days
     sparse = report["snapshot_count_after"] < backfill_min_snapshots()
-    stale = needs_postgres_catchup(ticker)
+    stale = bool(missing_days)
     if not force_backfill and not sparse and not stale:
         report["skipped"] = True
         report["reason"] = "up_to_date"
@@ -180,6 +221,7 @@ def sync_postgres_snapshots(
     try:
         backfill_report = _run_uw_backfill(
             ticker,
+            only_dates=missing_days,
             since_date=report["latest_market_date_after"] or report["latest_market_date_before"],
         )
         report.update(backfill_report)

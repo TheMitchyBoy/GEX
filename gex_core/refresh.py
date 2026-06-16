@@ -138,9 +138,9 @@ def refresh_tickers(
 
 def recent_market_dates(days: int = 7, today: date | None = None) -> list[str]:
     """Return equity trading dates from oldest to newest over the recent calendar window."""
-    from gex_core.market_time import is_equity_trading_day
+    from gex_core.market_time import is_equity_trading_day, market_today
 
-    anchor = today or date.today()
+    anchor = today or date.fromisoformat(market_today())
     days = max(1, days)
     return [
         (anchor - timedelta(days=offset)).isoformat()

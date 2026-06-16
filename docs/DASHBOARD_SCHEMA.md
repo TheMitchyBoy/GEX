@@ -173,7 +173,7 @@ When Postgres already has history but is behind (e.g. latest snapshot is 2026-04
 python3 scripts/sync_postgres_snapshots.py --tickers SPX
 ```
 
-This imports any on-disk CSV exports missing from Postgres, then pulls UW intraday history for all trading days after the latest stored `market_date`. Equivalent manual backfill:
+This imports any on-disk CSV exports missing from Postgres, then pulls UW intraday history for **each trading day in the lookback window that has zero snapshots** (not only days after the latest stored date). Equivalent manual backfill:
 
 ```bash
 python3 scripts/backfill_postgres_history.py --tickers SPX --catch-up

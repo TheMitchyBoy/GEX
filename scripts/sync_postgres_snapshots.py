@@ -15,6 +15,7 @@ from gex_core.env_bootstrap import bootstrap_env
 bootstrap_env()
 
 from gex_core.bootstrap_data import (
+    missing_market_dates,
     needs_postgres_catchup,
     postgres_latest_market_date,
     sync_postgres_snapshots,
@@ -39,6 +40,12 @@ def main() -> int:
         action="store_true",
         help="Run UW backfill even when Postgres already has today's market date",
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Lookback window for missing-day detection (default: GEX_CATCHUP_LOOKBACK_DAYS)",
+    )
     args = parser.parse_args()
 
     configure_data_paths()
@@ -55,7 +62,10 @@ def main() -> int:
         before = count_snapshots(ticker)
         latest_before = latest_timestamp(ticker)
         print(f"{ticker}: {before} snapshots, latest={latest_before or 'none'}")
-        if not args.force_backfill and not needs_postgres_catchup(ticker):
+        missing = missing_market_dates(ticker, days=args.days) if args.days else missing_market_dates(ticker)
+        if missing:
+            print(f"{ticker}: missing {len(missing)} trading days: {missing[0]} .. {missing[-1]}")
+        if not args.force_backfill and not needs_postgres_catchup(ticker, lookback_days=args.days):
             print(f"{ticker}: already current (market_date={postgres_latest_market_date(ticker)})")
             continue
 

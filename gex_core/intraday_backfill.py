@@ -459,18 +459,22 @@ def backfill_recent_intraday(
     force: bool = False,
     interval_minutes: int | None = None,
     since_date: str | None = None,
+    only_dates: list[str] | None = None,
 ) -> dict[str, int]:
     """Backfill intraday exports for recent weekdays."""
     from gex_core.processor_state import last_backfilled_date, mark_backfilled_through
 
     days = days if days is not None else DEFAULT_BACKFILL_DAYS
-    if since_date is None:
-        since_date = last_backfilled_date(ticker)
-    elif since_date == "":
-        since_date = None
-    market_dates = recent_market_dates(days=days)
-    if since_date:
-        market_dates = [day for day in market_dates if day > since_date[:10]]
+    if only_dates is not None:
+        market_dates = [day for day in only_dates if is_equity_trading_day(day)]
+    else:
+        if since_date is None:
+            since_date = last_backfilled_date(ticker)
+        elif since_date == "":
+            since_date = None
+        market_dates = recent_market_dates(days=days)
+        if since_date:
+            market_dates = [day for day in market_dates if day > since_date[:10]]
     results: dict[str, int] = {}
     for market_date in market_dates:
         results[market_date] = backfill_intraday_minutes(
@@ -493,11 +497,19 @@ def backfill_recent_daily(
     export_dir: Path | None = None,
     api_key: str | None = None,
     force: bool = False,
+    since_date: str | None = None,
+    only_dates: list[str] | None = None,
 ) -> dict[str, bool]:
     """Backfill EOD strike snapshots for recent weekdays."""
     days = days if days is not None else DEFAULT_DAILY_BACKFILL_DAYS
+    if only_dates is not None:
+        market_dates = [day for day in only_dates if is_equity_trading_day(day)]
+    else:
+        market_dates = recent_market_dates(days=days)
+        if since_date:
+            market_dates = [day for day in market_dates if day > since_date[:10]]
     results: dict[str, bool] = {}
-    for market_date in recent_market_dates(days=days):
+    for market_date in market_dates:
         results[market_date] = backfill_daily_strike_snapshots(
             ticker,
             market_date,
