@@ -22,7 +22,7 @@ RUN if [ "$INSTALL_HERMES" = "1" ]; then bash scripts/install_agent.sh; fi
 RUN useradd --create-home --uid 10001 --shell /bin/bash appuser \
     && mkdir -p /app/data/exports /app/data /app/img \
     && chown -R appuser:appuser /app \
-    && chmod +x /app/scripts/docker-entrypoint.sh
+    && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/start_processor.sh /app/scripts/start_web.sh
 
 ENV PORT=8080
 EXPOSE 8080
@@ -31,4 +31,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\", \"8080\")}/health/live', timeout=4)"
 
 ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
-CMD ["bash", "scripts/start_web.sh"]
+CMD ["bash", "scripts/start_processor.sh"]

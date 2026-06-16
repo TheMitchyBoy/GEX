@@ -42,10 +42,16 @@ INDEX_SCHEMA_PG = """
             summary_path TEXT,
             strike_path TEXT,
             indexed_at TEXT,
+            summary_json JSONB,
+            expiration_json JSONB,
+            surface_json JSONB,
+            greek_exposure_json JSONB,
             PRIMARY KEY (ticker, ts)
         );
         CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_ts
             ON snapshots (ticker, ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_date
+            ON snapshots (ticker, market_date);
         """
 
 JOURNAL_SCHEMA_SQLITE = """
@@ -194,12 +200,47 @@ INSIGHT_SCHEMA_PG = """
             ON daily_insights (ticker, market_date DESC);
         """
 
+STRIKES_SCHEMA_SQLITE = """
+        CREATE TABLE IF NOT EXISTS snapshot_strikes (
+            ticker TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            strike REAL NOT NULL,
+            gex_bn_per_pct REAL,
+            cumulative_gex_bn_per_pct REAL,
+            PRIMARY KEY (ticker, ts, strike)
+        );
+        CREATE INDEX IF NOT EXISTS idx_snapshot_strikes_ticker_ts
+            ON snapshot_strikes (ticker, ts);
+        """
+
+STRIKES_SCHEMA_PG = """
+        CREATE TABLE IF NOT EXISTS snapshot_strikes (
+            ticker TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            strike DOUBLE PRECISION NOT NULL,
+            gex_bn_per_pct DOUBLE PRECISION,
+            cumulative_gex_bn_per_pct DOUBLE PRECISION,
+            PRIMARY KEY (ticker, ts, strike)
+        );
+        CREATE INDEX IF NOT EXISTS idx_snapshot_strikes_ticker_ts
+            ON snapshot_strikes (ticker, ts);
+        """
+
 _SCHEMA_BY_GROUP: dict[str, tuple[str, str]] = {
     "index": (INDEX_SCHEMA_SQLITE, INDEX_SCHEMA_PG),
     "journal": (JOURNAL_SCHEMA_SQLITE, JOURNAL_SCHEMA_PG),
     "predictions": (PREDICTION_SCHEMA_SQLITE, PREDICTION_SCHEMA_PG),
     "insights": (INSIGHT_SCHEMA_SQLITE, INSIGHT_SCHEMA_PG),
+    "strikes": (STRIKES_SCHEMA_SQLITE, STRIKES_SCHEMA_PG),
 }
+
+_POSTGRES_MIGRATIONS = (
+    "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS summary_json JSONB",
+    "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS expiration_json JSONB",
+    "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS surface_json JSONB",
+    "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS greek_exposure_json JSONB",
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_date ON snapshots (ticker, market_date)",
+)
 
 
 class DatabaseError(Exception):
@@ -335,13 +376,17 @@ def _sqlite_schema_sql(group: str) -> str:
 
 
 def _postgres_schema_statements() -> list[str]:
-    parts = [_SCHEMA_BY_GROUP[group][1] for group in ("index", "journal", "predictions", "insights")]
+    parts = [
+        _SCHEMA_BY_GROUP[group][1]
+        for group in ("index", "journal", "predictions", "insights", "strikes")
+    ]
     statements: list[str] = []
     for block in parts:
         for stmt in block.split(";"):
             cleaned = stmt.strip()
             if cleaned:
                 statements.append(cleaned)
+    statements.extend(_POSTGRES_MIGRATIONS)
     return statements
 
 
@@ -372,6 +417,7 @@ def list_postgres_tables() -> list[str]:
 
 POSTGRES_TABLES = (
     "snapshots",
+    "snapshot_strikes",
     "trades",
     "decisions",
     "trader_state",

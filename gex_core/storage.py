@@ -93,7 +93,11 @@ def latest_timestamp(ticker: str, export_dir: Path | None = None, path: Path | N
         if row:
             return str(row["ts"])
     except Exception as exc:
-        logger.warning("SQLite latest_timestamp failed: %s", exc)
+        logger.warning("latest_timestamp failed: %s", exc)
+    from gex_core.db import use_postgres
+
+    if use_postgres() and path is None:
+        return None
     timestamps = scan_export_timestamps(ticker, export_dir or EXPORT_DIR)
     return timestamps[-1] if timestamps else None
 

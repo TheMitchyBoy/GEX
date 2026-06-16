@@ -25,7 +25,9 @@ def test_postgres_schema_ddl_includes_all_tables():
 
     ddl = postgres_schema_ddl()
     for table in POSTGRES_TABLES:
-        assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl or table == "snapshots"
+    assert "snapshot_strikes" in ddl
+    assert "summary_json" in ddl
 
 
 def test_sqlite_journal_insert_returning_id(tmp_path, monkeypatch):

@@ -1,6 +1,15 @@
 # Gamma Exposure Tracker (GEX)
 
-Analyze dealer gamma exposure (GEX) in equity options markets. Data is loaded from the **Unusual Whales** API and saved as timestamped CSV/JSON exports for dashboards, history, and forecasting models.
+Analyze dealer gamma exposure (GEX) in equity options markets. Data is loaded from the **Unusual Whales** API and stored in **PostgreSQL** (processor mode) or as timestamped CSV/JSON exports (legacy/local).
+
+## Deployment modes
+
+| Mode | Start command | Purpose |
+|------|---------------|---------|
+| **Processor** (default) | `bash scripts/start_processor.sh` | Fetch UW data → write Railway Postgres for your dashboard |
+| **Web dashboard** | `bash scripts/start_web.sh` | Built-in Flask UI + scheduler (legacy) |
+
+Processor output schema for external dashboards: [`docs/DASHBOARD_SCHEMA.md`](docs/DASHBOARD_SCHEMA.md).
 
 ## What is GEX?
 
@@ -24,17 +33,15 @@ Key levels derived from the strike distribution:
 Unusual Whales API
        │
        ▼
-  main.py / gex_core.refresh  ──►  data/exports/  (CSV + JSON snapshots)
-       │                                    │
-       ├─ streamlit_app.py                  ├─ gex_core.history  (timeline)
-       └─ web_app.py (Flask + gunicorn)     ├─ gex_core.predict  (KNN forecast)
-              │                             └─ scripts/train_*   (model overlay)
-              ├─ Background scheduler (UW refresh, optional auto-traders)
-              ├─ UW price websocket (live spot chart)
-              └─ SQLite journals (gex_index.db, trading_journal.db)
+  gex_core.processor (default)  ──►  Railway PostgreSQL
+       │                              ├─ snapshots (summary JSONB)
+       │                              └─ snapshot_strikes (per-strike GEX)
+       │
+       ├─ web_app.py (optional Flask dashboard)
+       └─ data/exports/ (optional CSV archive when GEX_EXPORT_CSV=1)
 ```
 
-Persistence is **file-based** with an optional **SQLite index** (`data/gex_index.db`) for fast history lookups. Each refresh writes a matched set of files sharing a timestamp suffix under `data/exports/`.
+Your separate dashboard app reads from the same `DATABASE_URL` Postgres instance.
 
 ## App setup
 
