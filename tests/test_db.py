@@ -20,10 +20,20 @@ def test_use_postgres_true_with_database_url(monkeypatch):
     assert use_postgres() is True
 
 
+def test_postgres_schema_ddl_includes_processor_tables():
+    from gex_core.db import PROCESSOR_POSTGRES_TABLES, postgres_schema_ddl
+
+    ddl = postgres_schema_ddl(processor_only=True)
+    for table in PROCESSOR_POSTGRES_TABLES:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
+    assert "CREATE TABLE IF NOT EXISTS trades" not in ddl
+    assert "summary_json" in ddl
+
+
 def test_postgres_schema_ddl_includes_all_tables():
     from gex_core.db import POSTGRES_TABLES, postgres_schema_ddl
 
-    ddl = postgres_schema_ddl()
+    ddl = postgres_schema_ddl(processor_only=False)
     for table in POSTGRES_TABLES:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl or table == "snapshots"
     assert "snapshot_strikes" in ddl

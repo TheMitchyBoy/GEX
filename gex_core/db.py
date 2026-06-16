@@ -375,11 +375,9 @@ def _sqlite_schema_sql(group: str) -> str:
     return sqlite_sql
 
 
-def _postgres_schema_statements() -> list[str]:
-    parts = [
-        _SCHEMA_BY_GROUP[group][1]
-        for group in ("index", "journal", "predictions", "insights", "strikes")
-    ]
+def _postgres_schema_statements(*, processor_only: bool = False) -> list[str]:
+    groups = ("index", "strikes") if processor_only else ("index", "journal", "predictions", "insights", "strikes")
+    parts = [_SCHEMA_BY_GROUP[group][1] for group in groups]
     statements: list[str] = []
     for block in parts:
         for stmt in block.split(";"):
@@ -390,9 +388,12 @@ def _postgres_schema_statements() -> list[str]:
     return statements
 
 
-def postgres_schema_ddl() -> str:
-    """Full PostgreSQL DDL for all application tables (idempotent)."""
-    return ";\n\n".join(_postgres_schema_statements()) + ";\n"
+def postgres_schema_ddl(*, processor_only: bool = False) -> str:
+    """Full PostgreSQL DDL for application tables (idempotent)."""
+    return ";\n\n".join(_postgres_schema_statements(processor_only=processor_only)) + ";\n"
+
+
+PROCESSOR_POSTGRES_TABLES = ("snapshots", "snapshot_strikes")
 
 
 def list_postgres_tables() -> list[str]:
@@ -426,9 +427,13 @@ POSTGRES_TABLES = (
 )
 
 
-def ensure_postgres_schema() -> list[str]:
-    """Create all application tables in Postgres (idempotent). Returns table names."""
+def ensure_postgres_schema(*, processor_only: bool | None = None) -> list[str]:
+    """Create application tables in Postgres (idempotent). Returns table names."""
     global _PG_INITIALIZED
+    if processor_only is None:
+        from gex_core.runtime_mode import is_processor_mode
+
+        processor_only = is_processor_mode()
     url = database_url()
     if not url:
         return []
@@ -437,10 +442,10 @@ def ensure_postgres_schema() -> list[str]:
             return list_postgres_tables()
         import psycopg
 
-        logger.info("Initializing PostgreSQL schema")
+        logger.info("Initializing PostgreSQL schema (processor_only=%s)", processor_only)
         with psycopg.connect(url) as conn:
             with conn.cursor() as cur:
-                for stmt in _postgres_schema_statements():
+                for stmt in _postgres_schema_statements(processor_only=processor_only):
                     cur.execute(stmt)
             conn.commit()
         _PG_INITIALIZED = True

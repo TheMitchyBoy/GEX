@@ -15,6 +15,9 @@ if [ "${GEX_MIGRATE_SQLITE:-}" != "0" ]; then
 fi
 
 # Processor mode: Postgres is canonical; skip CSV unless explicitly enabled.
+export GEX_PROCESSOR_MODE=1
 export GEX_EXPORT_CSV="${GEX_EXPORT_CSV:-0}"
+export GEX_SUMMARY_MARKET_FEATURES="${GEX_SUMMARY_MARKET_FEATURES:-0}"
+export GEX_MIGRATE_SQLITE="${GEX_MIGRATE_SQLITE:-0}"
 
 exec python3 -m gex_core.processor

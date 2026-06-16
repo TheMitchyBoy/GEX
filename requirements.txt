@@ -1,15 +1,4 @@
-matplotlib>=3.8.0
-pandas>=2.2.2
-requests>=2.31,<3.0
-openai>=1.40.0
-streamlit>=1.24.0
-plotly>=5.10.0
-Flask>=2.3.0
-gunicorn>=21.2.0
-websockets>=12.0
-APScheduler>=3.10.4
-yfinance>=0.2.27
-webull-openapi-python-sdk>=1.0.0
-scikit-learn>=1.3.0
-joblib>=1.3.1
-psycopg[binary]>=3.1.18
+# Full local development stack (processor + web dashboard + ML).
+# Docker/Railway processor image uses requirements-processor.txt only.
+-r requirements-processor.txt
+-r requirements-web.txt

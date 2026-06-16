@@ -9,14 +9,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     util-linux \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-processor.txt .
+RUN pip install --no-cache-dir -r requirements-processor.txt
+
+# Full web/ML stack available in requirements-web.txt for optional local installs.
+COPY requirements-web.txt .
+
 
 COPY . .
 
 # Hermes is optional fallback for LLM features; openai in requirements.txt is the primary path.
 # vendor/hermes-agent is not in git — install_agent.sh shallow-clones it when missing.
-ARG INSTALL_HERMES=1
+ARG INSTALL_HERMES=0
 RUN if [ "$INSTALL_HERMES" = "1" ]; then bash scripts/install_agent.sh; fi
 
 RUN useradd --create-home --uid 10001 --shell /bin/bash appuser \

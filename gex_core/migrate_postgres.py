@@ -92,7 +92,11 @@ def _postgres_row_count(table: str) -> int:
 
 
 def sqlite_has_data() -> bool:
+    from gex_core.runtime_mode import is_processor_mode
+
     index_db = index_db_path()
+    if is_processor_mode():
+        return _sqlite_row_count(index_db, "snapshots") > 0
     journal_db = journal_db_path()
     counts = (
         _sqlite_row_count(index_db, "snapshots")
@@ -106,6 +110,10 @@ def sqlite_has_data() -> bool:
 
 
 def postgres_is_empty() -> bool:
+    from gex_core.runtime_mode import is_processor_mode
+
+    if is_processor_mode():
+        return _postgres_row_count("snapshots") == 0
     counts = (
         _postgres_row_count("snapshots")
         + _postgres_row_count("trades")
@@ -221,6 +229,8 @@ def _tickers_from_exports(export_dir: Path) -> list[str]:
 
 def migrate_sqlite_to_postgres(*, force: bool = False, sync_exports: bool = True) -> MigrationStats:
     """Copy SQLite tables and reconcile export index metadata into PostgreSQL."""
+    from gex_core.runtime_mode import is_processor_mode
+
     _ = force  # Reserved for CLI; upserts are always idempotent.
     stats = MigrationStats()
     if not use_postgres():
@@ -228,7 +238,7 @@ def migrate_sqlite_to_postgres(*, force: bool = False, sync_exports: bool = True
         stats.reason = "DATABASE_URL is not set"
         return stats
 
-    ensure_postgres_schema()
+    ensure_postgres_schema(processor_only=is_processor_mode())
 
     has_sqlite = sqlite_has_data()
     if not has_sqlite and not sync_exports:
@@ -239,14 +249,21 @@ def migrate_sqlite_to_postgres(*, force: bool = False, sync_exports: bool = True
     import psycopg
     from gex_core.db import database_url
 
+    processor_only = is_processor_mode()
     index_db = index_db_path()
     journal_db = journal_db_path()
     snapshot_rows = _read_sqlite_rows(index_db, "snapshots") if has_sqlite else []
-    trade_rows = _read_sqlite_rows(journal_db, "trades") if has_sqlite else []
-    decision_rows = _read_sqlite_rows(journal_db, "decisions") if has_sqlite else []
-    state_rows = _read_sqlite_rows(journal_db, "trader_state") if has_sqlite else []
-    prediction_rows = _read_sqlite_rows(journal_db, "llm_predictions") if has_sqlite else []
-    insight_rows = _read_sqlite_rows(journal_db, "daily_insights") if has_sqlite else []
+    trade_rows: list[dict] = []
+    decision_rows: list[dict] = []
+    state_rows: list[dict] = []
+    prediction_rows: list[dict] = []
+    insight_rows: list[dict] = []
+    if has_sqlite and not processor_only:
+        trade_rows = _read_sqlite_rows(journal_db, "trades")
+        decision_rows = _read_sqlite_rows(journal_db, "decisions")
+        state_rows = _read_sqlite_rows(journal_db, "trader_state")
+        prediction_rows = _read_sqlite_rows(journal_db, "llm_predictions")
+        insight_rows = _read_sqlite_rows(journal_db, "daily_insights")
 
     if has_sqlite:
         with psycopg.connect(database_url()) as conn:
@@ -343,7 +360,7 @@ def migrate_sqlite_to_postgres(*, force: bool = False, sync_exports: bool = True
 
             conn.commit()
 
-    if sync_exports:
+    if sync_exports and not is_processor_mode():
         from gex_core.exports import EXPORT_DIR
         from gex_core.storage import clear_sync_cache, sync_ticker_exports
 

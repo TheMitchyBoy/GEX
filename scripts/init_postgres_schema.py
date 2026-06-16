@@ -12,7 +12,8 @@ from gex_core.env_bootstrap import bootstrap_env
 
 bootstrap_env()
 
-from gex_core.db import POSTGRES_TABLES, ensure_postgres_schema, use_postgres
+from gex_core.db import POSTGRES_TABLES, PROCESSOR_POSTGRES_TABLES, ensure_postgres_schema, use_postgres
+from gex_core.runtime_mode import is_processor_mode
 
 
 def main() -> int:
@@ -21,14 +22,16 @@ def main() -> int:
         print("To create tables manually, paste scripts/postgres_schema.sql into Railway Postgres.")
         return 0
 
-    tables = ensure_postgres_schema()
-    missing = [name for name in POSTGRES_TABLES if name not in tables]
+    processor_only = is_processor_mode()
+    tables = ensure_postgres_schema(processor_only=processor_only)
+    expected = PROCESSOR_POSTGRES_TABLES if processor_only else POSTGRES_TABLES
+    missing = [name for name in expected if name not in tables]
     print("PostgreSQL schema ready.")
     print("Tables:", ", ".join(tables) if tables else "(none)")
     if missing:
         print("WARNING: missing expected tables:", ", ".join(missing))
         return 1
-    print("All expected tables present:", ", ".join(POSTGRES_TABLES))
+    print("All expected tables present:", ", ".join(expected))
     return 0
 
 

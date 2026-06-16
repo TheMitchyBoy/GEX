@@ -86,6 +86,12 @@ def _existing_timestamps(ticker: str, export_dir: Path) -> set[str]:
     return set(list_export_timestamps(ticker, export_dir))
 
 
+def _summary_market_features_enabled() -> bool:
+    from gex_core.runtime_mode import summary_market_features_enabled
+
+    return summary_market_features_enabled()
+
+
 def _build_summary(
     ticker: str,
     *,
@@ -120,8 +126,12 @@ def _build_summary(
         greek_df=greek_df,
         spot_exposures_df=spot_df,
         market_date=market_date,
-        vol_regime=vol_regime if vol_regime is not None else fetch_vol_regime(),
-        cross_asset=cross_asset if cross_asset is not None else fetch_cross_asset_returns(),
+        vol_regime=vol_regime
+        if vol_regime is not None
+        else (fetch_vol_regime() if _summary_market_features_enabled() else None),
+        cross_asset=cross_asset
+        if cross_asset is not None
+        else (fetch_cross_asset_returns() if _summary_market_features_enabled() else None),
     )
     from gex_core.features import resolve_gamma_flip
     from gex_core.spot_exposure import spot_exposure_net_series
@@ -255,8 +265,8 @@ def backfill_intraday_minutes(
         logger.debug("Greek exposure unavailable for intraday backfill %s on %s", ticker, market_date)
 
     existing = _existing_timestamps(ticker, export_dir)
-    vol_regime = fetch_vol_regime()
-    cross_asset = fetch_cross_asset_returns()
+    vol_regime = fetch_vol_regime() if _summary_market_features_enabled() else None
+    cross_asset = fetch_cross_asset_returns() if _summary_market_features_enabled() else None
     saved = 0
     for _, row in minute_df.iterrows():
         if pd.isna(row.get("time")):
@@ -292,7 +302,10 @@ def backfill_intraday_minutes(
         saved += 1
 
     if saved:
-        clear_history_cache()
+        from gex_core.runtime_mode import is_processor_mode
+
+        if not is_processor_mode():
+            clear_history_cache()
     logger.info(
         "Saved %d %d-min snapshots for %s on %s",
         saved,

@@ -88,10 +88,24 @@ def scan_export_timestamps(ticker: str, export_dir: Path | None = None) -> list[
 def list_export_timestamps(ticker: str, export_dir: Path | None = None) -> list[str]:
     """List export timestamps that have a strike CSV on disk.
 
-    Uses the SQLite index when it matches on-disk files; otherwise trusts the
+    Uses the SQLite/Postgres index when it matches on-disk files; otherwise trusts the
     directory scan (handles stale index rows after redeploys).
     """
+    from gex_core.db import use_postgres
+    from gex_core.runtime_mode import is_processor_mode
+
     export_dir = export_dir or EXPORT_DIR
+    if use_postgres() and is_processor_mode() and export_dir.resolve() == EXPORT_DIR.resolve():
+        try:
+            from gex_core.storage import list_indexed_timestamps
+
+            indexed = list_indexed_timestamps(ticker)
+            if indexed:
+                return indexed
+        except Exception as exc:
+            logger.debug("Indexed export timestamps unavailable for %s: %s", ticker, exc)
+        return []
+
     on_disk = scan_export_timestamps(ticker, export_dir)
     if export_dir.resolve() != EXPORT_DIR.resolve():
         return on_disk

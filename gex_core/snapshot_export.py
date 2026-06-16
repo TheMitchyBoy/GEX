@@ -87,6 +87,7 @@ def write_snapshot_export(
             strike_path=strike_path,
         )
         from gex_core.db import use_postgres
+        from gex_core.runtime_mode import is_processor_mode
         from gex_core.storage import upsert_snapshot
 
         if not use_postgres():
@@ -100,13 +101,16 @@ def write_snapshot_export(
                 summary_path=summary_path,
                 strike_path=strike_path,
             )
-        clear_history_cache()
-        try:
-            from gex_core.prediction_log import reconcile_llm_predictions
+        if not is_processor_mode():
+            from gex_core.history import clear_history_cache
 
-            reconcile_llm_predictions(ticker.upper(), latest_ts=timestamp)
-        except Exception:
-            pass
+            clear_history_cache()
+            try:
+                from gex_core.prediction_log import reconcile_llm_predictions
+
+                reconcile_llm_predictions(ticker.upper(), latest_ts=timestamp)
+            except Exception:
+                pass
     except Exception:
         logger.exception("Failed to persist snapshot %s %s", ticker, timestamp)
         raise

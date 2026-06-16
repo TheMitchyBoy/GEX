@@ -128,13 +128,6 @@ def run_processor(*, extra_startup: Callable[[], None] | None = None) -> None:
 
     ensure_postgres_schema()
 
-    if os.environ.get("GEX_MIGRATE_SQLITE", "") != "0":
-        from gex_core.migrate_postgres import migrate_sqlite_to_postgres, should_auto_migrate
-
-        if should_auto_migrate():
-            stats = migrate_sqlite_to_postgres(sync_exports=not use_postgres())
-            logger.info("SQLite migration: %s", stats)
-
     health_server = start_health_server()
     atexit.register(health_server.shutdown)
 
