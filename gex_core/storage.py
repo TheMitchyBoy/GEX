@@ -82,8 +82,53 @@ def upsert_snapshot(
         conn.commit()
 
 
+def list_postgres_snapshot_timestamps(ticker: str) -> list[str]:
+    """Return sorted snapshot keys from Railway PostgreSQL."""
+    from gex_core.db import database_url, ensure_postgres_schema, use_postgres
+
+    if not use_postgres():
+        return []
+    ensure_postgres_schema()
+    import psycopg
+
+    ticker = ticker.upper()
+    with psycopg.connect(database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ts FROM snapshots WHERE ticker = %s ORDER BY ts ASC",
+                (ticker,),
+            )
+            return [str(row[0]) for row in cur.fetchall()]
+
+
+def count_snapshots(ticker: str, export_dir: Path | None = None, path: Path | None = None) -> int:
+    return len(list_snapshot_timestamps(ticker, export_dir=export_dir, path=path))
+
+
+def list_snapshot_timestamps(
+    ticker: str,
+    export_dir: Path | None = None,
+    path: Path | None = None,
+) -> list[str]:
+    """Unified snapshot key list: Postgres, then SQLite index, then on-disk CSV scan."""
+    ticker = ticker.upper()
+    export_dir = export_dir or EXPORT_DIR
+    if path is None:
+        postgres_ts = list_postgres_snapshot_timestamps(ticker)
+        if postgres_ts:
+            return postgres_ts
+    indexed = list_indexed_timestamps(ticker, path)
+    if indexed:
+        return indexed
+    return scan_export_timestamps(ticker, export_dir)
+
+
 def latest_timestamp(ticker: str, export_dir: Path | None = None, path: Path | None = None) -> str | None:
     ticker = ticker.upper()
+    if path is None:
+        postgres_ts = list_postgres_snapshot_timestamps(ticker)
+        if postgres_ts:
+            return postgres_ts[-1]
     try:
         with _connect(path) as conn:
             row = conn.execute(
@@ -94,10 +139,6 @@ def latest_timestamp(ticker: str, export_dir: Path | None = None, path: Path | N
             return str(row["ts"])
     except Exception as exc:
         logger.warning("latest_timestamp failed: %s", exc)
-    from gex_core.db import use_postgres
-
-    if use_postgres() and path is None:
-        return None
     timestamps = scan_export_timestamps(ticker, export_dir or EXPORT_DIR)
     return timestamps[-1] if timestamps else None
 
@@ -322,26 +363,51 @@ def fetch_index_spot_series(
     max_points: int | None = 500,
     export_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Lightweight spot/GEX series from the SQLite index for charts."""
+    """Lightweight spot/GEX series from Postgres or the SQLite index for charts."""
     from datetime import timedelta
+
+    from gex_core.db import database_url, use_postgres
 
     ticker = ticker.upper()
     export_dir = export_dir or EXPORT_DIR
-    sync_ticker_exports(ticker, export_dir)
-    try:
-        with _connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT ts, spot, total_gex, regime
-                FROM snapshots
-                WHERE ticker = ?
-                ORDER BY ts ASC
-                """,
-                (ticker,),
-            ).fetchall()
-    except Exception as exc:
-        logger.warning("fetch_index_spot_series failed: %s", exc)
-        return []
+    rows: list[Any] = []
+    if use_postgres():
+        try:
+            import psycopg
+
+            with psycopg.connect(database_url()) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT ts, spot, total_gex, regime
+                        FROM snapshots
+                        WHERE ticker = %s
+                        ORDER BY ts ASC
+                        """,
+                        (ticker,),
+                    )
+                    rows = [
+                        {"ts": str(r[0]), "spot": r[1], "total_gex": r[2], "regime": r[3]}
+                        for r in cur.fetchall()
+                    ]
+        except Exception as exc:
+            logger.warning("fetch_index_spot_series postgres failed: %s", exc)
+    if not rows:
+        sync_ticker_exports(ticker, export_dir)
+        try:
+            with _connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT ts, spot, total_gex, regime
+                    FROM snapshots
+                    WHERE ticker = ?
+                    ORDER BY ts ASC
+                    """,
+                    (ticker,),
+                ).fetchall()
+        except Exception as exc:
+            logger.warning("fetch_index_spot_series failed: %s", exc)
+            return []
 
     if not rows:
         return []

@@ -97,13 +97,13 @@ def list_export_timestamps(ticker: str, export_dir: Path | None = None) -> list[
     export_dir = export_dir or EXPORT_DIR
     if use_postgres() and is_processor_mode() and export_dir.resolve() == EXPORT_DIR.resolve():
         try:
-            from gex_core.storage import list_indexed_timestamps
+            from gex_core.storage import list_snapshot_timestamps
 
-            indexed = list_indexed_timestamps(ticker)
+            indexed = list_snapshot_timestamps(ticker, export_dir)
             if indexed:
                 return indexed
         except Exception as exc:
-            logger.debug("Indexed export timestamps unavailable for %s: %s", ticker, exc)
+            logger.debug("Postgres export timestamps unavailable for %s: %s", ticker, exc)
         return []
 
     on_disk = scan_export_timestamps(ticker, export_dir)

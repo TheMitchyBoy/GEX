@@ -118,31 +118,25 @@ def start_health_server() -> ThreadingHTTPServer:
 def _maybe_bootstrap_history() -> None:
     if os.environ.get("GEX_STARTUP_BACKFILL", "").strip() != "1":
         return
-    from gex_core.processor_state import last_backfilled_date, mark_backfilled_through
-    from gex_core.storage import list_indexed_timestamps
+    from gex_core.storage import count_snapshots
 
     ticker = processor_tickers()[0]
-    if len(list_indexed_timestamps(ticker)) >= int(os.environ.get("GEX_FORECAST_MIN_SNAPSHOTS", "4")):
+    min_snapshots = int(os.environ.get("GEX_FORECAST_MIN_SNAPSHOTS", "4"))
+    if count_snapshots(ticker) >= min_snapshots:
         return
-    logger.info("Startup backfill: index sparse for %s", ticker)
+    logger.info("Startup backfill: sparse history for %s (%d snapshots)", ticker, count_snapshots(ticker))
     import subprocess
     import sys
 
     args = [
         sys.executable,
-        "scripts/gex_backfill_intraday.py",
+        "scripts/backfill_postgres_history.py",
         "--tickers",
         ",".join(processor_tickers()),
-        "--intraday-days",
-        os.environ.get("GEX_INTRADAY_BACKFILL_DAYS", "90"),
-        "--daily-days",
-        os.environ.get("GEX_DAILY_BACKFILL_DAYS", "90"),
-        "--interval-minutes",
-        os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"),
+        "--if-sparse",
     ]
     proc = subprocess.Popen(args, cwd=os.path.dirname(os.path.dirname(__file__)))
-    mark_backfilled_through(ticker, datetime.now(timezone.utc).date().isoformat())
-    logger.info("Started background backfill pid=%s last_date=%s", proc.pid, cursor_date)
+    logger.info("Started background UW backfill pid=%s", proc.pid)
 
 
 def run_processor(*, extra_startup: Callable[[], None] | None = None) -> None:

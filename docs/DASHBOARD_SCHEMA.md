@@ -165,6 +165,23 @@ python3 scripts/import_exports_to_postgres.py --tickers SPX
 
 Set `GEX_IMPORT_EXPORTS_ON_START=1` on the processor service to import any missing timestamps on boot.
 
+### UW API history backfill (Postgres)
+
+Pull up to 90 days of UW intraday + daily history directly into Postgres (no CSV intermediate):
+
+```bash
+python3 scripts/backfill_postgres_history.py --tickers SPX
+```
+
+Options:
+
+- `--intraday-days 90` / `--daily-days 90` — lookback window (weekdays)
+- `--interval-minutes 10` — downsample UW 1-minute rows (default 10)
+- `--if-sparse` — skip when enough snapshots already exist
+- `--force` — overwrite existing timestamps
+
+On Railway, set `GEX_STARTUP_BACKFILL=1` on the processor to run `--if-sparse` on boot, or run the script as a one-off job.
+
 Required env:
 
 - `DATABASE_URL` — Railway PostgreSQL

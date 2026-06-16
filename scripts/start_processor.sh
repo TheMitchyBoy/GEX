@@ -32,4 +32,8 @@ if [ "${GEX_IMPORT_EXPORTS_ON_START:-0}" = "1" ]; then
   python3 scripts/import_exports_to_postgres.py --if-missing || true
 fi
 
+if [ "${GEX_STARTUP_BACKFILL:-0}" = "1" ]; then
+  python3 scripts/backfill_postgres_history.py --if-sparse || true
+fi
+
 exec python3 -m gex_core.processor

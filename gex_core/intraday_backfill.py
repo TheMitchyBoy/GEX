@@ -83,7 +83,13 @@ def scale_strike_profile(strike: pd.Series, target_total_bn: float) -> pd.Series
 
 
 def _existing_timestamps(ticker: str, export_dir: Path) -> set[str]:
-    return set(list_export_timestamps(ticker, export_dir))
+    from gex_core.exports import scan_export_timestamps
+    from gex_core.storage import list_postgres_snapshot_timestamps
+
+    existing = set(scan_export_timestamps(ticker, export_dir))
+    if export_dir.resolve() == EXPORT_DIR.resolve():
+        existing.update(list_postgres_snapshot_timestamps(ticker))
+    return existing
 
 
 def _summary_market_features_enabled() -> bool:
@@ -271,7 +277,14 @@ def backfill_intraday_minutes(
         return 0
 
     interval_minutes = interval_minutes or DEFAULT_BACKFILL_INTERVAL_MINUTES
-    minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key, date=market_date)
+    try:
+        minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key, date=market_date)
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 422:
+            logger.warning("UW intraday unavailable for %s on %s (422)", ticker, market_date)
+            return 0
+        raise
     if minute_df.empty:
         logger.warning(
             "No intraday spot-exposures for %s on %s — falling back to EOD strike snapshot",
@@ -349,6 +362,7 @@ def backfill_intraday_minutes(
             timestamp=ts,
             uw_time=row["time"],
             interval_minutes=interval_minutes,
+            force=True,
         )
         existing.add(ts)
         saved += 1
@@ -412,6 +426,7 @@ def backfill_daily_strike_snapshots(
         summary=summary,
         export_dir=export_dir,
         timestamp=ts,
+        force=force,
     )
     return True
 

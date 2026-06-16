@@ -141,18 +141,9 @@ def load_export_snapshot(
 
 
 def list_postgres_timestamps(ticker: str) -> set[str]:
-    from gex_core.db import database_url, ensure_postgres_schema, use_postgres
+    from gex_core.storage import list_postgres_snapshot_timestamps
 
-    if not use_postgres():
-        return set()
-    ensure_postgres_schema()
-    import psycopg
-
-    ticker = ticker.upper()
-    with psycopg.connect(database_url()) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT ts FROM snapshots WHERE ticker = %s", (ticker,))
-            return {str(row[0]) for row in cur.fetchall()}
+    return set(list_postgres_snapshot_timestamps(ticker))
 
 
 def import_export_timestamp(
