@@ -28,6 +28,8 @@ def test_postgres_schema_ddl_includes_processor_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
     assert "CREATE TABLE IF NOT EXISTS trades" not in ddl
     assert "summary_json" in ddl
+    assert "snapshot_features" in ddl
+    assert "snapshot_at" in ddl
 
 
 def test_postgres_schema_ddl_includes_all_tables():

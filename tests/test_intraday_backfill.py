@@ -54,8 +54,8 @@ def test_scale_strike_profile_matches_target_total():
     assert float(scaled.sum()) == pytest.approx(12.0)
 
 
-@patch("gex_core.intraday_backfill.fetch_cross_asset_returns", return_value={})
-@patch("gex_core.intraday_backfill.fetch_vol_regime", return_value={})
+@patch("gex_core.intraday_backfill.cached_cross_asset_returns", return_value={})
+@patch("gex_core.intraday_backfill.cached_vol_regime", return_value={})
 @patch("gex_core.uw_loader.fetch_uw_spot_exposures")
 @patch("gex_core.uw_loader.fetch_uw_spot_exposures_intraday")
 def test_backfill_intraday_minutes_writes_snapshots(
@@ -68,6 +68,7 @@ def test_backfill_intraday_minutes_writes_snapshots(
 ):
     monkeypatch.setattr("gex_core.intraday_backfill.EXPORT_DIR", tmp_path)
     monkeypatch.setenv("GEX_INDEX_DB", str(tmp_path / "test.db"))
+    monkeypatch.setenv("GEX_MIN_STRIKE_COUNT", "2")
     mock_intraday.return_value = pd.DataFrame(
         {
             "time": pd.to_datetime(["2026-06-05T14:30:00Z", "2026-06-05T14:40:00Z"], utc=True),

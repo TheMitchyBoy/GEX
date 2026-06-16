@@ -37,6 +37,66 @@ CREATE TABLE IF NOT EXISTS snapshot_strikes (
 CREATE INDEX IF NOT EXISTS idx_snapshot_strikes_ticker_ts
     ON snapshot_strikes (ticker, ts);
 
+CREATE TABLE IF NOT EXISTS snapshot_strikes_atm (
+    ticker TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    strike DOUBLE PRECISION NOT NULL,
+    gex_bn_per_pct DOUBLE PRECISION,
+    cumulative_gex_bn_per_pct DOUBLE PRECISION,
+    PRIMARY KEY (ticker, ts, strike)
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_strikes_atm_ticker_ts
+    ON snapshot_strikes_atm (ticker, ts);
+
+CREATE TABLE IF NOT EXISTS snapshot_features (
+    ticker TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    prior_ts TEXT,
+    snapshot_at TIMESTAMPTZ,
+    gamma_flip DOUBLE PRECISION,
+    call_wall DOUBLE PRECISION,
+    put_wall DOUBLE PRECISION,
+    pos_gamma_peak_strike DOUBLE PRECISION,
+    flip_distance_pct DOUBLE PRECISION,
+    wall_spread DOUBLE PRECISION,
+    gex_concentration DOUBLE PRECISION,
+    near_term_ratio DOUBLE PRECISION,
+    zero_dte_ratio DOUBLE PRECISION,
+    term_curvature DOUBLE PRECISION,
+    expiration_count DOUBLE PRECISION,
+    front_term_ratio DOUBLE PRECISION,
+    back_term_ratio DOUBLE PRECISION,
+    delta_gex DOUBLE PRECISION,
+    delta_spot DOUBLE PRECISION,
+    spot_return DOUBLE PRECISION,
+    regime_changed BOOLEAN,
+    surface_vector JSONB,
+    strike_profile_hash TEXT,
+    strike_count INTEGER,
+    PRIMARY KEY (ticker, ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_features_ticker_ts
+    ON snapshot_features (ticker, ts DESC);
+
+CREATE TABLE IF NOT EXISTS snapshot_diagnostics (
+    ticker TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    status TEXT NOT NULL,
+    validation_json JSONB,
+    uw_fetch_ms DOUBLE PRECISION,
+    postgres_write_ms DOUBLE PRECISION,
+    indexed_at TEXT,
+    PRIMARY KEY (ticker, ts)
+);
+
+CREATE TABLE IF NOT EXISTS processor_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trades (
     id SERIAL PRIMARY KEY,
     ticker TEXT NOT NULL,
@@ -114,3 +174,14 @@ ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS summary_json JSONB;
 ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS expiration_json JSONB;
 ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS surface_json JSONB;
 ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS greek_exposure_json JSONB;
+ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS snapshot_at TIMESTAMPTZ;
+ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS prior_ts TEXT;
+CREATE INDEX IF NOT EXISTS idx_snapshots_snapshot_at ON snapshots (ticker, snapshot_at DESC);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS latest_snapshot AS
+SELECT DISTINCT ON (ticker)
+    ticker, ts, market_date, spot, total_gex, regime, indexed_at, snapshot_at, prior_ts
+FROM snapshots
+ORDER BY ticker, ts DESC;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_latest_snapshot_ticker ON latest_snapshot (ticker);

@@ -19,6 +19,8 @@ One row per GEX snapshot (intraday slice or EOD).
 | `surface_json` | JSONB | Surface rows (array of objects) |
 | `greek_exposure_json` | JSONB | Greek exposure rows |
 | `indexed_at` | TEXT | ISO UTC when row was written |
+| `snapshot_at` | TIMESTAMPTZ | Parsed UTC snapshot time |
+| `prior_ts` | TEXT | Previous snapshot key |
 
 **Primary key:** `(ticker, ts)`
 
@@ -59,6 +61,26 @@ Per-strike gamma profile for each snapshot.
 | `cumulative_gex_bn_per_pct` | DOUBLE | Cumulative GEX |
 
 **Primary key:** `(ticker, ts, strike)`
+
+## snapshot_strikes_atm
+
+ATM subset (default ±3% of spot). Same columns as `snapshot_strikes`.
+
+## snapshot_features
+
+Precomputed ML features: `gamma_flip`, `call_wall`, `put_wall`, `delta_gex`, `delta_spot`, `spot_return`, `surface_vector`, `strike_profile_hash`, etc.
+
+## snapshot_diagnostics
+
+Write pipeline status (`ok`, `skipped_duplicate`, `rejected`) plus timing metrics.
+
+## processor_state
+
+Incremental backfill cursor (`backfill_last_date:SPX`).
+
+Subscribe to new snapshots: `LISTEN gex_snapshot;`
+
+Materialized view: `latest_snapshot` (one row per ticker).
 
 ### Example queries
 

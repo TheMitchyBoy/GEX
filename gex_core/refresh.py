@@ -10,6 +10,7 @@ a lookback window for prediction history.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta
 
 from gex_core.env_bootstrap import parse_env_minutes
@@ -112,7 +113,27 @@ def refresh_tickers(
     symbols = [symbol.upper() for symbol in (tickers or DEFAULT_TICKERS) if is_supported_ticker(symbol)]
     if not symbols:
         symbols = [PRIMARY_TICKER]
-    return {symbol.upper(): refresh_ticker(symbol, force=force, market_date=market_date) for symbol in symbols}
+    if len(symbols) == 1:
+        symbol = symbols[0]
+        return {symbol: refresh_ticker(symbol, force=force, market_date=market_date)}
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    max_workers = min(len(symbols), int(os.environ.get("GEX_REFRESH_MAX_WORKERS", "4")))
+    results: dict[str, bool] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(refresh_ticker, symbol, force, market_date): symbol.upper()
+            for symbol in symbols
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                results[symbol] = bool(future.result())
+            except Exception:
+                logger.exception("Parallel refresh failed for %s", symbol)
+                results[symbol] = False
+    return results
 
 
 def recent_market_dates(days: int = 7, today: date | None = None) -> list[str]:

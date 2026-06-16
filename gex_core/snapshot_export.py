@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,12 +27,17 @@ def write_snapshot_export(
     summary: dict | None = None,
     export_dir: str | Path = "data/exports",
     timestamp: str | None = None,
+    uw_time: datetime | str | pd.Timestamp | None = None,
+    interval_minutes: float | None = None,
+    force: bool = False,
+    uw_fetch_ms: float | None = None,
 ) -> str:
     """Persist snapshot data to PostgreSQL (primary) and optional CSV/JSON exports."""
     from gex_core.pg_snapshot_store import export_csv_enabled, write_snapshot_to_postgres
+    from gex_core.processor_metrics import record_refresh_result
+    from gex_core.snapshot_processing import prepare_snapshot_for_storage
 
     export_dir = Path(export_dir)
-    timestamp = timestamp or datetime.now().strftime("%Y-%m-%d_%H%M%S")
     gex_by_expiration = gex_by_expiration if gex_by_expiration is not None else pd.Series(dtype=float)
     surface_data = surface_data if surface_data is not None else pd.DataFrame()
 
@@ -48,6 +54,46 @@ def write_snapshot_export(
             uw_endpoint=str(summary.get("uw_endpoint", "spot-exposures/strike")),
         )
         summary = {**meta, **summary}
+
+    prepared = prepare_snapshot_for_storage(
+        ticker,
+        gex_by_strike=gex_by_strike,
+        cumulative_gex=cumulative_gex,
+        gex_by_expiration=gex_by_expiration,
+        summary=summary or {},
+        timestamp=timestamp,
+        uw_time=uw_time,
+        interval_minutes=interval_minutes,
+        force=force,
+    )
+    timestamp = prepared.ts
+    summary = prepared.summary
+
+    if prepared.skipped_duplicate:
+        from gex_core.db import use_postgres
+
+        if use_postgres():
+            result = write_snapshot_to_postgres(
+                ticker,
+                timestamp,
+                gex_by_strike=gex_by_strike,
+                cumulative_gex=cumulative_gex,
+                gex_by_expiration=gex_by_expiration,
+                surface_data=surface_data,
+                greek_exposure_df=greek_exposure_df,
+                summary=summary,
+                prepared=prepared,
+                uw_fetch_ms=uw_fetch_ms,
+                force=force,
+            )
+            record_refresh_result(
+                uw_fetch_ms=uw_fetch_ms,
+                postgres_write_ms=result.postgres_write_ms,
+                strikes_written=0,
+                skipped_duplicate=True,
+                validation_status="skipped_duplicate",
+            )
+        return timestamp
 
     strike_path: str | None = None
     summary_path: str | None = None
@@ -74,7 +120,8 @@ def write_snapshot_export(
             json.dump(summary or {}, f, indent=2)
 
     try:
-        write_snapshot_to_postgres(
+        write_start = time.perf_counter()
+        result = write_snapshot_to_postgres(
             ticker,
             timestamp,
             gex_by_strike=gex_by_strike,
@@ -85,12 +132,16 @@ def write_snapshot_export(
             summary=summary,
             summary_path=summary_path,
             strike_path=strike_path,
+            prepared=prepared,
+            uw_fetch_ms=uw_fetch_ms,
+            force=force,
         )
         from gex_core.db import use_postgres
-        from gex_core.runtime_mode import is_processor_mode
-        from gex_core.storage import upsert_snapshot
+        from gex_core.runtime_mode import is_processor_mode, reconcile_predictions_enabled
 
         if not use_postgres():
+            from gex_core.storage import upsert_snapshot
+
             upsert_snapshot(
                 ticker.upper(),
                 timestamp,
@@ -101,18 +152,43 @@ def write_snapshot_export(
                 summary_path=summary_path,
                 strike_path=strike_path,
             )
-        if not is_processor_mode():
-            from gex_core.history import clear_history_cache
+        if not result.written and result.validation_status == "rejected":
+            record_refresh_result(
+                uw_fetch_ms=uw_fetch_ms,
+                postgres_write_ms=result.postgres_write_ms,
+                validation_status="rejected",
+                error=";".join(prepared.validation.issues),
+            )
+            raise RuntimeError(f"Snapshot rejected for {ticker} {timestamp}: {prepared.validation.issues}")
 
-            clear_history_cache()
+        record_refresh_result(
+            uw_fetch_ms=uw_fetch_ms,
+            postgres_write_ms=result.postgres_write_ms or ((time.perf_counter() - write_start) * 1000),
+            strikes_written=result.strikes_written,
+            skipped_duplicate=result.skipped_duplicate,
+            validation_status=result.validation_status,
+        )
+
+        if result.written and reconcile_predictions_enabled():
             try:
                 from gex_core.prediction_log import reconcile_llm_predictions
 
                 reconcile_llm_predictions(ticker.upper(), latest_ts=timestamp)
             except Exception:
-                pass
-    except Exception:
+                logger.debug("prediction reconcile failed", exc_info=True)
+
+        if not is_processor_mode():
+            clear_history_cache()
+            if not reconcile_predictions_enabled():
+                try:
+                    from gex_core.prediction_log import reconcile_llm_predictions
+
+                    reconcile_llm_predictions(ticker.upper(), latest_ts=timestamp)
+                except Exception:
+                    pass
+    except Exception as exc:
         logger.exception("Failed to persist snapshot %s %s", ticker, timestamp)
+        record_refresh_result(error=str(exc), validation_status="error")
         raise
 
     return timestamp

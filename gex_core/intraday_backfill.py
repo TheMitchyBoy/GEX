@@ -13,7 +13,7 @@ from gex_core.env_bootstrap import parse_env_minutes
 from gex_core.exports import EXPORT_DIR, list_export_timestamps
 from gex_core.extended_features import merge_extended_features
 from gex_core.history import clear_history_cache, get_latest_ts
-from gex_core.market_features import fetch_cross_asset_returns, fetch_vol_regime
+from gex_core.market_context_cache import cached_cross_asset_returns, cached_vol_regime
 from gex_core.refresh import recent_market_dates
 from gex_core.snapshot_export import write_snapshot_export
 from gex_core.tickers import is_supported_ticker
@@ -92,6 +92,12 @@ def _summary_market_features_enabled() -> bool:
     return summary_market_features_enabled()
 
 
+def _lightweight_market_context_enabled() -> bool:
+    from gex_core.runtime_mode import lightweight_market_context_enabled
+
+    return lightweight_market_context_enabled()
+
+
 def _build_summary(
     ticker: str,
     *,
@@ -128,10 +134,18 @@ def _build_summary(
         market_date=market_date,
         vol_regime=vol_regime
         if vol_regime is not None
-        else (fetch_vol_regime() if _summary_market_features_enabled() else None),
+        else (
+            cached_vol_regime()
+            if _lightweight_market_context_enabled() or _summary_market_features_enabled()
+            else None
+        ),
         cross_asset=cross_asset
         if cross_asset is not None
-        else (fetch_cross_asset_returns() if _summary_market_features_enabled() else None),
+        else (
+            cached_cross_asset_returns()
+            if _lightweight_market_context_enabled() or _summary_market_features_enabled()
+            else None
+        ),
     )
     from gex_core.features import resolve_gamma_flip
     from gex_core.spot_exposure import spot_exposure_net_series
@@ -162,6 +176,18 @@ def _build_summary(
     return summary
 
 
+def _resolve_uw_time(spot_df: pd.DataFrame | None) -> str | None:
+    if spot_df is None or spot_df.empty:
+        return None
+    for col in ("time", "updated_at", "date"):
+        if col in spot_df.columns and spot_df[col].notna().any():
+            value = spot_df[col].dropna().iloc[0]
+            return pd.Timestamp(value).isoformat()
+    if spot_df.attrs.get("uw_time"):
+        return str(spot_df.attrs["uw_time"])
+    return None
+
+
 def export_live_strike_snapshot(
     ticker: str,
     *,
@@ -170,6 +196,8 @@ def export_live_strike_snapshot(
     force: bool = False,
 ) -> str | None:
     """Fetch full strike GEX and write a minute-timestamped export."""
+    import time
+
     from gex_core.uw_loader import fetch_uw_gex
 
     ticker = ticker.upper()
@@ -179,10 +207,13 @@ def export_live_strike_snapshot(
         logger.info("Skipping %s — snapshot already exists for current %.2g-min window", ticker, interval)
         return get_latest_ts(ticker, export_dir)
 
+    fetch_start = time.perf_counter()
     spot, agg = fetch_uw_gex(ticker, api_key=api_key)
+    uw_fetch_ms = (time.perf_counter() - fetch_start) * 1000
     market_date = agg.gex_by_strike.attrs.get("market_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     greek_df = agg.gex_by_strike.attrs.get("greek_exposure_df")
     spot_df = agg.gex_by_strike.attrs.get("spot_exposures_df")
+    uw_time = _resolve_uw_time(spot_df if isinstance(spot_df, pd.DataFrame) else None)
     summary = _build_summary(
         ticker,
         market_date=market_date,
@@ -190,10 +221,12 @@ def export_live_strike_snapshot(
         total_gex_bn=agg.total_gex_bn,
         uw_endpoint="spot-exposures/strike",
         granularity=f"{interval}min",
+        uw_time=uw_time,
         greek_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         spot_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
     )
     summary["interval_minutes"] = interval
+    summary["strike_profile_source"] = "live_spot_exposures"
     ts = write_snapshot_export(
         ticker,
         gex_by_strike=agg.gex_by_strike,
@@ -203,6 +236,10 @@ def export_live_strike_snapshot(
         greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
         summary=summary,
         export_dir=export_dir,
+        uw_time=uw_time,
+        interval_minutes=interval,
+        force=force,
+        uw_fetch_ms=uw_fetch_ms,
     )
     logger.info("Live minute snapshot saved for %s at %s", ticker, ts)
     return ts
@@ -265,8 +302,8 @@ def backfill_intraday_minutes(
         logger.debug("Greek exposure unavailable for intraday backfill %s on %s", ticker, market_date)
 
     existing = _existing_timestamps(ticker, export_dir)
-    vol_regime = fetch_vol_regime() if _summary_market_features_enabled() else None
-    cross_asset = fetch_cross_asset_returns() if _summary_market_features_enabled() else None
+    vol_regime = cached_vol_regime() if (_lightweight_market_context_enabled() or _summary_market_features_enabled()) else None
+    cross_asset = cached_cross_asset_returns() if (_lightweight_market_context_enabled() or _summary_market_features_enabled()) else None
     saved = 0
     for _, row in minute_df.iterrows():
         if pd.isna(row.get("time")):
@@ -289,6 +326,8 @@ def backfill_intraday_minutes(
             cross_asset=cross_asset,
         )
         summary["interval_minutes"] = interval_minutes
+        summary["strike_profile_source"] = "eod_scaled"
+        summary["strike_profile_confidence"] = "low"
         write_snapshot_export(
             ticker,
             gex_by_strike=base_strike,
@@ -297,6 +336,8 @@ def backfill_intraday_minutes(
             summary=summary,
             export_dir=export_dir,
             timestamp=ts,
+            uw_time=row["time"],
+            interval_minutes=interval_minutes,
         )
         existing.add(ts)
         saved += 1
@@ -372,11 +413,18 @@ def backfill_recent_intraday(
     api_key: str | None = None,
     force: bool = False,
     interval_minutes: int | None = None,
+    since_date: str | None = None,
 ) -> dict[str, int]:
     """Backfill intraday exports for recent weekdays."""
+    from gex_core.processor_state import last_backfilled_date, mark_backfilled_through
+
     days = days if days is not None else DEFAULT_BACKFILL_DAYS
+    since_date = since_date or last_backfilled_date(ticker)
+    market_dates = recent_market_dates(days=days)
+    if since_date:
+        market_dates = [day for day in market_dates if day > since_date[:10]]
     results: dict[str, int] = {}
-    for market_date in recent_market_dates(days=days):
+    for market_date in market_dates:
         results[market_date] = backfill_intraday_minutes(
             ticker,
             market_date,
@@ -385,6 +433,8 @@ def backfill_recent_intraday(
             force=force,
             interval_minutes=interval_minutes,
         )
+    if market_dates:
+        mark_backfilled_through(ticker, market_dates[-1])
     return results
 
 

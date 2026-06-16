@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
@@ -14,12 +15,15 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from gex_core.data_root import configure_data_paths
 from gex_core.env_bootstrap import bootstrap_env, parse_env_minutes
-from gex_core.refresh import DEFAULT_REFRESH_MINUTES, refresh_tickers
+from gex_core.processor_metrics import get_processor_metrics, record_refresh_result
+from gex_core.refresh import refresh_tickers
+from gex_core.refresh_schedule import adaptive_refresh_minutes, processor_refresh_enabled, should_refresh_now
 from gex_core.tickers import PRIMARY_TICKER
 
 logger = logging.getLogger(__name__)
 
 _REFRESH_LOCK = threading.Lock()
+_LAST_REFRESH_AT: datetime | None = None
 
 
 def processor_tickers() -> list[str]:
@@ -28,19 +32,39 @@ def processor_tickers() -> list[str]:
 
 
 def _scheduled_refresh_work() -> None:
+    global _LAST_REFRESH_AT
+    if not processor_refresh_enabled():
+        logger.debug("Skipping refresh — market session inactive")
+        return
+    if not should_refresh_now(_LAST_REFRESH_AT):
+        return
     with _REFRESH_LOCK:
-        refresh_tickers(processor_tickers())
+        if not should_refresh_now(_LAST_REFRESH_AT):
+            return
+        try:
+            refresh_tickers(processor_tickers())
+            _LAST_REFRESH_AT = datetime.now(timezone.utc)
+        except Exception as exc:
+            record_refresh_result(error=str(exc), validation_status="error")
+            raise
 
 
 def _health_payload() -> dict:
     from gex_core.db import use_postgres
+    from gex_core.market_time import is_trader_session_active, is_trading_weekday
+    from gex_core.refresh_schedule import adaptive_refresh_minutes, processor_refresh_enabled
     from gex_core.storage import export_age_minutes, latest_timestamp
 
     ticker = processor_tickers()[0]
+    metrics = get_processor_metrics()
     payload: dict = {
         "mode": "processor",
         "postgres": use_postgres(),
         "ticker": ticker,
+        "market_open": is_trading_weekday() and is_trader_session_active(),
+        "refresh_enabled": processor_refresh_enabled(),
+        "adaptive_refresh_minutes": adaptive_refresh_minutes(),
+        "metrics": metrics.to_dict(),
     }
     if not use_postgres():
         payload["status"] = "degraded"
@@ -51,7 +75,11 @@ def _health_payload() -> dict:
     age = export_age_minutes(ticker)
     payload["latest_ts"] = latest
     payload["export_age_minutes"] = age
-    max_age = parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", DEFAULT_REFRESH_MINUTES) * 2
+    if metrics.last_uw_fetch_ms is not None:
+        payload["uw_fetch_ms"] = metrics.last_uw_fetch_ms
+    if metrics.last_postgres_write_ms is not None:
+        payload["postgres_write_ms"] = metrics.last_postgres_write_ms
+    max_age = adaptive_refresh_minutes() * 2
     if latest is None:
         payload["status"] = "warming"
     elif age is not None and age > max_age:
@@ -90,6 +118,7 @@ def start_health_server() -> ThreadingHTTPServer:
 def _maybe_bootstrap_history() -> None:
     if os.environ.get("GEX_STARTUP_BACKFILL", "").strip() != "1":
         return
+    from gex_core.processor_state import last_backfilled_date, mark_backfilled_through
     from gex_core.storage import list_indexed_timestamps
 
     ticker = processor_tickers()[0]
@@ -99,21 +128,21 @@ def _maybe_bootstrap_history() -> None:
     import subprocess
     import sys
 
-    subprocess.Popen(
-        [
-            sys.executable,
-            "scripts/gex_backfill_intraday.py",
-            "--tickers",
-            ",".join(processor_tickers()),
-            "--intraday-days",
-            os.environ.get("GEX_INTRADAY_BACKFILL_DAYS", "90"),
-            "--daily-days",
-            os.environ.get("GEX_DAILY_BACKFILL_DAYS", "90"),
-            "--interval-minutes",
-            os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"),
-        ],
-        cwd=os.path.dirname(os.path.dirname(__file__)),
-    )
+    args = [
+        sys.executable,
+        "scripts/gex_backfill_intraday.py",
+        "--tickers",
+        ",".join(processor_tickers()),
+        "--intraday-days",
+        os.environ.get("GEX_INTRADAY_BACKFILL_DAYS", "90"),
+        "--daily-days",
+        os.environ.get("GEX_DAILY_BACKFILL_DAYS", "90"),
+        "--interval-minutes",
+        os.environ.get("GEX_BACKFILL_INTERVAL_MINUTES", "10"),
+    ]
+    proc = subprocess.Popen(args, cwd=os.path.dirname(os.path.dirname(__file__)))
+    mark_backfilled_through(ticker, datetime.now(timezone.utc).date().isoformat())
+    logger.info("Started background backfill pid=%s last_date=%s", proc.pid, cursor_date)
 
 
 def run_processor(*, extra_startup: Callable[[], None] | None = None) -> None:
@@ -135,7 +164,7 @@ def run_processor(*, extra_startup: Callable[[], None] | None = None) -> None:
         extra_startup()
     _maybe_bootstrap_history()
 
-    refresh_seconds = max(60.0, parse_env_minutes("GEX_REFRESH_INTERVAL_MINUTES", DEFAULT_REFRESH_MINUTES) * 60.0)
+    refresh_seconds = max(60.0, min(120.0, adaptive_refresh_minutes() * 60.0))
     scheduler = BlockingScheduler()
     scheduler.add_job(
         _scheduled_refresh_work,

@@ -226,6 +226,74 @@ STRIKES_SCHEMA_PG = """
             ON snapshot_strikes (ticker, ts);
         """
 
+ATM_STRIKES_SCHEMA_PG = """
+        CREATE TABLE IF NOT EXISTS snapshot_strikes_atm (
+            ticker TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            strike DOUBLE PRECISION NOT NULL,
+            gex_bn_per_pct DOUBLE PRECISION,
+            cumulative_gex_bn_per_pct DOUBLE PRECISION,
+            PRIMARY KEY (ticker, ts, strike)
+        );
+        CREATE INDEX IF NOT EXISTS idx_snapshot_strikes_atm_ticker_ts
+            ON snapshot_strikes_atm (ticker, ts);
+        """
+
+FEATURES_SCHEMA_PG = """
+        CREATE TABLE IF NOT EXISTS snapshot_features (
+            ticker TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            prior_ts TEXT,
+            snapshot_at TIMESTAMPTZ,
+            gamma_flip DOUBLE PRECISION,
+            call_wall DOUBLE PRECISION,
+            put_wall DOUBLE PRECISION,
+            pos_gamma_peak_strike DOUBLE PRECISION,
+            flip_distance_pct DOUBLE PRECISION,
+            wall_spread DOUBLE PRECISION,
+            gex_concentration DOUBLE PRECISION,
+            near_term_ratio DOUBLE PRECISION,
+            zero_dte_ratio DOUBLE PRECISION,
+            term_curvature DOUBLE PRECISION,
+            expiration_count DOUBLE PRECISION,
+            front_term_ratio DOUBLE PRECISION,
+            back_term_ratio DOUBLE PRECISION,
+            delta_gex DOUBLE PRECISION,
+            delta_spot DOUBLE PRECISION,
+            spot_return DOUBLE PRECISION,
+            regime_changed BOOLEAN,
+            surface_vector JSONB,
+            strike_profile_hash TEXT,
+            strike_count INTEGER,
+            PRIMARY KEY (ticker, ts)
+        );
+        CREATE INDEX IF NOT EXISTS idx_snapshot_features_ticker_ts
+            ON snapshot_features (ticker, ts DESC);
+        """
+
+DIAGNOSTICS_SCHEMA_PG = """
+        CREATE TABLE IF NOT EXISTS snapshot_diagnostics (
+            ticker TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            status TEXT NOT NULL,
+            validation_json JSONB,
+            uw_fetch_ms DOUBLE PRECISION,
+            postgres_write_ms DOUBLE PRECISION,
+            indexed_at TEXT,
+            PRIMARY KEY (ticker, ts)
+        );
+        CREATE INDEX IF NOT EXISTS idx_snapshot_diagnostics_ticker_ts
+            ON snapshot_diagnostics (ticker, ts DESC);
+        """
+
+PROCESSOR_STATE_SCHEMA_PG = """
+        CREATE TABLE IF NOT EXISTS processor_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+
 _SCHEMA_BY_GROUP: dict[str, tuple[str, str]] = {
     "index": (INDEX_SCHEMA_SQLITE, INDEX_SCHEMA_PG),
     "journal": (JOURNAL_SCHEMA_SQLITE, JOURNAL_SCHEMA_PG),
@@ -239,7 +307,29 @@ _POSTGRES_MIGRATIONS = (
     "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS expiration_json JSONB",
     "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS surface_json JSONB",
     "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS greek_exposure_json JSONB",
+    "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS snapshot_at TIMESTAMPTZ",
+    "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS prior_ts TEXT",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_date ON snapshots (ticker, market_date)",
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_snapshot_at ON snapshots (ticker, snapshot_at DESC)",
+)
+
+_PROCESSOR_EXTRA_SCHEMA_BLOCKS = (
+    ATM_STRIKES_SCHEMA_PG,
+    FEATURES_SCHEMA_PG,
+    DIAGNOSTICS_SCHEMA_PG,
+    PROCESSOR_STATE_SCHEMA_PG,
+)
+
+_LATEST_SNAPSHOT_VIEW_SQL = """
+CREATE MATERIALIZED VIEW IF NOT EXISTS latest_snapshot AS
+SELECT DISTINCT ON (ticker)
+    ticker, ts, market_date, spot, total_gex, regime, indexed_at, snapshot_at, prior_ts
+FROM snapshots
+ORDER BY ticker, ts DESC
+"""
+
+_LATEST_SNAPSHOT_INDEX_SQL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_latest_snapshot_ticker ON latest_snapshot (ticker)"
 )
 
 
@@ -378,6 +468,8 @@ def _sqlite_schema_sql(group: str) -> str:
 def _postgres_schema_statements(*, processor_only: bool = False) -> list[str]:
     groups = ("index", "strikes") if processor_only else ("index", "journal", "predictions", "insights", "strikes")
     parts = [_SCHEMA_BY_GROUP[group][1] for group in groups]
+    if processor_only:
+        parts.extend(_PROCESSOR_EXTRA_SCHEMA_BLOCKS)
     statements: list[str] = []
     for block in parts:
         for stmt in block.split(";"):
@@ -388,12 +480,37 @@ def _postgres_schema_statements(*, processor_only: bool = False) -> list[str]:
     return statements
 
 
+def refresh_latest_snapshot_view() -> None:
+    """Refresh the latest_snapshot materialized view (no-op without Postgres)."""
+    url = database_url()
+    if not url:
+        return
+    import psycopg
+
+    with psycopg.connect(url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(_LATEST_SNAPSHOT_VIEW_SQL)
+            cur.execute(_LATEST_SNAPSHOT_INDEX_SQL)
+            try:
+                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY latest_snapshot")
+            except Exception:
+                cur.execute("REFRESH MATERIALIZED VIEW latest_snapshot")
+        conn.commit()
+
+
 def postgres_schema_ddl(*, processor_only: bool = False) -> str:
     """Full PostgreSQL DDL for application tables (idempotent)."""
     return ";\n\n".join(_postgres_schema_statements(processor_only=processor_only)) + ";\n"
 
 
-PROCESSOR_POSTGRES_TABLES = ("snapshots", "snapshot_strikes")
+PROCESSOR_POSTGRES_TABLES = (
+    "snapshots",
+    "snapshot_strikes",
+    "snapshot_strikes_atm",
+    "snapshot_features",
+    "snapshot_diagnostics",
+    "processor_state",
+)
 
 
 def list_postgres_tables() -> list[str]:
@@ -447,6 +564,9 @@ def ensure_postgres_schema(*, processor_only: bool | None = None) -> list[str]:
             with conn.cursor() as cur:
                 for stmt in _postgres_schema_statements(processor_only=processor_only):
                     cur.execute(stmt)
+                if processor_only:
+                    cur.execute(_LATEST_SNAPSHOT_VIEW_SQL)
+                    cur.execute(_LATEST_SNAPSHOT_INDEX_SQL)
             conn.commit()
         _PG_INITIALIZED = True
     return list_postgres_tables()
