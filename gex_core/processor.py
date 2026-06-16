@@ -53,14 +53,17 @@ def _health_payload() -> dict:
     from gex_core.db import use_postgres
     from gex_core.market_time import is_trader_session_active, is_trading_weekday
     from gex_core.refresh_schedule import adaptive_refresh_minutes, processor_refresh_enabled
-    from gex_core.storage import export_age_minutes, latest_timestamp
+    from gex_core.storage import count_snapshots, export_age_minutes, latest_timestamp
 
     ticker = processor_tickers()[0]
     metrics = get_processor_metrics()
+    snapshot_count = count_snapshots(ticker) if use_postgres() else None
     payload: dict = {
         "mode": "processor",
         "postgres": use_postgres(),
         "ticker": ticker,
+        "snapshot_count": snapshot_count,
+        "backfill_min_snapshots": int(os.environ.get("GEX_BACKFILL_MIN_SNAPSHOTS", "30")),
         "market_open": is_trading_weekday() and is_trader_session_active(),
         "refresh_enabled": processor_refresh_enabled(),
         "adaptive_refresh_minutes": adaptive_refresh_minutes(),
@@ -116,27 +119,8 @@ def start_health_server() -> ThreadingHTTPServer:
 
 
 def _maybe_bootstrap_history() -> None:
-    if os.environ.get("GEX_STARTUP_BACKFILL", "").strip() != "1":
-        return
-    from gex_core.storage import count_snapshots
-
-    ticker = processor_tickers()[0]
-    min_snapshots = int(os.environ.get("GEX_FORECAST_MIN_SNAPSHOTS", "4"))
-    if count_snapshots(ticker) >= min_snapshots:
-        return
-    logger.info("Startup backfill: sparse history for %s (%d snapshots)", ticker, count_snapshots(ticker))
-    import subprocess
-    import sys
-
-    args = [
-        sys.executable,
-        "scripts/backfill_postgres_history.py",
-        "--tickers",
-        ",".join(processor_tickers()),
-        "--if-sparse",
-    ]
-    proc = subprocess.Popen(args, cwd=os.path.dirname(os.path.dirname(__file__)))
-    logger.info("Started background UW backfill pid=%s", proc.pid)
+    """Background bootstrap is started from scripts/start_processor.sh."""
+    return
 
 
 def run_processor(*, extra_startup: Callable[[], None] | None = None) -> None:

@@ -15,6 +15,9 @@ export GEX_QUALITY_ALERTS="${GEX_QUALITY_ALERTS:-0}"
 export GEX_MAX_DATA_LAG_SEC="${GEX_MAX_DATA_LAG_SEC:-1200}"
 export GEX_SPOT_DISAGREEMENT_TOLERANCE_PCT="${GEX_SPOT_DISAGREEMENT_TOLERANCE_PCT:-0.005}"
 export GEX_MIN_STRIKE_GEX_BN="${GEX_MIN_STRIKE_GEX_BN:-1e-6}"
+export GEX_STARTUP_BACKFILL="${GEX_STARTUP_BACKFILL:-1}"
+export GEX_BACKFILL_MIN_SNAPSHOTS="${GEX_BACKFILL_MIN_SNAPSHOTS:-30}"
+export GEX_IMPORT_EXPORTS_ON_START="${GEX_IMPORT_EXPORTS_ON_START:-1}"
 
 python3 - <<'PY'
 from gex_core.env_bootstrap import bootstrap_env
@@ -28,12 +31,11 @@ if [ "${GEX_MIGRATE_SQLITE}" != "0" ]; then
   python3 scripts/migrate_sqlite_to_postgres.py --if-needed || true
 fi
 
-if [ "${GEX_IMPORT_EXPORTS_ON_START:-0}" = "1" ]; then
-  python3 scripts/import_exports_to_postgres.py --if-missing || true
-fi
-
-if [ "${GEX_STARTUP_BACKFILL:-0}" = "1" ]; then
-  python3 scripts/backfill_postgres_history.py --if-sparse || true
+if [ "${GEX_IMPORT_EXPORTS_ON_START}" = "1" ] || [ "${GEX_STARTUP_BACKFILL}" = "1" ]; then
+  mkdir -p "${GEX_DATA_DIR:-/app/data}"
+  LOG_FILE="${GEX_DATA_DIR:-/app/data}/bootstrap_postgres.log"
+  echo "Starting Postgres data bootstrap in background (log: ${LOG_FILE})"
+  nohup python3 scripts/bootstrap_postgres_data.py >> "${LOG_FILE}" 2>&1 &
 fi
 
 exec python3 -m gex_core.processor

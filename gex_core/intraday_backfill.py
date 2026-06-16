@@ -352,18 +352,22 @@ def backfill_intraday_minutes(
         summary["interval_minutes"] = interval_minutes
         summary["strike_profile_source"] = "eod_scaled"
         summary["strike_profile_confidence"] = "low"
-        write_snapshot_export(
-            ticker,
-            gex_by_strike=strike_profile,
-            cumulative_gex=cumulative,
-            greek_exposure_df=greek_exposure_df if not greek_exposure_df.empty else None,
-            summary=summary,
-            export_dir=export_dir,
-            timestamp=ts,
-            uw_time=row["time"],
-            interval_minutes=interval_minutes,
-            force=True,
-        )
+        try:
+            write_snapshot_export(
+                ticker,
+                gex_by_strike=strike_profile,
+                cumulative_gex=cumulative,
+                greek_exposure_df=greek_exposure_df if not greek_exposure_df.empty else None,
+                summary=summary,
+                export_dir=export_dir,
+                timestamp=ts,
+                uw_time=row["time"],
+                interval_minutes=interval_minutes,
+                force=True,
+            )
+        except Exception as exc:
+            logger.warning("Backfill write failed for %s %s: %s", ticker, ts, exc)
+            continue
         existing.add(ts)
         saved += 1
 
@@ -416,18 +420,22 @@ def backfill_daily_strike_snapshots(
         granularity="eod",
         greek_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
     )
-    write_snapshot_export(
-        ticker,
-        gex_by_strike=agg.gex_by_strike,
-        cumulative_gex=agg.cumulative_gex,
-        gex_by_expiration=agg.gex_by_expiration,
-        surface_data=agg.surface_data,
-        greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
-        summary=summary,
-        export_dir=export_dir,
-        timestamp=ts,
-        force=force,
-    )
+    try:
+        write_snapshot_export(
+            ticker,
+            gex_by_strike=agg.gex_by_strike,
+            cumulative_gex=agg.cumulative_gex,
+            gex_by_expiration=agg.gex_by_expiration,
+            surface_data=agg.surface_data,
+            greek_exposure_df=greek_df if isinstance(greek_df, pd.DataFrame) else None,
+            summary=summary,
+            export_dir=export_dir,
+            timestamp=ts,
+            force=force,
+        )
+    except Exception as exc:
+        logger.warning("Daily backfill write failed for %s %s: %s", ticker, ts, exc)
+        return False
     return True
 
 
@@ -445,7 +453,10 @@ def backfill_recent_intraday(
     from gex_core.processor_state import last_backfilled_date, mark_backfilled_through
 
     days = days if days is not None else DEFAULT_BACKFILL_DAYS
-    since_date = since_date or last_backfilled_date(ticker)
+    if since_date is None:
+        since_date = last_backfilled_date(ticker)
+    elif since_date == "":
+        since_date = None
     market_dates = recent_market_dates(days=days)
     if since_date:
         market_dates = [day for day in market_dates if day > since_date[:10]]

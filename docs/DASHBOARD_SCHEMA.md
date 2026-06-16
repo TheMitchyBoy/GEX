@@ -180,7 +180,20 @@ Options:
 - `--if-sparse` — skip when enough snapshots already exist
 - `--force` — overwrite existing timestamps
 
-On Railway, set `GEX_STARTUP_BACKFILL=1` on the processor to run `--if-sparse` on boot, or run the script as a one-off job.
+On Railway, bootstrap runs automatically on processor boot when snapshot count is below `GEX_BACKFILL_MIN_SNAPSHOTS` (default **30**). Check progress:
+
+```bash
+tail -f /app/data/bootstrap_postgres.log
+curl -s https://<your-processor>/health/live | jq .snapshot_count
+```
+
+Defaults on processor start:
+
+- `GEX_STARTUP_BACKFILL=1` — pull UW history when sparse
+- `GEX_IMPORT_EXPORTS_ON_START=1` — import local CSV exports when present on disk
+- `GEX_BACKFILL_MIN_SNAPSHOTS=30` — threshold before backfill is skipped
+
+Or run manually as a one-off job:
 
 Required env:
 

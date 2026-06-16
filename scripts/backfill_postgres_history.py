@@ -31,9 +31,17 @@ def _configure_backfill_env() -> None:
     os.environ.setdefault("GEX_PROCESSOR_MODE", "1")
     os.environ.setdefault("GEX_EXPORT_CSV", "0")
     os.environ.setdefault("GEX_SKIP_DUPLICATE_SNAPSHOTS", "1")
+    os.environ.setdefault("GEX_BACKFILL_MODE", "1")
     # Scaled intraday profiles can disagree slightly with minute totals.
     os.environ.setdefault("GEX_HARD_REJECT_TOTAL_GEX_MISMATCH", "0")
     os.environ.setdefault("GEX_MIN_STRIKE_COUNT", "3")
+
+
+def _sparse_threshold() -> int:
+    try:
+        return int(os.environ.get("GEX_BACKFILL_MIN_SNAPSHOTS", "30"))
+    except (TypeError, ValueError):
+        return 30
 
 
 def main() -> int:
@@ -50,7 +58,7 @@ def main() -> int:
     parser.add_argument(
         "--if-sparse",
         action="store_true",
-        help="Skip tickers that already have GEX_FORECAST_MIN_SNAPSHOTS rows in Postgres",
+        help="Skip tickers that already have GEX_BACKFILL_MIN_SNAPSHOTS rows in Postgres",
     )
     parser.add_argument("--intraday-only", action="store_true")
     parser.add_argument("--daily-only", action="store_true")
@@ -65,13 +73,16 @@ def main() -> int:
 
     ensure_postgres_schema()
     tickers = _parse_tickers(args.tickers)
-    min_snapshots = int(os.environ.get("GEX_FORECAST_MIN_SNAPSHOTS", "4"))
+    min_snapshots = _sparse_threshold()
     ok = False
 
     for ticker in tickers:
-        if args.if_sparse and not args.force and count_snapshots(ticker) >= min_snapshots:
-            print(f"{ticker}: skipped (already has {count_snapshots(ticker)} snapshots)")
+        count = count_snapshots(ticker)
+        if args.if_sparse and not args.force and count >= min_snapshots:
+            print(f"{ticker}: skipped (already has {count} snapshots, need {min_snapshots})")
             continue
+
+        since_date = "" if args.if_sparse and not args.force else None
 
         if not args.daily_only and args.intraday_days > 0:
             results = backfill_recent_intraday(
@@ -79,6 +90,7 @@ def main() -> int:
                 days=args.intraday_days,
                 force=args.force,
                 interval_minutes=args.interval_minutes,
+                since_date=since_date,
             )
             total = sum(results.values())
             print(
