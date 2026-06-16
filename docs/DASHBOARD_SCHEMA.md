@@ -70,9 +70,46 @@ ATM subset (default ±3% of spot). Same columns as `snapshot_strikes`.
 
 Precomputed ML features: `gamma_flip`, `call_wall`, `put_wall`, `delta_gex`, `delta_spot`, `spot_return`, `surface_vector`, `strike_profile_hash`, etc.
 
+| Column | Type | Description |
+|--------|------|-------------|
+| `quality_score` | DOUBLE | 0–1 composite data quality score |
+| `flip_confidence` | TEXT | Gamma flip estimate confidence (`high` / `medium` / `low` / `none`) |
+| `regime_consistent` | BOOLEAN | Total GEX regime matches cumulative slope at spot |
+| `spot_source` | TEXT | Which UW spot candidate was chosen |
+| `spot_disagreement_pct` | DOUBLE | Max spread across spot sources / spot |
+| `strike_profile_confidence` | TEXT | `high` / `medium` / `low` based on strike profile source |
+| `data_lag_sec` | DOUBLE | Seconds between UW observation time and write |
+| `uw_rate_limit_json` | JSONB | Last UW rate-limit response headers |
+
 ## snapshot_diagnostics
 
-Write pipeline status (`ok`, `skipped_duplicate`, `rejected`) plus timing metrics.
+Write pipeline status (`ok`, `ok_with_warnings`, `skipped_duplicate`, `rejected`) plus timing metrics.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `quality_score` | DOUBLE | Same score as `snapshot_features` |
+| `data_lag_sec` | DOUBLE | UW data staleness at write time |
+| `uw_rate_limit_json` | JSONB | UW API rate-limit metadata |
+
+## daily_quality_stats
+
+Per-ticker, per-day rollup of snapshot write outcomes and rolling averages (`quality_score_avg`, `data_lag_sec_avg`, `uw_fetch_ms_avg`, status counts).
+
+## prediction_accuracy_daily
+
+Per-ticker, per-day rollup of resolved LLM prediction outcomes (`sign_hit_rate`, `bias_hit_rate`, `regime_hit_rate`).
+
+## training_snapshots (view)
+
+Filtered snapshots suitable for model training: `quality_score >= 0.8`, non-low strike confidence, not `eod_scaled`, diagnostic status `ok` or `ok_with_warnings`.
+
+```sql
+SELECT ticker, ts, quality_score, flip_confidence, regime_consistent
+FROM training_snapshots
+WHERE ticker = 'SPX'
+ORDER BY ts DESC
+LIMIT 20;
+```
 
 ## processor_state
 
@@ -129,5 +166,10 @@ Optional:
 - `GEX_REFRESH_INTERVAL_MINUTES=10`
 - `GEX_STARTUP_BACKFILL=1` — first-deploy history pull
 - `GEX_DEFAULT_TICKERS=SPX`
+- `GEX_HARD_REJECT_TOTAL_GEX_MISMATCH=1` — reject session snapshots when total GEX ≠ strike sum
+- `GEX_QUALITY_ALERTS=0` — set `1` to webhook on quality anomalies
+- `GEX_MAX_DATA_LAG_SEC=1200` — staleness warning threshold
+- `GEX_SPOT_DISAGREEMENT_TOLERANCE_PCT=0.005` — spot cross-check tolerance
+- `GEX_MIN_STRIKE_GEX_BN=1e-6` — drop dust strikes before Postgres write
 
 Health: `GET /health/live` returns JSON with `latest_ts` and `status`.

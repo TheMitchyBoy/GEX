@@ -74,6 +74,14 @@ CREATE TABLE IF NOT EXISTS snapshot_features (
     surface_vector JSONB,
     strike_profile_hash TEXT,
     strike_count INTEGER,
+    quality_score DOUBLE PRECISION,
+    flip_confidence TEXT,
+    regime_consistent BOOLEAN,
+    spot_source TEXT,
+    spot_disagreement_pct DOUBLE PRECISION,
+    strike_profile_confidence TEXT,
+    data_lag_sec DOUBLE PRECISION,
+    uw_rate_limit_json JSONB,
     PRIMARY KEY (ticker, ts)
 );
 
@@ -88,6 +96,9 @@ CREATE TABLE IF NOT EXISTS snapshot_diagnostics (
     uw_fetch_ms DOUBLE PRECISION,
     postgres_write_ms DOUBLE PRECISION,
     indexed_at TEXT,
+    quality_score DOUBLE PRECISION,
+    data_lag_sec DOUBLE PRECISION,
+    uw_rate_limit_json JSONB,
     PRIMARY KEY (ticker, ts)
 );
 
@@ -96,6 +107,28 @@ CREATE TABLE IF NOT EXISTS processor_state (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS daily_quality_stats (
+    ticker TEXT NOT NULL,
+    market_date TEXT NOT NULL,
+    payload_json JSONB NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (ticker, market_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_quality_stats_ticker_date
+    ON daily_quality_stats (ticker, market_date DESC);
+
+CREATE TABLE IF NOT EXISTS prediction_accuracy_daily (
+    ticker TEXT NOT NULL,
+    market_date TEXT NOT NULL,
+    payload_json JSONB NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (ticker, market_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prediction_accuracy_daily_ticker_date
+    ON prediction_accuracy_daily (ticker, market_date DESC);
 
 CREATE TABLE IF NOT EXISTS trades (
     id SERIAL PRIMARY KEY,
@@ -178,6 +211,18 @@ ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS snapshot_at TIMESTAMPTZ;
 ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS prior_ts TEXT;
 CREATE INDEX IF NOT EXISTS idx_snapshots_snapshot_at ON snapshots (ticker, snapshot_at DESC);
 
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION;
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS flip_confidence TEXT;
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS regime_consistent BOOLEAN;
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS spot_source TEXT;
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS spot_disagreement_pct DOUBLE PRECISION;
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS strike_profile_confidence TEXT;
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS data_lag_sec DOUBLE PRECISION;
+ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS uw_rate_limit_json JSONB;
+ALTER TABLE snapshot_diagnostics ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION;
+ALTER TABLE snapshot_diagnostics ADD COLUMN IF NOT EXISTS data_lag_sec DOUBLE PRECISION;
+ALTER TABLE snapshot_diagnostics ADD COLUMN IF NOT EXISTS uw_rate_limit_json JSONB;
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS latest_snapshot AS
 SELECT DISTINCT ON (ticker)
     ticker, ts, market_date, spot, total_gex, regime, indexed_at, snapshot_at, prior_ts
@@ -185,3 +230,27 @@ FROM snapshots
 ORDER BY ticker, ts DESC;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_latest_snapshot_ticker ON latest_snapshot (ticker);
+
+CREATE OR REPLACE VIEW training_snapshots AS
+SELECT
+    s.ticker,
+    s.ts,
+    s.market_date,
+    s.spot,
+    s.total_gex,
+    s.regime,
+    s.snapshot_at,
+    f.quality_score,
+    f.flip_confidence,
+    f.regime_consistent,
+    f.strike_count,
+    f.delta_gex,
+    f.spot_return,
+    d.status AS diagnostic_status
+FROM snapshots s
+JOIN snapshot_features f ON f.ticker = s.ticker AND f.ts = s.ts
+LEFT JOIN snapshot_diagnostics d ON d.ticker = s.ticker AND d.ts = s.ts
+WHERE COALESCE(d.status, 'ok') IN ('ok', 'ok_with_warnings')
+  AND COALESCE(f.quality_score, 0) >= 0.8
+  AND COALESCE(f.strike_profile_confidence, 'high') <> 'low'
+  AND COALESCE(s.summary_json->>'strike_profile_source', '') <> 'eod_scaled';

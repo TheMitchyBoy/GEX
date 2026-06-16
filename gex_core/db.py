@@ -294,6 +294,30 @@ PROCESSOR_STATE_SCHEMA_PG = """
         );
         """
 
+DAILY_QUALITY_SCHEMA_PG = """
+        CREATE TABLE IF NOT EXISTS daily_quality_stats (
+            ticker TEXT NOT NULL,
+            market_date TEXT NOT NULL,
+            payload_json JSONB NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (ticker, market_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_quality_stats_ticker_date
+            ON daily_quality_stats (ticker, market_date DESC);
+        """
+
+PREDICTION_ACCURACY_SCHEMA_PG = """
+        CREATE TABLE IF NOT EXISTS prediction_accuracy_daily (
+            ticker TEXT NOT NULL,
+            market_date TEXT NOT NULL,
+            payload_json JSONB NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (ticker, market_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_prediction_accuracy_daily_ticker_date
+            ON prediction_accuracy_daily (ticker, market_date DESC);
+        """
+
 _SCHEMA_BY_GROUP: dict[str, tuple[str, str]] = {
     "index": (INDEX_SCHEMA_SQLITE, INDEX_SCHEMA_PG),
     "journal": (JOURNAL_SCHEMA_SQLITE, JOURNAL_SCHEMA_PG),
@@ -311,6 +335,17 @@ _POSTGRES_MIGRATIONS = (
     "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS prior_ts TEXT",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_date ON snapshots (ticker, market_date)",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_snapshot_at ON snapshots (ticker, snapshot_at DESC)",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS flip_confidence TEXT",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS regime_consistent BOOLEAN",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS spot_source TEXT",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS spot_disagreement_pct DOUBLE PRECISION",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS strike_profile_confidence TEXT",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS data_lag_sec DOUBLE PRECISION",
+    "ALTER TABLE snapshot_features ADD COLUMN IF NOT EXISTS uw_rate_limit_json JSONB",
+    "ALTER TABLE snapshot_diagnostics ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION",
+    "ALTER TABLE snapshot_diagnostics ADD COLUMN IF NOT EXISTS data_lag_sec DOUBLE PRECISION",
+    "ALTER TABLE snapshot_diagnostics ADD COLUMN IF NOT EXISTS uw_rate_limit_json JSONB",
 )
 
 _PROCESSOR_EXTRA_SCHEMA_BLOCKS = (
@@ -318,6 +353,8 @@ _PROCESSOR_EXTRA_SCHEMA_BLOCKS = (
     FEATURES_SCHEMA_PG,
     DIAGNOSTICS_SCHEMA_PG,
     PROCESSOR_STATE_SCHEMA_PG,
+    DAILY_QUALITY_SCHEMA_PG,
+    PREDICTION_ACCURACY_SCHEMA_PG,
 )
 
 _LATEST_SNAPSHOT_VIEW_SQL = """
@@ -331,6 +368,32 @@ ORDER BY ticker, ts DESC
 _LATEST_SNAPSHOT_INDEX_SQL = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_latest_snapshot_ticker ON latest_snapshot (ticker)"
 )
+
+_TRAINING_SNAPSHOTS_VIEW_SQL = """
+CREATE OR REPLACE VIEW training_snapshots AS
+SELECT
+    s.ticker,
+    s.ts,
+    s.market_date,
+    s.spot,
+    s.total_gex,
+    s.regime,
+    s.snapshot_at,
+    f.quality_score,
+    f.flip_confidence,
+    f.regime_consistent,
+    f.strike_count,
+    f.delta_gex,
+    f.spot_return,
+    d.status AS diagnostic_status
+FROM snapshots s
+JOIN snapshot_features f ON f.ticker = s.ticker AND f.ts = s.ts
+LEFT JOIN snapshot_diagnostics d ON d.ticker = s.ticker AND d.ts = s.ts
+WHERE COALESCE(d.status, 'ok') IN ('ok', 'ok_with_warnings')
+  AND COALESCE(f.quality_score, 0) >= 0.8
+  AND COALESCE(f.strike_profile_confidence, 'high') <> 'low'
+  AND COALESCE(s.summary_json->>'strike_profile_source', '') <> 'eod_scaled'
+"""
 
 
 class DatabaseError(Exception):
@@ -510,6 +573,8 @@ PROCESSOR_POSTGRES_TABLES = (
     "snapshot_features",
     "snapshot_diagnostics",
     "processor_state",
+    "daily_quality_stats",
+    "prediction_accuracy_daily",
 )
 
 
@@ -567,6 +632,7 @@ def ensure_postgres_schema(*, processor_only: bool | None = None) -> list[str]:
                 if processor_only:
                     cur.execute(_LATEST_SNAPSHOT_VIEW_SQL)
                     cur.execute(_LATEST_SNAPSHOT_INDEX_SQL)
+                    cur.execute(_TRAINING_SNAPSHOTS_VIEW_SQL)
             conn.commit()
         _PG_INITIALIZED = True
     return list_postgres_tables()

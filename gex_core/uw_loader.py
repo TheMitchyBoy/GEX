@@ -186,6 +186,18 @@ def _get(path: str, api_key: str | None = None, **params) -> list[dict]:
         payload = resp.json()
         if "error" in payload:
             raise RuntimeError(f"UW API error for {path!r}: {payload['error']}")
+        from gex_core.uw_metadata import set_last_uw_fetch_metadata
+
+        set_last_uw_fetch_metadata(
+            {
+                "path": path,
+                "status_code": resp.status_code,
+                "daily_count": resp.headers.get("x-uw-daily-req-count"),
+                "daily_limit": resp.headers.get("x-uw-token-req-limit"),
+                "per_minute_remaining": resp.headers.get("x-uw-req-per-minute-remaining"),
+                "per_minute_reset_ms": resp.headers.get("x-uw-req-per-minute-reset"),
+            }
+        )
         return payload.get("data", [])
 
     # Exhausted retries on a transient network error.
@@ -522,19 +534,34 @@ def fetch_uw_gex(
     """
     from gex_core.spot_exposure import spot_exposure_net_series, spot_exposure_surface_df
 
+    from gex_core.features import safe_float
+    from gex_core.spot_consensus import build_spot_consensus
+
     spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=date)
-    spot = 0.0
+    spot_exposure_price = 0.0
     if not spot_df.empty and "price" in spot_df.columns:
         prices = pd.to_numeric(spot_df["price"], errors="coerce").dropna()
         if not prices.empty:
-            spot = float(prices.iloc[0])
-    if spot <= 0:
-        spot = fetch_uw_best_spot_price(ticker, api_key=api_key, date=date)
-    elif date is None:
-        state_price = fetch_uw_stock_state_price(ticker, api_key=api_key)
-        if state_price > 0:
-            spot = state_price
-    logger.info("UW spot price for %s: %.2f", ticker, spot)
+            spot_exposure_price = float(prices.iloc[0])
+
+    intraday_price = 0.0
+    if date is None:
+        minute_df = fetch_uw_spot_exposures_intraday(ticker, api_key=api_key)
+        if not minute_df.empty and "price" in minute_df.columns:
+            prices = pd.to_numeric(minute_df["price"], errors="coerce").dropna()
+            if not prices.empty:
+                intraday_price = float(prices.iloc[-1])
+
+    state_price = fetch_uw_stock_state_price(ticker, api_key=api_key) if date is None else 0.0
+    chosen_spot = fetch_uw_best_spot_price(ticker, api_key=api_key, date=date)
+    consensus = build_spot_consensus(
+        stock_state=state_price,
+        spot_exposure_price=spot_exposure_price,
+        intraday_price=intraday_price,
+        chosen=chosen_spot,
+    )
+    spot = safe_float(consensus.get("spot"), chosen_spot)
+    logger.info("UW spot price for %s: %.2f (source=%s)", ticker, spot, consensus.get("spot_source"))
 
     gex_by_strike = spot_exposure_net_series(spot_df, "gamma")
     gex_by_strike.name = "GEX"
@@ -566,6 +593,19 @@ def fetch_uw_gex(
         market_date = greek_df.attrs["market_date"]
 
     from gex_core.strike_filter import filter_strikes_for_storage, resolve_storage_strike_profile, strikes_bracket_spot
+    from gex_core.uw_metadata import last_uw_fetch_metadata
+
+    if spot > 0 and not strikes_bracket_spot(gex_by_strike, spot) and date is None:
+        import time
+
+        logger.warning("UW spot-exposures misaligned for %s — retrying once", ticker)
+        time.sleep(float(os.environ.get("GEX_UW_RETRY_DELAY_SEC", "2")))
+        spot_df = fetch_uw_spot_exposures(ticker, api_key=api_key, date=date)
+        retry_profile = spot_exposure_net_series(spot_df, "gamma")
+        if not retry_profile.empty:
+            gex_by_strike = retry_profile
+            gex_by_strike.name = "GEX"
+            gex_by_strike.index.name = "strike"
 
     storage_strikes, strike_source = resolve_storage_strike_profile(
         gex_by_strike,
@@ -588,6 +628,8 @@ def fetch_uw_gex(
     gex_by_strike.attrs["greek_exposure_df"] = greek_df if not greek_df.empty else None
     gex_by_strike.attrs["uw_endpoint"] = "spot-exposures/strike"
     gex_by_strike.attrs["strike_profile_source"] = strike_source
+    gex_by_strike.attrs["spot_consensus"] = consensus
+    gex_by_strike.attrs["uw_rate_limit"] = last_uw_fetch_metadata()
     if market_date:
         gex_by_strike.attrs["market_date"] = market_date
 

@@ -15,6 +15,8 @@ import pandas as pd
 
 from gex_core.exports import parse_timestamp
 from gex_core.features import (
+    cumulative_slope_at_spot,
+    estimate_gamma_flip_detailed,
     extract_surface_vector,
     resolve_gamma_flip,
     safe_float,
@@ -22,6 +24,18 @@ from gex_core.features import (
     term_structure_breakdown,
     top_strike_concentration,
 )
+from gex_core.data_quality_score import (
+    check_strike_completeness,
+    compute_data_lag_sec,
+    compute_quality_score,
+    regime_consistent,
+    regime_from_total_gex,
+    should_hard_reject_total_gex_mismatch,
+    strike_profile_confidence,
+    total_gex_tolerance_bn,
+)
+from gex_core.strike_filter import strikes_bracket_spot
+from gex_core.wall_detection import detect_walls
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +60,7 @@ class PreparedSnapshot:
     validation: ValidationResult
     skipped_duplicate: bool = False
     prior_ts: str | None = None
+    prior: dict[str, Any] | None = None
     atm_window_pct: float = 0.03
     strike_profile_hash: str | None = None
     data_quality: dict[str, Any] | None = None
@@ -126,7 +141,7 @@ def build_spot_data_quality_report(
         removed["empty_profile"] = 1
     if spot <= 0:
         removed["invalid_spot"] = 1
-    tolerance = float(os.environ.get("GEX_TOTAL_GEX_TOLERANCE_BN", "0.05"))
+    tolerance = total_gex_tolerance_bn()
     if abs(total_gex_bn - strike_sum_bn) > tolerance:
         removed["total_gex_mismatch"] = 1
     rows_out = 0 if removed else strike_count
@@ -148,21 +163,28 @@ def derive_snapshot_features(
     gex_by_expiration: pd.Series | None,
     summary: dict[str, Any],
     prior: dict[str, Any] | None = None,
+    validation_ok: bool = True,
 ) -> dict[str, Any]:
     strike = pd.Series(gex_by_strike, dtype=float).sort_index()
     spot = safe_float(summary.get("spot") or summary.get("spot_price"), 0.0)
     total_gex = safe_float(summary.get("total_gex_bn_per_pct"), float(strike.sum()) if len(strike) else 0.0)
-    call_wall = float(strike.idxmax()) if len(strike) else None
-    put_wall = float(strike.idxmin()) if len(strike) else None
-    positive = strike[strike > 0]
-    pos_gamma_peak = float(positive.idxmax()) if len(positive) else None
-    gamma_flip = resolve_gamma_flip(
+    walls = detect_walls(strike, spot)
+    call_wall = walls.get("call_wall")
+    put_wall = walls.get("put_wall")
+    pos_gamma_peak = walls.get("pos_gamma_peak_strike")
+    flip_detail = estimate_gamma_flip_detailed(
         spot=spot if spot > 0 else None,
         gex_by_strike=strike if len(strike) else None,
         cumulative_gex=pd.Series(cumulative_gex, dtype=float).sort_index() if len(cumulative_gex) else None,
     )
+    gamma_flip = flip_detail.get("flip_strike")
     if gamma_flip is None:
         gamma_flip = safe_float(summary.get("gamma_flip"), 0.0) or None
+    flip_confidence = str(flip_detail.get("confidence") or "none")
+    cum = pd.Series(cumulative_gex, dtype=float).sort_index() if len(cumulative_gex) else pd.Series(dtype=float)
+    slope_at_spot = cumulative_slope_at_spot(cum, spot) if len(cum) and spot > 0 else 0.0
+    regime = regime_from_total_gex(total_gex)
+    regime_ok = regime_consistent(total_gex, slope_at_spot)
     flip_distance_pct = ((gamma_flip - spot) / spot) if gamma_flip and spot > 0 else None
     wall_spread = (call_wall - put_wall) if call_wall is not None and put_wall is not None else None
     term = term_structure_breakdown(
@@ -177,14 +199,28 @@ def derive_snapshot_features(
     delta_spot = (spot - prior_spot) if prior and prior_spot > 0 and spot > 0 else None
     spot_return = (delta_spot / prior_spot) if delta_spot is not None and prior_spot > 0 else None
     delta_gex = (total_gex - prior_gex) if prior else None
-    regime = str(summary.get("net_gamma_regime") or ("LONG gamma" if total_gex >= 0 else "SHORT gamma"))
     regime_changed = bool(prior_regime and prior_regime != regime)
+    strike_source = summary.get("strike_profile_source")
+    strike_sum = float(strike.sum()) if len(strike) else 0.0
+    total_gex_consistent = abs(total_gex - strike_sum) <= total_gex_tolerance_bn()
+    brackets = strikes_bracket_spot(strike, spot)
+    lag_sec = compute_data_lag_sec(summary.get("uw_time_utc"))
+    quality_score = compute_quality_score(
+        brackets_spot=brackets,
+        spot_disagreement_pct=safe_float(summary.get("spot_disagreement_pct"), 0.0),
+        total_gex_consistent=total_gex_consistent,
+        data_lag_sec=lag_sec,
+        strike_profile_source=str(strike_source) if strike_source else None,
+        strike_count=len(strike),
+        validation_ok=validation_ok,
+    )
     return {
         "ticker": ticker.upper(),
         "ts": ts,
         "prior_ts": prior_ts,
         "snapshot_at": parse_snapshot_at(ts).isoformat(),
         "gamma_flip": gamma_flip,
+        "flip_confidence": flip_confidence,
         "call_wall": call_wall,
         "put_wall": put_wall,
         "pos_gamma_peak_strike": pos_gamma_peak,
@@ -201,9 +237,16 @@ def derive_snapshot_features(
         "delta_spot": delta_spot,
         "spot_return": spot_return,
         "regime_changed": regime_changed,
+        "regime_consistent": regime_ok,
         "surface_vector": surface_vector,
         "strike_profile_hash": strike_profile_hash(strike),
         "strike_count": int(len(strike)),
+        "quality_score": quality_score,
+        "spot_source": summary.get("spot_source"),
+        "spot_disagreement_pct": summary.get("spot_disagreement_pct"),
+        "strike_profile_confidence": strike_profile_confidence(str(strike_source) if strike_source else None),
+        "data_lag_sec": lag_sec,
+        "uw_rate_limit_json": summary.get("uw_rate_limit"),
     }
 
 
@@ -216,6 +259,7 @@ def enrich_summary_with_derived(
     out = dict(summary)
     for key in (
         "gamma_flip",
+        "flip_confidence",
         "call_wall",
         "put_wall",
         "pos_gamma_peak_strike",
@@ -228,6 +272,12 @@ def enrich_summary_with_derived(
         "expiration_count",
         "front_term_ratio",
         "back_term_ratio",
+        "quality_score",
+        "spot_source",
+        "spot_disagreement_pct",
+        "strike_profile_confidence",
+        "data_lag_sec",
+        "regime_consistent",
     ):
         value = features.get(key)
         if value is not None:
@@ -251,12 +301,16 @@ def validate_snapshot(
     summary: dict[str, Any],
     prior: dict[str, Any] | None = None,
 ) -> ValidationResult:
+    from gex_core.data_quality_score import max_data_lag_sec
+
     issues: list[str] = []
     warnings: list[str] = []
     strike = pd.Series(gex_by_strike, dtype=float)
     spot = safe_float(summary.get("spot") or summary.get("spot_price"), 0.0)
     total_gex = safe_float(summary.get("total_gex_bn_per_pct"), float(strike.sum()) if len(strike) else 0.0)
     strike_sum = float(strike.sum()) if len(strike) else 0.0
+    tolerance = total_gex_tolerance_bn()
+    mismatch = len(strike) > 0 and abs(total_gex - strike_sum) > tolerance
 
     if spot <= 0:
         issues.append("spot<=0")
@@ -264,9 +318,23 @@ def validate_snapshot(
         issues.append("total_gex_nan")
     if strike.empty:
         issues.append("empty_strike_profile")
-    tolerance = float(os.environ.get("GEX_TOTAL_GEX_TOLERANCE_BN", "0.05"))
-    if len(strike) and abs(total_gex - strike_sum) > tolerance:
-        warnings.append("total_gex_strike_sum_mismatch")
+
+    completeness = check_strike_completeness(strike, spot)
+    if spot > 0 and not completeness.get("brackets_spot"):
+        issues.append("strikes_misaligned")
+
+    if mismatch:
+        if should_hard_reject_total_gex_mismatch(mismatch=True):
+            issues.append("total_gex_strike_sum_mismatch")
+        else:
+            warnings.append("total_gex_strike_sum_mismatch")
+
+    if summary.get("spot_disagreement"):
+        warnings.append("spot_disagreement")
+
+    lag_sec = compute_data_lag_sec(summary.get("uw_time_utc"))
+    if lag_sec is not None and lag_sec > max_data_lag_sec():
+        warnings.append("stale_uw_data")
 
     if prior:
         prior_count = int(prior.get("strike_count") or 0)
@@ -276,6 +344,9 @@ def validate_snapshot(
     min_strikes = int(os.environ.get("GEX_MIN_STRIKE_COUNT", "5"))
     if len(strike) < min_strikes:
         issues.append("too_few_strikes")
+
+    if summary.get("strike_profile_source") == "eod_scaled":
+        warnings.append("eod_scaled_profile")
 
     if issues:
         return ValidationResult(ok=False, status="rejected", issues=issues, warnings=warnings)
@@ -303,7 +374,8 @@ def fetch_prior_snapshot(ticker: str) -> dict[str, Any] | None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT s.ts, s.spot, s.total_gex, s.regime, f.strike_profile_hash, f.strike_count
+                    SELECT s.ts, s.spot, s.total_gex, s.regime, f.strike_profile_hash, f.strike_count,
+                           f.gamma_flip, f.quality_score
                     FROM snapshots s
                     LEFT JOIN snapshot_features f
                       ON f.ticker = s.ticker AND f.ts = s.ts
@@ -337,6 +409,8 @@ def fetch_prior_snapshot(ticker: str) -> dict[str, Any] | None:
             "regime": row[3],
             "strike_profile_hash": row[4],
             "strike_count": row[5] or len(strike_series),
+            "gamma_flip": row[6],
+            "quality_score": row[7],
             "strike": strike_series,
         }
     except Exception:
@@ -376,6 +450,13 @@ def prepare_snapshot_for_storage(
         total_gex_bn=total_gex,
         strike_sum_bn=strike_sum,
     )
+    validation = validate_snapshot(
+        ticker=ticker,
+        ts=ts,
+        gex_by_strike=gex_by_strike,
+        summary=summary,
+        prior=prior,
+    )
     features = derive_snapshot_features(
         ticker=ticker,
         ts=ts,
@@ -384,15 +465,9 @@ def prepare_snapshot_for_storage(
         gex_by_expiration=gex_by_expiration,
         summary=summary,
         prior=prior,
+        validation_ok=validation.ok,
     )
     summary = enrich_summary_with_derived(summary, features, data_quality=data_quality)
-    validation = validate_snapshot(
-        ticker=ticker,
-        ts=ts,
-        gex_by_strike=gex_by_strike,
-        summary=summary,
-        prior=prior,
-    )
     skipped_duplicate = False
     if (
         not force
@@ -411,6 +486,7 @@ def prepare_snapshot_for_storage(
         validation=validation,
         skipped_duplicate=skipped_duplicate,
         prior_ts=features.get("prior_ts"),
+        prior=prior,
         atm_window_pct=_atm_window_pct(),
         strike_profile_hash=features.get("strike_profile_hash"),
         data_quality=data_quality,

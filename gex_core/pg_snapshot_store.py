@@ -84,6 +84,57 @@ def _copy_strike_rows(cur: Any, table: str, rows: list[tuple[Any, ...]]) -> None
             copy.write_row(row)
 
 
+def _post_write_quality_hooks(
+    *,
+    ticker: str,
+    ts: str,
+    prep: Any,
+    summary: dict[str, Any],
+    uw_fetch_ms: float | None,
+    postgres_write_ms: float | None,
+    prior: dict[str, Any] | None = None,
+) -> None:
+    """Daily rollups and optional anomaly webhooks after a successful Postgres write."""
+    from gex_core.daily_quality import update_daily_quality_stats
+    from gex_core.snapshot_anomalies import detect_snapshot_anomalies, maybe_dispatch_quality_alerts
+
+    features = prep.features
+    validation_payload = prep.validation.to_dict()
+    market_date = str(summary.get("market_date") or "")[:10]
+    if market_date:
+        try:
+            update_daily_quality_stats(
+                ticker=ticker,
+                market_date=market_date,
+                status=prep.validation.status,
+                quality_score=features.get("quality_score"),
+                strike_count=features.get("strike_count"),
+                data_lag_sec=features.get("data_lag_sec"),
+                uw_fetch_ms=uw_fetch_ms,
+                postgres_write_ms=postgres_write_ms,
+            )
+        except Exception:
+            logger.debug("daily quality rollup failed for %s %s", ticker, ts, exc_info=True)
+
+    prior_features = None
+    if prior:
+        prior_features = {
+            "strike_count": prior.get("strike_count"),
+            "gamma_flip": prior.get("gamma_flip"),
+            "regime": prior.get("regime"),
+            "quality_score": prior.get("quality_score"),
+        }
+    alerts = detect_snapshot_anomalies(
+        ticker=ticker,
+        ts=ts,
+        summary=summary,
+        features=features,
+        prior=prior_features,
+        validation=validation_payload,
+    )
+    maybe_dispatch_quality_alerts(ticker, alerts)
+
+
 def _write_diagnostics(
     cur: Any,
     *,
@@ -93,20 +144,27 @@ def _write_diagnostics(
     validation: dict[str, Any] | None,
     uw_fetch_ms: float | None,
     postgres_write_ms: float | None,
+    quality_score: float | None = None,
+    data_lag_sec: float | None = None,
+    uw_rate_limit: dict[str, Any] | None = None,
 ) -> None:
     from psycopg.types.json import Json
 
     cur.execute(
         """
         INSERT INTO snapshot_diagnostics (
-            ticker, ts, status, validation_json, uw_fetch_ms, postgres_write_ms, indexed_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ticker, ts, status, validation_json, uw_fetch_ms, postgres_write_ms,
+            indexed_at, quality_score, data_lag_sec, uw_rate_limit_json
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (ticker, ts) DO UPDATE SET
             status = EXCLUDED.status,
             validation_json = EXCLUDED.validation_json,
             uw_fetch_ms = EXCLUDED.uw_fetch_ms,
             postgres_write_ms = EXCLUDED.postgres_write_ms,
-            indexed_at = EXCLUDED.indexed_at
+            indexed_at = EXCLUDED.indexed_at,
+            quality_score = EXCLUDED.quality_score,
+            data_lag_sec = EXCLUDED.data_lag_sec,
+            uw_rate_limit_json = EXCLUDED.uw_rate_limit_json
         """,
         (
             ticker,
@@ -116,6 +174,9 @@ def _write_diagnostics(
             uw_fetch_ms,
             postgres_write_ms,
             datetime.now(timezone.utc).isoformat(),
+            quality_score,
+            data_lag_sec,
+            Json(uw_rate_limit) if uw_rate_limit else None,
         ),
     )
 
@@ -130,9 +191,12 @@ def _write_features(cur: Any, features: dict[str, Any]) -> None:
             pos_gamma_peak_strike, flip_distance_pct, wall_spread, gex_concentration,
             near_term_ratio, zero_dte_ratio, term_curvature, expiration_count,
             front_term_ratio, back_term_ratio, delta_gex, delta_spot, spot_return,
-            regime_changed, surface_vector, strike_profile_hash, strike_count
+            regime_changed, surface_vector, strike_profile_hash, strike_count,
+            quality_score, flip_confidence, regime_consistent, spot_source,
+            spot_disagreement_pct, strike_profile_confidence, data_lag_sec, uw_rate_limit_json
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (ticker, ts) DO UPDATE SET
             prior_ts = EXCLUDED.prior_ts,
@@ -156,7 +220,15 @@ def _write_features(cur: Any, features: dict[str, Any]) -> None:
             regime_changed = EXCLUDED.regime_changed,
             surface_vector = EXCLUDED.surface_vector,
             strike_profile_hash = EXCLUDED.strike_profile_hash,
-            strike_count = EXCLUDED.strike_count
+            strike_count = EXCLUDED.strike_count,
+            quality_score = EXCLUDED.quality_score,
+            flip_confidence = EXCLUDED.flip_confidence,
+            regime_consistent = EXCLUDED.regime_consistent,
+            spot_source = EXCLUDED.spot_source,
+            spot_disagreement_pct = EXCLUDED.spot_disagreement_pct,
+            strike_profile_confidence = EXCLUDED.strike_profile_confidence,
+            data_lag_sec = EXCLUDED.data_lag_sec,
+            uw_rate_limit_json = EXCLUDED.uw_rate_limit_json
         """,
         (
             features["ticker"],
@@ -183,6 +255,14 @@ def _write_features(cur: Any, features: dict[str, Any]) -> None:
             Json(features.get("surface_vector")),
             features.get("strike_profile_hash"),
             features.get("strike_count"),
+            features.get("quality_score"),
+            features.get("flip_confidence"),
+            features.get("regime_consistent"),
+            features.get("spot_source"),
+            features.get("spot_disagreement_pct"),
+            features.get("strike_profile_confidence"),
+            features.get("data_lag_sec"),
+            Json(features.get("uw_rate_limit_json")),
         ),
     )
 
@@ -347,6 +427,9 @@ def write_snapshot_to_postgres(
                 validation=validation_payload,
                 uw_fetch_ms=uw_fetch_ms,
                 postgres_write_ms=write_ms,
+                quality_score=prep.features.get("quality_score"),
+                data_lag_sec=prep.features.get("data_lag_sec"),
+                uw_rate_limit=prep.features.get("uw_rate_limit_json"),
             )
             cur.execute(
                 "NOTIFY gex_snapshot, %s",
@@ -357,6 +440,18 @@ def write_snapshot_to_postgres(
         refresh_latest_snapshot_view()
     except Exception:
         logger.debug("latest_snapshot refresh failed", exc_info=True)
+    try:
+        _post_write_quality_hooks(
+            ticker=ticker,
+            ts=ts,
+            prep=prep,
+            summary=summary,
+            uw_fetch_ms=uw_fetch_ms,
+            postgres_write_ms=write_ms,
+            prior=prep.prior,
+        )
+    except Exception:
+        logger.debug("post-write quality hooks failed for %s %s", ticker, ts, exc_info=True)
     logger.info(
         "Wrote snapshot %s %s to PostgreSQL (%d strikes, %d atm)",
         ticker,

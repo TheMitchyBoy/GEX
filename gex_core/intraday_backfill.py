@@ -226,7 +226,14 @@ def export_live_strike_snapshot(
         spot_df=spot_df if isinstance(spot_df, pd.DataFrame) else None,
     )
     summary["interval_minutes"] = interval
-    summary["strike_profile_source"] = "live_spot_exposures"
+    summary["strike_profile_source"] = agg.gex_by_strike.attrs.get("strike_profile_source") or "live_spot_exposures"
+    consensus = agg.gex_by_strike.attrs.get("spot_consensus") or {}
+    if consensus:
+        summary["spot_source"] = consensus.get("spot_source")
+        summary["spot_disagreement_pct"] = consensus.get("spot_disagreement_pct")
+        summary["spot_disagreement"] = consensus.get("spot_disagreement")
+        summary["spot_candidates"] = consensus.get("spot_candidates")
+    summary["uw_rate_limit"] = agg.gex_by_strike.attrs.get("uw_rate_limit")
     ts = write_snapshot_export(
         ticker,
         gex_by_strike=agg.gex_by_strike,

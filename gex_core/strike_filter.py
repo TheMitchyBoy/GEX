@@ -19,7 +19,7 @@ def store_strike_distance_pct() -> float:
 def min_strike_gex_bn() -> float:
     """Drop strikes whose |GEX| is below this (Bn$ / 1% move)."""
     try:
-        return float(os.environ.get("GEX_MIN_STRIKE_GEX_BN", "1e-8"))
+        return float(os.environ.get("GEX_MIN_STRIKE_GEX_BN", "1e-6"))
     except (TypeError, ValueError):
         return 1e-8
 

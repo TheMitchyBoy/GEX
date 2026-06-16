@@ -27,21 +27,23 @@ def _resp(status: int, json_payload=None, headers=None):
     return r
 
 
+@patch("gex_core.uw_loader.fetch_uw_stock_state_price", return_value=5000.0)
+@patch("gex_core.uw_loader.fetch_uw_spot_exposures_intraday", return_value=pd.DataFrame({"price": [5000.0]}))
 @patch("gex_core.uw_loader.fetch_uw_best_spot_price", return_value=5000.0)
 @patch("gex_core.uw_loader.fetch_uw_greek_exposure_by_expiration", return_value=pd.Series(dtype=float))
 @patch(
     "gex_core.uw_loader.fetch_uw_spot_exposures",
     return_value=pd.DataFrame(
         {
-            "price": [5000.0, 5000.0],
-            "strike": [4900.0, 5000.0],
-            "call_gamma_oi": [5e8, 1e9],
-            "put_gamma_oi": [-2.5e8, -5e8],
+            "price": [5000.0, 5000.0, 5000.0],
+            "strike": [4900.0, 4950.0, 5000.0],
+            "call_gamma_oi": [5e8, 7e8, 1e9],
+            "put_gamma_oi": [-2.5e8, -3e8, -5e8],
         }
     ),
 )
 @patch("gex_core.uw_loader.fetch_uw_greek_exposure")
-def test_fetch_uw_gex_aggregates(mock_greek, mock_spot_df, mock_exp, mock_best_spot):
+def test_fetch_uw_gex_aggregates(mock_greek, mock_spot_df, mock_exp, mock_best_spot, _mock_intraday, _mock_state):
     mock_greek.return_value = pd.DataFrame(
         {
             "strike": [4900.0, 5000.0],
@@ -52,9 +54,10 @@ def test_fetch_uw_gex_aggregates(mock_greek, mock_spot_df, mock_exp, mock_best_s
     )
     spot, agg = fetch_uw_gex("SPX", api_key="test-key")
     assert spot == 5000.0
-    assert abs(agg.total_gex_bn - 0.75) < 1e-6
-    assert len(agg.gex_by_strike) == 2
+    assert abs(agg.total_gex_bn - 1.15) < 1e-6
+    assert len(agg.gex_by_strike) == 3
     assert agg.gex_by_strike.attrs.get("uw_endpoint") == "spot-exposures/strike"
+    assert agg.gex_by_strike.attrs.get("spot_consensus", {}).get("spot") == 5000.0
 
 
 def test_normalize_net_exposure_prefers_explicit_net_column():

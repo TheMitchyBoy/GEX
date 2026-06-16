@@ -177,6 +177,14 @@ def reconcile_llm_predictions(ticker: str, *, latest_ts: str | None = None) -> i
                 (_now_iso(), json.dumps(actual), json.dumps(outcome), row["id"]),
             )
             resolved += 1
+            market_date = (before.get("market_date") or "")[:10]
+            if market_date:
+                try:
+                    from gex_core.daily_quality import update_prediction_accuracy_daily
+
+                    update_prediction_accuracy_daily(ticker, market_date=market_date, outcome=outcome)
+                except Exception:
+                    logger.debug("prediction accuracy daily rollup failed", exc_info=True)
         conn.commit()
     return resolved
 
