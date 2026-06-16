@@ -165,6 +165,23 @@ python3 scripts/import_exports_to_postgres.py --tickers SPX
 
 Set `GEX_IMPORT_EXPORTS_ON_START=1` on the processor service to import any missing timestamps on boot.
 
+### Catch-up sync (Postgres)
+
+When Postgres already has history but is behind (e.g. latest snapshot is 2026-04-30 while today is June), run:
+
+```bash
+python3 scripts/sync_postgres_snapshots.py --tickers SPX
+```
+
+This imports any on-disk CSV exports missing from Postgres, then pulls UW intraday history for all trading days after the latest stored `market_date`. Equivalent manual backfill:
+
+```bash
+python3 scripts/backfill_postgres_history.py --tickers SPX --catch-up
+python3 scripts/import_exports_to_postgres.py --tickers SPX
+```
+
+On Railway, processor boot runs the same catch-up logic when the latest snapshot is before today (not only when total count is below 30).
+
 ### UW API history backfill (Postgres)
 
 Pull up to 90 days of UW intraday + daily history directly into Postgres (no CSV intermediate):
@@ -189,7 +206,7 @@ curl -s https://<your-processor>/health/live | jq .snapshot_count
 
 Defaults on processor start:
 
-- `GEX_STARTUP_BACKFILL=1` — pull UW history when sparse
+- `GEX_STARTUP_BACKFILL=1` — import CSVs and catch up UW history when sparse or stale
 - `GEX_IMPORT_EXPORTS_ON_START=1` — import local CSV exports when present on disk
 - `GEX_BACKFILL_MIN_SNAPSHOTS=30` — threshold before backfill is skipped
 

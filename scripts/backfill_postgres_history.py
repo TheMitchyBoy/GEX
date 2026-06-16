@@ -60,6 +60,11 @@ def main() -> int:
         action="store_true",
         help="Skip tickers that already have GEX_BACKFILL_MIN_SNAPSHOTS rows in Postgres",
     )
+    parser.add_argument(
+        "--catch-up",
+        action="store_true",
+        help="Backfill only dates after the latest Postgres snapshot (recommended for gap fill)",
+    )
     parser.add_argument("--intraday-only", action="store_true")
     parser.add_argument("--daily-only", action="store_true")
     args = parser.parse_args()
@@ -82,7 +87,14 @@ def main() -> int:
             print(f"{ticker}: skipped (already has {count} snapshots, need {min_snapshots})")
             continue
 
-        since_date = "" if args.if_sparse and not args.force else None
+        since_date = None
+        if args.catch_up and not args.force:
+            from gex_core.bootstrap_data import postgres_latest_market_date
+
+            since_date = postgres_latest_market_date(ticker) or ""
+            print(f"{ticker}: catch-up since {since_date or 'beginning of lookback'}")
+        elif args.if_sparse and not args.force:
+            since_date = ""
 
         if not args.daily_only and args.intraday_days > 0:
             results = backfill_recent_intraday(
