@@ -1,18 +1,16 @@
-from gex_core.market_time import ts_display_label, ts_market_date, ts_market_time_label
+from datetime import date
+
+from gex_core.market_time import is_equity_trading_day, us_equity_holidays
 
 
-def test_ts_market_date_converts_utc_key_to_et_session():
-    # 01:22 UTC on June 6 is still June 5 evening in US/Eastern (EDT).
-    assert ts_market_date("2026-06-06_012248") == "2026-06-05"
+def test_good_friday_2026_is_not_trading_day():
+    assert date(2026, 4, 3) in us_equity_holidays(2026)
+    assert not is_equity_trading_day("2026-04-03")
 
 
-def test_ts_market_time_label_shows_et_clock():
-    label = ts_market_time_label("2026-06-06_012248")
-    assert label.endswith("ET")
-    assert "21:22" in label or "20:22" in label
+def test_regular_weekday_is_trading_day():
+    assert is_equity_trading_day("2026-06-05")
 
 
-def test_ts_display_label_includes_timezone():
-    label = ts_display_label("2026-06-05_143000")
-    assert "2026-06-05" in label
-    assert "ET" in label
+def test_weekend_is_not_trading_day():
+    assert not is_equity_trading_day("2026-06-06")

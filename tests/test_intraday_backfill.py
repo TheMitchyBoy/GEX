@@ -94,3 +94,10 @@ def test_backfill_intraday_minutes_writes_snapshots(
 
     saved_again = backfill_intraday_minutes("SPX", "2026-06-05", export_dir=tmp_path)
     assert saved_again == 0
+
+
+@patch("gex_core.uw_loader.fetch_uw_spot_exposures_intraday", return_value=pd.DataFrame())
+def test_backfill_intraday_minutes_skips_market_holiday(mock_intraday, tmp_path):
+    saved = backfill_intraday_minutes("SPX", "2026-04-03", export_dir=tmp_path)
+    assert saved == 0
+    mock_intraday.assert_called_once()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from gex_core.exports import parse_timestamp
@@ -99,10 +99,87 @@ def is_trading_weekday(*, now: datetime | None = None) -> bool:
     return anchor.weekday() < 5
 
 
+def _observed_holiday(day: date) -> date:
+    """NYSE-style weekend observation (Sat -> Fri, Sun -> Mon)."""
+    if day.weekday() == 5:
+        return day - timedelta(days=1)
+    if day.weekday() == 6:
+        return day + timedelta(days=1)
+    return day
+
+
+def _nth_weekday(year: int, month: int, n: int, weekday: int) -> date:
+    """Nth weekday in a month (n=1 first, n=-1 last)."""
+    if n == 0:
+        raise ValueError("n must be non-zero")
+    if n > 0:
+        day = date(year, month, 1)
+        while day.weekday() != weekday:
+            day += timedelta(days=1)
+        return day + timedelta(weeks=n - 1)
+    day = date(year, month + 1, 1) - timedelta(days=1)
+    while day.weekday() != weekday:
+        day -= timedelta(days=1)
+    return day + timedelta(weeks=n + 1)
+
+
+def _easter_sunday(year: int) -> date:
+    """Gregorian Easter Sunday (Anonymous algorithm)."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def us_equity_holidays(year: int) -> set[date]:
+    """US equity market closed dates for a calendar year (NYSE-style)."""
+    easter = _easter_sunday(year)
+    holidays = {
+        _observed_holiday(date(year, 1, 1)),
+        _nth_weekday(year, 1, 1, 0),
+        _nth_weekday(year, 2, 3, 0),
+        easter - timedelta(days=2),
+        _nth_weekday(year, 5, -1, 0),
+        _observed_holiday(date(year, 6, 19)),
+        _observed_holiday(date(year, 7, 4)),
+        _nth_weekday(year, 9, 1, 0),
+        _nth_weekday(year, 11, 4, 3),
+        _observed_holiday(date(year, 12, 25)),
+    }
+    return holidays
+
+
+def _parse_market_calendar_date(value: date | str | datetime) -> date:
+    if isinstance(value, datetime):
+        return value.astimezone(MARKET_TZ).date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def is_equity_trading_day(value: date | str | datetime) -> bool:
+    """True on weekdays that are not US equity market holidays."""
+    day = _parse_market_calendar_date(value)
+    if day.weekday() >= 5:
+        return False
+    return day not in us_equity_holidays(day.year)
+
+
 def export_ts_is_trading_day(ts: str) -> bool:
-    """True when the export timestamp falls on a weekday (market calendar)."""
+    """True when the export timestamp falls on an equity trading session date."""
     try:
-        return is_trading_weekday(now=parse_export_ts_market(ts))
+        return is_equity_trading_day(parse_export_ts_market(ts).date())
     except (TypeError, ValueError):
         return False
 

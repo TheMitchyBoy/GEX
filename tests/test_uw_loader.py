@@ -145,6 +145,19 @@ def test_fetch_uw_greek_exposure_passes_historical_date(mock_get):
     assert df.attrs["market_date"] == "2026-06-03"
 
 
+@patch("gex_core.uw_loader._get", return_value=[])
+def test_fetch_uw_greek_exposure_optional_returns_empty(mock_get):
+    df = fetch_uw_greek_exposure("SPX", api_key="test-key", date="2026-04-03", required=False)
+    assert df.empty
+    mock_get.assert_called_once()
+
+
+@patch("gex_core.uw_loader._get", return_value=[])
+def test_fetch_uw_greek_exposure_required_raises(mock_get):
+    with pytest.raises(ValueError, match="No greek-exposure data"):
+        fetch_uw_greek_exposure("SPX", api_key="test-key", date="2026-04-03")
+
+
 @patch("gex_core.uw_loader.time.sleep", return_value=None)
 @patch("gex_core.uw_loader.requests.get")
 def test_get_retries_on_429_then_succeeds(mock_get, _sleep):

@@ -137,13 +137,15 @@ def refresh_tickers(
 
 
 def recent_market_dates(days: int = 7, today: date | None = None) -> list[str]:
-    """Return weekday date strings from oldest to newest over the recent calendar window."""
+    """Return equity trading dates from oldest to newest over the recent calendar window."""
+    from gex_core.market_time import is_equity_trading_day
+
     anchor = today or date.today()
     days = max(1, days)
     return [
         (anchor - timedelta(days=offset)).isoformat()
         for offset in range(days - 1, -1, -1)
-        if (anchor - timedelta(days=offset)).weekday() < 5
+        if is_equity_trading_day(anchor - timedelta(days=offset))
     ]
 
 

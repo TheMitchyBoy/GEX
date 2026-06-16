@@ -14,6 +14,7 @@ from gex_core.exports import EXPORT_DIR, list_export_timestamps
 from gex_core.extended_features import merge_extended_features
 from gex_core.history import clear_history_cache, get_latest_ts
 from gex_core.market_context_cache import cached_cross_asset_returns, cached_vol_regime
+from gex_core.market_time import is_equity_trading_day
 from gex_core.refresh import recent_market_dates
 from gex_core.snapshot_export import write_snapshot_export
 from gex_core.tickers import is_supported_ticker
@@ -286,6 +287,9 @@ def backfill_intraday_minutes(
             return 0
         raise
     if minute_df.empty:
+        if not is_equity_trading_day(market_date):
+            logger.debug("Skipping %s on %s (non-trading day)", ticker, market_date)
+            return 0
         logger.warning(
             "No intraday spot-exposures for %s on %s — falling back to EOD strike snapshot",
             ticker,
@@ -404,8 +408,15 @@ def backfill_daily_strike_snapshots(
     if not force and ts in _existing_timestamps(ticker, export_dir):
         return True
 
+    if not is_equity_trading_day(market_date):
+        logger.debug("Skipping daily strike backfill for %s on %s (non-trading day)", ticker, market_date)
+        return False
+
     try:
         spot, agg = fetch_uw_gex(ticker, api_key=api_key, date=market_date)
+    except ValueError as exc:
+        logger.warning("No UW data for daily strike backfill %s on %s: %s", ticker, market_date, exc)
+        return False
     except Exception:
         logger.exception("Daily strike backfill failed for %s on %s", ticker, market_date)
         return False

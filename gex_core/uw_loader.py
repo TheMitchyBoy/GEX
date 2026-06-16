@@ -336,6 +336,8 @@ def fetch_uw_greek_exposure(
     ticker: str,
     api_key: str | None = None,
     date: str | None = None,
+    *,
+    required: bool = True,
 ) -> pd.DataFrame:
     """
     Fetch the full GEX-by-strike table from ``/greek-exposure/strike``.
@@ -347,6 +349,9 @@ def fetch_uw_greek_exposure(
     """
     rows = _get(f"/api/stock/{ticker}/greek-exposure/strike", api_key=api_key, date=date)
     if not rows:
+        if not required:
+            logger.debug("No greek-exposure rows for %s (date=%s)", ticker, date)
+            return pd.DataFrame()
         raise ValueError(f"No greek-exposure data returned for {ticker!r}.")
 
     df = pd.DataFrame(rows)
@@ -569,7 +574,17 @@ def fetch_uw_gex(
 
     greek_df = pd.DataFrame()
     if gex_by_strike.empty:
-        greek_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
+        greek_df = fetch_uw_greek_exposure(
+            ticker,
+            api_key=api_key,
+            date=date,
+            required=False,
+        )
+        if greek_df.empty:
+            date_label = f" on {date}" if date else ""
+            raise ValueError(
+                f"No spot-exposure or greek-exposure data for {ticker!r}{date_label}."
+            )
         gex_by_strike = pd.Series(
             greek_df["net_gex"].values,
             index=greek_df["strike"].values,
@@ -580,7 +595,12 @@ def fetch_uw_gex(
         gex_by_strike = gex_by_strike.sort_index()
     else:
         try:
-            greek_df = fetch_uw_greek_exposure(ticker, api_key=api_key, date=date)
+            greek_df = fetch_uw_greek_exposure(
+                ticker,
+                api_key=api_key,
+                date=date,
+                required=False,
+            )
         except Exception:
             logger.debug("Optional greek-exposure fetch failed for %s", ticker, exc_info=True)
 
